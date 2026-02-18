@@ -26,6 +26,10 @@
       {
         "command": "git-sweep-pro.dryRun",
         "title": "Git Sweep Pro: Dry Run"
+      },
+      {
+        "command": "git-sweep-pro.postPullRequest",
+        "title": "Git Sweep Pro: Post Pull Request"
       }
     ]
   },

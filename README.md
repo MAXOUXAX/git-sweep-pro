@@ -22,6 +22,10 @@ Safely identify and prune local branches that are gone on the remote.
 - `Git Sweep Pro: Dry Run` (`git-sweep-pro.dryRun`)
 	- Runs the dry-run flow directly.
 
+- `Git Sweep Pro: Post Pull Request` (`git-sweep-pro.postPullRequest`)
+	- Shows local and remote branches to checkout.
+	- After checkout: deletes the previous branch, prunes, runs the main sweep, then pulls.
+
 ## UX and logging
 
 - Uses a progress notification while fetching and pruning remotes.

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { runGitCommand } from './core/git-command';
+import { runPostPullRequestWorkflow } from './core/post-pull-request-workflow';
 import { resolveSweepModeAction } from './core/sweep-logic';
 import { runSweepWorkflow, type SweepWorkflowDeps } from './core/sweep-workflow';
 import { resolveWorkspaceRoot } from './core/workspace';
@@ -70,7 +71,14 @@ export function activate(context: vscode.ExtensionContext) {
 		await runSweepWorkflow({ dryRun: true, forceDelete: false }, createSweepDeps());
 	});
 
-	context.subscriptions.push(outputChannel, runCommand, dryRunCommand);
+    const postPullRequestCommand = vscode.commands.registerCommand(
+        "git-sweep-pro.postPullRequest",
+        async () => {
+            await runPostPullRequestWorkflow(createSweepDeps());
+        },
+    );
+
+    context.subscriptions.push(outputChannel, runCommand, dryRunCommand);
 }
 
 export function deactivate() {}
