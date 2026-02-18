@@ -123,6 +123,35 @@ async function getCurrentBranch(workspaceRoot: string): Promise<string | undefin
 	return result.stdout.trim() || undefined;
 }
 
+const PROTECTED_BRANCH_NAMES = ['main', 'master'];
+
+async function getDefaultBranchName(workspaceRoot: string): Promise<string | undefined> {
+	try {
+		const result = await execAsync('git symbolic-ref refs/remotes/origin/HEAD', {
+			cwd: workspaceRoot,
+		});
+		const ref = result.stdout.trim();
+		if (ref && ref.startsWith('refs/remotes/')) {
+			const parts = ref.split('/');
+			// refs/remotes/origin/main -> main
+			return parts[parts.length - 1];
+		}
+	} catch {
+		// No origin/HEAD (e.g. no remote or default not set)
+	}
+	return undefined;
+}
+
+function isProtectedBranch(branchName: string, defaultBranch: string | undefined): boolean {
+	if (PROTECTED_BRANCH_NAMES.includes(branchName)) {
+		return true;
+	}
+	if (defaultBranch && branchName === defaultBranch) {
+		return true;
+	}
+	return false;
+}
+
 async function runPostPullRequest(outputChannel: vscode.OutputChannel): Promise<void> {
 	const workspaceRoot = getWorkspaceRoot();
 	if (!workspaceRoot) {
@@ -199,15 +228,32 @@ async function runPostPullRequest(outputChannel: vscode.OutputChannel): Promise<
 		outputChannel.appendLine(`Checkout to ${targetBranch}...`);
 		await runGitCommand(`git checkout ${checkoutArg}`, workspaceRoot, outputChannel);
 
-		outputChannel.appendLine(`Deleting previous branch ${currentBranch}...`);
-		try {
-			await runGitCommand(`git branch -d ${JSON.stringify(currentBranch)}`, workspaceRoot, outputChannel);
-		} catch {
-			outputChannel.appendLine(`[retry] Safe delete failed, trying force delete (-D)...`);
-			try {
-				await runGitCommand(`git branch -D ${JSON.stringify(currentBranch)}`, workspaceRoot, outputChannel);
-			} catch {
-				outputChannel.appendLine(`[warning] Could not delete ${currentBranch}. Skipping.`);
+		const defaultBranch = await getDefaultBranchName(workspaceRoot);
+		if (isProtectedBranch(currentBranch, defaultBranch)) {
+			outputChannel.appendLine(
+				`[skip] Not deleting ${currentBranch} (protected/default branch).`
+			);
+		} else {
+			const confirm = await vscode.window.showWarningMessage(
+				`Delete branch "${currentBranch}"? This cannot be undone.`,
+				{ modal: true },
+				'Delete',
+				'Keep'
+			);
+			if (confirm === 'Delete') {
+				outputChannel.appendLine(`Deleting previous branch ${currentBranch}...`);
+				try {
+					await runGitCommand(`git branch -d ${JSON.stringify(currentBranch)}`, workspaceRoot, outputChannel);
+				} catch {
+					outputChannel.appendLine(`[retry] Safe delete failed, trying force delete (-D)...`);
+					try {
+						await runGitCommand(`git branch -D ${JSON.stringify(currentBranch)}`, workspaceRoot, outputChannel);
+					} catch {
+						outputChannel.appendLine(`[warning] Could not delete ${currentBranch}. Skipping.`);
+					}
+				}
+			} else {
+				outputChannel.appendLine(`[skip] Branch ${currentBranch} kept (user declined).`);
 			}
 		}
 
