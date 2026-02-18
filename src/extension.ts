@@ -66,6 +66,168 @@ function parseGoneBranches(branchVvOutput: string): string[] {
 		.filter((name) => name.length > 0);
 }
 
+type BranchItem = {
+	name: string;
+	description: string;
+	isRemote: boolean;
+};
+
+function parseAllBranches(branchAOutput: string): BranchItem[] {
+	const lines = branchAOutput.split('\n').map((line) => line.trim()).filter(Boolean);
+	const items: BranchItem[] = [];
+
+	for (const line of lines) {
+		const isCurrent = line.startsWith('*');
+		const sanitized = line.replace(/^\*\s+/, '');
+
+		if (sanitized.startsWith('remotes/')) {
+			const match = sanitized.match(/^remotes\/[^/]+\/(.+?)(?: -> .+)?$/);
+			if (match) {
+				const name = match[1];
+				if (name !== 'HEAD') {
+					items.push({
+						name,
+						description: `remote`,
+						isRemote: true,
+					});
+				}
+			}
+		} else {
+			const name = sanitized.split(/\s+/)[0];
+			if (name) {
+				items.push({
+					name,
+					description: isCurrent ? 'current' : 'local',
+					isRemote: false,
+				});
+			}
+		}
+	}
+
+	const seen = new Set<string>();
+	return items.filter((item) => {
+		if (seen.has(item.name)) {
+			return false;
+		}
+		seen.add(item.name);
+		return true;
+	});
+}
+
+async function getCurrentBranch(workspaceRoot: string): Promise<string | undefined> {
+	const result = await execAsync('git branch --show-current', { cwd: workspaceRoot });
+	return result.stdout.trim() || undefined;
+}
+
+async function runPostPullRequest(outputChannel: vscode.OutputChannel): Promise<void> {
+	const workspaceRoot = getWorkspaceRoot();
+	if (!workspaceRoot) {
+		vscode.window.showErrorMessage('Git Sweep Pro: No workspace folder is open.');
+		return;
+	}
+
+	outputChannel.appendLine('--- Git Sweep Pro: Post Pull Request ---');
+
+	try {
+		const currentBranch = await getCurrentBranch(workspaceRoot);
+		if (!currentBranch) {
+			vscode.window.showErrorMessage('Git Sweep Pro: Could not determine current branch.');
+			return;
+		}
+
+		await vscode.window.withProgress(
+			{
+				location: vscode.ProgressLocation.Notification,
+				title: 'Git Sweep Pro: Fetching branches...',
+				cancellable: false,
+			},
+			() => runGitCommand('git fetch -p', workspaceRoot, outputChannel)
+		);
+
+		const branchResult = await runGitCommand('git branch -a', workspaceRoot, outputChannel);
+		const branches = parseAllBranches(branchResult.stdout).filter((b) => b.name !== currentBranch);
+
+		if (branches.length === 0) {
+			vscode.window.showInformationMessage('Git Sweep Pro: No other branches to checkout.');
+			return;
+		}
+
+		const quickPickItems: vscode.QuickPickItem[] = branches
+			.map((b) => ({
+				label: b.name,
+				description: b.description,
+				detail: b.isRemote ? 'Remote branch' : 'Local branch',
+			}))
+			.sort((a, b) => {
+				if (a.label === 'main') {
+					return -1;
+				}
+				if (b.label === 'main') {
+					return 1;
+				}
+				if (a.label === 'master') {
+					return -1;
+				}
+				if (b.label === 'master') {
+					return 1;
+				}
+				return a.label.localeCompare(b.label);
+			});
+
+		const selected = await vscode.window.showQuickPick(quickPickItems, {
+			canPickMany: false,
+			ignoreFocusOut: true,
+			placeHolder: `Select branch to checkout (currently on ${currentBranch})`,
+			title: 'Git Sweep Pro: Checkout branch',
+		});
+
+		if (!selected) {
+			outputChannel.appendLine('Operation cancelled.');
+			return;
+		}
+
+		const targetBranch = selected.label;
+		outputChannel.appendLine(`Checkout to ${targetBranch}...`);
+		await runGitCommand(`git checkout ${JSON.stringify(targetBranch)}`, workspaceRoot, outputChannel);
+
+		outputChannel.appendLine(`Deleting previous branch ${currentBranch}...`);
+		try {
+			await runGitCommand(`git branch -d ${JSON.stringify(currentBranch)}`, workspaceRoot, outputChannel);
+		} catch {
+			outputChannel.appendLine(`[retry] Safe delete failed, trying force delete (-D)...`);
+			try {
+				await runGitCommand(`git branch -D ${JSON.stringify(currentBranch)}`, workspaceRoot, outputChannel);
+			} catch {
+				outputChannel.appendLine(`[warning] Could not delete ${currentBranch}. Skipping.`);
+			}
+		}
+
+		outputChannel.appendLine('Pruning remote refs...');
+		await runGitCommand('git fetch -p', workspaceRoot, outputChannel);
+
+		outputChannel.appendLine('Running Git Sweep...');
+		await runSweep({ dryRun: false, forceDelete: false }, outputChannel);
+
+		outputChannel.appendLine('Pulling latest changes...');
+		await runGitCommand('git pull', workspaceRoot, outputChannel);
+
+		vscode.window.showInformationMessage('Git Sweep Pro: Post Pull Request completed.');
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		const lowerMessage = message.toLowerCase();
+
+		if (lowerMessage.includes('not a git repository')) {
+			vscode.window.showErrorMessage('Git Sweep Pro: The selected workspace folder is not a Git repository.');
+		} else if (lowerMessage.includes('command not found') || lowerMessage.includes('enoent')) {
+			vscode.window.showErrorMessage('Git Sweep Pro: Git is not installed or not available in PATH.');
+		} else {
+			vscode.window.showErrorMessage(`Git Sweep Pro failed: ${message}`);
+		}
+	} finally {
+		outputChannel.appendLine('--- Post Pull Request ended ---');
+	}
+}
+
 async function runSweep(mode: SweepMode, outputChannel: vscode.OutputChannel): Promise<void> {
 	const workspaceRoot = getWorkspaceRoot();
 	if (!workspaceRoot) {
@@ -196,7 +358,11 @@ export function activate(context: vscode.ExtensionContext) {
 		await runSweep({ dryRun: true, forceDelete: false }, outputChannel);
 	});
 
-	context.subscriptions.push(outputChannel, runCommand, dryRunCommand);
+	const postPullRequestCommand = vscode.commands.registerCommand('git-sweep-pro.postPullRequest', async () => {
+		await runPostPullRequest(outputChannel);
+	});
+
+	context.subscriptions.push(outputChannel, runCommand, dryRunCommand, postPullRequestCommand);
 }
 
 export function deactivate() {}
