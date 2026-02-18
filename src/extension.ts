@@ -70,6 +70,8 @@ type BranchItem = {
 	name: string;
 	description: string;
 	isRemote: boolean;
+	/** Full remote ref (e.g. origin/foo) when isRemote, used for checkout --track */
+	remoteRef?: string;
 };
 
 function parseAllBranches(branchAOutput: string): BranchItem[] {
@@ -81,14 +83,16 @@ function parseAllBranches(branchAOutput: string): BranchItem[] {
 		const sanitized = line.replace(/^\*\s+/, '');
 
 		if (sanitized.startsWith('remotes/')) {
-			const match = sanitized.match(/^remotes\/[^/]+\/(.+?)(?: -> .+)?$/);
+			const match = sanitized.match(/^remotes\/([^/]+)\/(.+?)(?: -> .+)?$/);
 			if (match) {
-				const name = match[1];
+				const remoteName = match[1];
+				const name = match[2];
 				if (name !== 'HEAD') {
 					items.push({
 						name,
 						description: `remote`,
 						isRemote: true,
+						remoteRef: `${remoteName}/${name}`,
 					});
 				}
 			}
@@ -186,9 +190,14 @@ async function runPostPullRequest(outputChannel: vscode.OutputChannel): Promise<
 			return;
 		}
 
-		const targetBranch = selected.label;
+		const branchItem = branches.find((b) => b.name === selected.label);
+		const targetBranch = branchItem?.name ?? selected.label;
+		const checkoutArg =
+			branchItem?.isRemote && branchItem?.remoteRef
+				? `--track ${JSON.stringify(branchItem.remoteRef)}`
+				: JSON.stringify(targetBranch);
 		outputChannel.appendLine(`Checkout to ${targetBranch}...`);
-		await runGitCommand(`git checkout ${JSON.stringify(targetBranch)}`, workspaceRoot, outputChannel);
+		await runGitCommand(`git checkout ${checkoutArg}`, workspaceRoot, outputChannel);
 
 		outputChannel.appendLine(`Deleting previous branch ${currentBranch}...`);
 		try {
