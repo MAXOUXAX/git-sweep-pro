@@ -9,7 +9,7 @@ export type BranchItem = {
  * Local branches: "  feature/foo" or "* main"
  * Remote branches: "  remotes/origin/feature/bar"
  */
-export function parseBranches(branchOutput: string, currentBranch: string): BranchItem[] {
+export function parseBranches(branchOutput: string): BranchItem[] {
 	const lines = branchOutput
 		.split('\n')
 		.map((line) => line.trim())
@@ -34,7 +34,8 @@ export function parseBranches(branchOutput: string, currentBranch: string): Bran
 				ref: shortName,
 				isRemote: true,
 			});
-		} else if (!isCurrent || name !== currentBranch) {
+		} else if (!isCurrent) {
+			/* Exclude the current branch (line starting with *) so it cannot be selected for checkout */
 			items.push({
 				label: name,
 				ref: name,

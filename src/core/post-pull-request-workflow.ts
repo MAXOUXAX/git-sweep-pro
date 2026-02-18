@@ -75,7 +75,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			return;
 		}
 
-		const branchItems = parseBranches(branchListResult.stdout, currentBranch);
+		const branchItems = parseBranches(branchListResult.stdout);
 		if (branchItems.length === 0) {
 			deps.ui.showInformationMessage('Git Sweep Pro: No other branches available to checkout.');
 			return;
