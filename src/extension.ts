@@ -118,8 +118,11 @@ function parseAllBranches(branchAOutput: string): BranchItem[] {
 	});
 }
 
-async function getCurrentBranch(workspaceRoot: string): Promise<string | undefined> {
-	const result = await execAsync('git branch --show-current', { cwd: workspaceRoot });
+async function getCurrentBranch(
+	workspaceRoot: string,
+	outputChannel: vscode.OutputChannel
+): Promise<string | undefined> {
+	const result = await runGitCommand('git branch --show-current', workspaceRoot, outputChannel);
 	return result.stdout.trim() || undefined;
 }
 
@@ -162,7 +165,7 @@ async function runPostPullRequest(outputChannel: vscode.OutputChannel): Promise<
 	outputChannel.appendLine('--- Git Sweep Pro: Post Pull Request ---');
 
 	try {
-		const currentBranch = await getCurrentBranch(workspaceRoot);
+		const currentBranch = await getCurrentBranch(workspaceRoot, outputChannel);
 		if (!currentBranch) {
 			vscode.window.showErrorMessage('Git Sweep Pro: Could not determine current branch.');
 			return;
