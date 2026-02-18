@@ -1,4 +1,5 @@
 import { parseBranches } from './branch-list';
+import { escapeForShell } from './git-command';
 import { parseGoneBranches } from './sweep-logic';
 import { runSweepWorkflow, type QuickPickItemLike, type SweepWorkflowDeps } from './sweep-workflow';
 
@@ -127,9 +128,9 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			{ title: `Git Sweep Pro: Checking out ${localTarget}...` },
 			async () => {
 				if (targetItem.isRemote) {
-					await runGit(`git checkout -B ${JSON.stringify(localTarget)} ${JSON.stringify(targetRef)}`);
+					await runGit(`git checkout -B ${escapeForShell(localTarget)} ${escapeForShell(targetRef)}`);
 				} else {
-					await runGit(`git checkout ${JSON.stringify(targetRef)}`);
+					await runGit(`git checkout ${escapeForShell(targetRef)}`);
 				}
 			}
 		);
@@ -139,12 +140,12 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		try {
 			await deps.ui.withProgress(
 				{ title: `Git Sweep Pro: Deleting branch ${currentBranch}...` },
-				() => runGit(`git branch -D ${JSON.stringify(currentBranch)}`)
+				() => runGit(`git branch -D ${escapeForShell(currentBranch)}`)
 			);
 			deps.output.appendLine(`Deleted branch: ${currentBranch}`);
 		} catch {
 			deps.ui.showErrorMessage(
-				`Git Sweep Pro: Could not delete branch "${currentBranch}". You can delete it manually with: git branch -D ${currentBranch}`
+				`Git Sweep Pro: Could not delete branch "${currentBranch}". You can delete it manually with: git branch -D ${escapeForShell(currentBranch)}`
 			);
 		}
 

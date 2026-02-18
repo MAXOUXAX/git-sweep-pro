@@ -1,3 +1,4 @@
+import { escapeForShell } from './git-command';
 import { parseGoneBranches, type SweepMode } from './sweep-logic';
 
 export type QuickPickItemLike = {
@@ -115,7 +116,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 		for (const branch of branchNames) {
 			try {
-				await deps.runGitCommand(`git branch ${deleteFlag} ${JSON.stringify(branch)}`, workspaceRoot);
+				await deps.runGitCommand(`git branch ${deleteFlag} ${escapeForShell(branch)}`, workspaceRoot);
 				deletedCount += 1;
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);

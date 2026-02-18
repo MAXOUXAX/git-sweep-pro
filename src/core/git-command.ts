@@ -3,6 +3,14 @@ import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
 
+/**
+ * Escapes a string for safe use in shell commands by wrapping in single quotes.
+ * Single quotes within the string are escaped as '\'' (end quote, escaped quote, start quote).
+ */
+export function escapeForShell(s: string): string {
+	return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
 export type CommandResult = {
 	readonly stdout: string;
 	readonly stderr: string;
