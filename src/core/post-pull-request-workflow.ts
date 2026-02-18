@@ -90,7 +90,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			return {
 				label: b.isRemote ? `${b.label} (remote)` : b.label,
 				description: b.isRemote ? 'remote' : isDefault ? 'default' : undefined,
-				picked: isGone && isDefault,
+				picked: isDefault,
 			};
 		});
 
