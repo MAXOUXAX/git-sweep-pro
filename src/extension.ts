@@ -19,8 +19,8 @@ export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
 
 	const createSweepDeps = (): SweepWorkflowDeps => {
-		const runGitCommandForWorkflow: SweepWorkflowDeps['runGitCommand'] = (command, cwd) =>
-			runGitCommand(command, cwd, outputChannel);
+		const runGitCommandForWorkflow: SweepWorkflowDeps['runGitCommand'] = (args, cwd) =>
+			runGitCommand(args, cwd, outputChannel);
 
 		return {
 			getWorkspaceRoot,

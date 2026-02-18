@@ -8,9 +8,9 @@ export type PostPullRequestDeps = SweepWorkflowDeps;
 /**
  * Returns the default branch name (e.g. "main") from origin/HEAD, or undefined.
  */
-async function getDefaultBranchName(runGit: (cmd: string) => Promise<{ stdout: string; stderr: string }>): Promise<string | undefined> {
+async function getDefaultBranchName(runGit: (args: string[]) => Promise<{ stdout: string; stderr: string }>): Promise<string | undefined> {
 	try {
-		const r = await runGit('git rev-parse --abbrev-ref refs/remotes/origin/HEAD');
+		const r = await runGit(['rev-parse', '--abbrev-ref', 'refs/remotes/origin/HEAD']);
 		const out = r.stdout.trim();
 		return out.startsWith('origin/') ? out.replace(/^origin\//, '') : undefined;
 	} catch {
@@ -22,11 +22,11 @@ async function getDefaultBranchName(runGit: (cmd: string) => Promise<{ stdout: s
  * Returns true if the current branch tracks a gone remote.
  */
 async function isCurrentBranchGone(
-	runGit: (cmd: string) => Promise<{ stdout: string; stderr: string }>,
+	runGit: (args: string[]) => Promise<{ stdout: string; stderr: string }>,
 	currentBranch: string
 ): Promise<boolean> {
 	try {
-		const r = await runGit('git branch -vv');
+		const r = await runGit(['branch', '-vv']);
 		return parseGoneBranches(r.stdout).includes(currentBranch);
 	} catch {
 		return false;
@@ -56,17 +56,17 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 	deps.output.appendLine('--- Post Pull Request session started ---');
 	deps.output.appendLine(`Workspace: ${workspaceRoot}`);
 
-	const runGit = (cmd: string) => deps.runGitCommand(cmd, workspaceRoot);
+	const runGit = (args: string[]) => deps.runGitCommand(args, workspaceRoot);
 
 	try {
 		await deps.ui.withProgress(
 			{ title: 'Git Sweep Pro: Fetching remotes...' },
-			() => runGit('git fetch -p')
+			() => runGit(['fetch', '-p'])
 		);
 
 		const [currentBranchResult, branchListResult] = await Promise.all([
-			runGit('git rev-parse --abbrev-ref HEAD'),
-			runGit('git branch -a'),
+			runGit(['rev-parse', '--abbrev-ref', 'HEAD']),
+			runGit(['branch', '-a']),
 		]);
 
 		const currentBranch = currentBranchResult.stdout.trim();
@@ -124,23 +124,31 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		const targetRef = targetItem.ref;
 		const localTarget = toLocalBranchRef(targetRef, targetItem.isRemote);
 
-		await deps.ui.withProgress(
-			{ title: `Git Sweep Pro: Checking out ${localTarget}...` },
-			async () => {
-				if (targetItem.isRemote) {
-					await runGit(`git checkout -B ${escapeForShell(localTarget)} ${escapeForShell(targetRef)}`);
-				} else {
-					await runGit(`git checkout ${escapeForShell(targetRef)}`);
+		try {
+			await deps.ui.withProgress(
+				{ title: `Git Sweep Pro: Checking out ${localTarget}...` },
+				async () => {
+					if (targetItem.isRemote) {
+						await runGit(['checkout', '-B', localTarget, targetRef]);
+					} else {
+						await runGit(['checkout', targetRef]);
+					}
 				}
-			}
-		);
+			);
+		} catch (checkoutError) {
+			const msg = checkoutError instanceof Error ? checkoutError.message : String(checkoutError);
+			deps.ui.showErrorMessage(`Git Sweep Pro: Checkout failed: ${msg}`);
+			deps.output.appendLine(`[error] Checkout failed: ${msg}`);
+			deps.output.appendLine('--- Post Pull Request session ended ---');
+			return;
+		}
 
 		deps.output.appendLine(`Checked out: ${localTarget}`);
 
 		try {
 			await deps.ui.withProgress(
 				{ title: `Git Sweep Pro: Deleting branch ${currentBranch}...` },
-				() => runGit(`git branch -D ${escapeForShell(currentBranch)}`)
+				() => runGit(['branch', '-D', currentBranch])
 			);
 			deps.output.appendLine(`Deleted branch: ${currentBranch}`);
 		} catch {
@@ -151,13 +159,30 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 
 		await runSweepWorkflow({ dryRun: false, forceDelete: false }, deps);
 
-		await deps.ui.withProgress(
-			{ title: 'Git Sweep Pro: Pulling...' },
-			() => runGit('git pull')
-		);
+		let pulled = false;
+		try {
+			await deps.ui.withProgress(
+				{ title: `Git Sweep Pro: Pulling ${localTarget}...` },
+				() => runGit(['pull'])
+			);
+			pulled = true;
+			deps.output.appendLine(`Pulled latest changes for ${localTarget}.`);
+		} catch (pullError) {
+			const msg = pullError instanceof Error ? pullError.message : String(pullError);
+			if (/no upstream|no tracking|please specify.*branch/i.test(msg)) {
+				deps.output.appendLine(`No upstream configured for ${localTarget}. Pull skipped.`);
+				deps.ui.showInformationMessage(
+					`Git Sweep Pro: Switched to ${localTarget}. (No upstream—pull skipped.)`
+				);
+			} else {
+				throw pullError;
+			}
+		}
 
 		deps.output.appendLine('--- Post Pull Request session ended ---');
-		deps.ui.showInformationMessage(`Git Sweep Pro: Switched to ${localTarget} and pulled.`);
+		if (pulled) {
+			deps.ui.showInformationMessage(`Git Sweep Pro: Switched to ${localTarget} and pulled.`);
+		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		const lowerMessage = message.toLowerCase();

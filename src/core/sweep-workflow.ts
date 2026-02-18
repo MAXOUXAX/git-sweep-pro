@@ -1,8 +1,8 @@
-import { escapeForShell } from './git-command';
 import { parseGoneBranches, type SweepMode } from './sweep-logic';
 
 export type QuickPickItemLike = {
 	readonly label: string;
+	readonly description?: string;
 	readonly picked?: boolean;
 };
 
@@ -16,7 +16,7 @@ export type SweepWorkflowDeps = {
 		show: (preserveFocus: boolean) => void;
 		appendLine: (line: string) => void;
 	};
-	readonly runGitCommand: (command: string, cwd: string) => Promise<{ stdout: string; stderr: string }>;
+	readonly runGitCommand: (args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
 	readonly ui: {
 		withProgress: <T>(options: ProgressOptions, task: () => Promise<T>) => PromiseLike<T>;
 		showQuickPick: (
@@ -65,10 +65,10 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			{
 				title: 'Git Sweep Pro: Fetching and pruning remote references...',
 			},
-			() => deps.runGitCommand('git fetch -p', workspaceRoot)
+			() => deps.runGitCommand(['fetch', '-p'], workspaceRoot)
 		);
 
-		const branchResult = await deps.runGitCommand('git branch -vv', workspaceRoot);
+		const branchResult = await deps.runGitCommand(['branch', '-vv'], workspaceRoot);
 		const goneBranches = parseGoneBranches(branchResult.stdout);
 
 		if (goneBranches.length === 0) {
@@ -116,7 +116,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 		for (const branch of branchNames) {
 			try {
-				await deps.runGitCommand(`git branch ${deleteFlag} ${escapeForShell(branch)}`, workspaceRoot);
+				await deps.runGitCommand(['branch', deleteFlag, branch], workspaceRoot);
 				deletedCount += 1;
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);

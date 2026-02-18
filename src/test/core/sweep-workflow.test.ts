@@ -32,9 +32,10 @@ function createHarness(options: HarnessOptions = {}): Harness {
 			show: () => undefined,
 			appendLine: (line) => outputLines.push(line),
 		},
-		runGitCommand: async (command) => {
-			commands.push(command);
-			const entry = options.git?.[command];
+		runGitCommand: async (args) => {
+			const key = args.join(' ');
+			commands.push(key);
+			const entry = options.git?.[key];
 			if (entry instanceof Error) {
 				throw entry;
 			}
@@ -82,15 +83,15 @@ suite('sweep workflow', () => {
 		const h = createHarness({
 			workspaceRoot: '/repo',
 			git: {
-				'git fetch -p': { stdout: '' },
-				'git branch -vv': { stdout: '  main 123 [origin/main] main' },
+				'fetch -p': { stdout: '' },
+				'branch -vv': { stdout: '  main 123 [origin/main] main' },
 			},
 		});
 
 		await runSweepWorkflow(safeMode, h.deps);
 
 		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: No stale branches found.']);
-		assert.deepStrictEqual(h.commands, ['git fetch -p', 'git branch -vv']);
+		assert.deepStrictEqual(h.commands, ['fetch -p', 'branch -vv']);
 		assert.ok(h.outputLines.includes('No stale tracked branches found.'));
 		assert.strictEqual(h.quickPickRequests.length, 0);
 		assert.strictEqual(h.progressTitles[0], 'Git Sweep Pro: Fetching and pruning remote references...');
@@ -102,8 +103,8 @@ suite('sweep workflow', () => {
 			workspaceRoot: '/repo',
 			quickPickSelection: undefined,
 			git: {
-				'git fetch -p': { stdout: '' },
-				'git branch -vv': { stdout: '  stale/one 123 [origin/stale/one: gone] msg' },
+				'fetch -p': { stdout: '' },
+				'branch -vv': { stdout: '  stale/one 123 [origin/stale/one: gone] msg' },
 			},
 		});
 
@@ -119,8 +120,8 @@ suite('sweep workflow', () => {
 			workspaceRoot: '/repo',
 			quickPickSelection: [],
 			git: {
-				'git fetch -p': { stdout: '' },
-				'git branch -vv': { stdout: '  stale/one 123 [origin/stale/one: gone] msg' },
+				'fetch -p': { stdout: '' },
+				'branch -vv': { stdout: '  stale/one 123 [origin/stale/one: gone] msg' },
 			},
 		});
 
@@ -134,8 +135,8 @@ suite('sweep workflow', () => {
 			workspaceRoot: '/repo',
 			quickPickSelection: [{ label: 'stale/one' }, { label: 'stale/two' }],
 			git: {
-				'git fetch -p': { stdout: '' },
-				'git branch -vv': {
+				'fetch -p': { stdout: '' },
+				'branch -vv': {
 					stdout: [
 						'  stale/one 123 [origin/stale/one: gone] msg',
 						'  stale/two 456 [origin/stale/two: gone] msg',
@@ -147,7 +148,7 @@ suite('sweep workflow', () => {
 		await runSweepWorkflow(dryMode, h.deps);
 
 		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro (dry run): 2 branch(es) would be deleted.']);
-		assert.deepStrictEqual(h.commands, ['git fetch -p', 'git branch -vv']);
+		assert.deepStrictEqual(h.commands, ['fetch -p', 'branch -vv']);
 		assert.ok(h.outputLines.includes('[DRY RUN] Selected branches:'));
 		assert.ok(h.outputLines.includes('- stale/one'));
 		assert.ok(h.outputLines.includes('- stale/two'));
@@ -159,23 +160,23 @@ suite('sweep workflow', () => {
 			workspaceRoot: '/repo',
 			quickPickSelection: [{ label: 'stale/one' }, { label: 'stale/two' }],
 			git: {
-				'git fetch -p': { stdout: '' },
-				'git branch -vv': {
+				'fetch -p': { stdout: '' },
+				'branch -vv': {
 					stdout: [
 						'  stale/one 123 [origin/stale/one: gone] msg',
 						'  stale/two 456 [origin/stale/two: gone] msg',
 					].join('\n'),
 				},
-				'git branch -d "stale/one"': { stdout: '' },
-				'git branch -d "stale/two"': { stdout: '' },
+				'branch -d stale/one': { stdout: '' },
+				'branch -d stale/two': { stdout: '' },
 			},
 		});
 
 		await runSweepWorkflow(safeMode, h.deps);
 
 		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deleted 2 branch(es).']);
-		assert.ok(h.commands.includes('git branch -d "stale/one"'));
-		assert.ok(h.commands.includes('git branch -d "stale/two"'));
+		assert.ok(h.commands.includes('branch -d stale/one'));
+		assert.ok(h.commands.includes('branch -d stale/two'));
 		assert.strictEqual(h.quickPickRequests[0]?.title, 'Git Sweep Pro: Select branches to delete');
 	});
 
@@ -184,15 +185,15 @@ suite('sweep workflow', () => {
 			workspaceRoot: '/repo',
 			quickPickSelection: [{ label: 'stale/one' }, { label: 'stale/two' }],
 			git: {
-				'git fetch -p': { stdout: '' },
-				'git branch -vv': {
+				'fetch -p': { stdout: '' },
+				'branch -vv': {
 					stdout: [
 						'  stale/one 123 [origin/stale/one: gone] msg',
 						'  stale/two 456 [origin/stale/two: gone] msg',
 					].join('\n'),
 				},
-				'git branch -D "stale/one"': { stdout: '' },
-				'git branch -D "stale/two"': new Error('not fully merged'),
+				'branch -D stale/one': { stdout: '' },
+				'branch -D stale/two': new Error('not fully merged'),
 			},
 		});
 
@@ -208,7 +209,7 @@ suite('sweep workflow', () => {
 		const h = createHarness({
 			workspaceRoot: '/repo',
 			git: {
-				'git fetch -p': new Error('fatal: not a git repository (or any of the parent directories): .git'),
+				'fetch -p': new Error('fatal: not a git repository (or any of the parent directories): .git'),
 			},
 		});
 
@@ -224,7 +225,7 @@ suite('sweep workflow', () => {
 		const h = createHarness({
 			workspaceRoot: '/repo',
 			git: {
-				'git fetch -p': new Error('spawn git ENOENT'),
+				'fetch -p': new Error('spawn git ENOENT'),
 			},
 		});
 
@@ -237,7 +238,7 @@ suite('sweep workflow', () => {
 		const h = createHarness({
 			workspaceRoot: '/repo',
 			git: {
-				'git fetch -p': new Error('mysterious failure'),
+				'fetch -p': new Error('mysterious failure'),
 			},
 		});
 
@@ -251,8 +252,8 @@ suite('sweep workflow', () => {
 			workspaceRoot: '/repo',
 			quickPickSelection: [{ label: 'stale/one' }],
 			git: {
-				'git fetch -p': { stdout: '' },
-				'git branch -vv': {
+				'fetch -p': { stdout: '' },
+				'branch -vv': {
 					stdout: [
 						'  stale/one 123 [origin/stale/one: gone] msg',
 						'  stale/two 123 [origin/stale/two: gone] msg',
