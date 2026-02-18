@@ -1,6 +1,6 @@
 import { parseBranches } from './branch-list';
 import { parseGoneBranches } from './sweep-logic';
-import { type QuickPickItemLike, type SweepWorkflowDeps } from './sweep-workflow';
+import { runSweepWorkflow, type QuickPickItemLike, type SweepWorkflowDeps } from './sweep-workflow';
 
 export type PostPullRequestDeps = SweepWorkflowDeps;
 
@@ -147,6 +147,8 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 				`Git Sweep Pro: Could not delete branch "${currentBranch}". You can delete it manually with: git branch -D ${currentBranch}`
 			);
 		}
+
+		await runSweepWorkflow({ dryRun: false, forceDelete: false }, deps);
 
 		await deps.ui.withProgress(
 			{ title: 'Git Sweep Pro: Pulling...' },

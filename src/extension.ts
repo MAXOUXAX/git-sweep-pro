@@ -78,7 +78,7 @@ export function activate(context: vscode.ExtensionContext) {
         },
     );
 
-    context.subscriptions.push(outputChannel, runCommand, dryRunCommand);
+    context.subscriptions.push(outputChannel, runCommand, dryRunCommand, postPullRequestCommand);
 }
 
 export function deactivate() {}
