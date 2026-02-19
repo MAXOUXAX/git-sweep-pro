@@ -6,13 +6,25 @@ import { runSweepWorkflow, type QuickPickItemLike, type SweepWorkflowDeps } from
 export type PostPullRequestDeps = SweepWorkflowDeps;
 
 /**
- * Returns the default branch name (e.g. "main") from origin/HEAD, or undefined.
+ * Returns the default branch name (e.g. "main") from the first remote's HEAD ref, or undefined.
+ * Discovers the remote dynamically via refs/remotes/<remote>/HEAD; does not assume "origin".
  */
 async function getDefaultBranchName(runGit: (args: string[]) => Promise<{ stdout: string; stderr: string }>): Promise<string | undefined> {
 	try {
-		const r = await runGit(['rev-parse', '--abbrev-ref', 'refs/remotes/origin/HEAD']);
+		const list = await runGit(['for-each-ref', '--format=%(refname)', 'refs/remotes/*/HEAD']);
+		const firstRef = list.stdout.trim().split(/\r?\n/)[0];
+		if (!firstRef) {
+			return undefined;
+		}
+		const match = firstRef.match(/^refs\/remotes\/([^/]+)\/HEAD$/);
+		if (!match) {
+			return undefined;
+		}
+		const remoteName = match[1];
+		const r = await runGit(['rev-parse', '--abbrev-ref', firstRef]);
 		const out = r.stdout.trim();
-		return out.startsWith('origin/') ? out.replace(/^origin\//, '') : undefined;
+		const prefix = `${remoteName}/`;
+		return out.startsWith(prefix) ? out.slice(prefix.length) : undefined;
 	} catch {
 		return undefined;
 	}

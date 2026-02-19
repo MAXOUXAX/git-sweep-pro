@@ -95,6 +95,7 @@ const baseGit = {
 			'  remotes/origin/develop',
 		].join('\n'),
 	},
+	'for-each-ref --format=%(refname) refs/remotes/*/HEAD': { stdout: 'refs/remotes/origin/HEAD' },
 	'rev-parse --abbrev-ref refs/remotes/origin/HEAD': { stdout: 'origin/main' },
 };
 
@@ -410,6 +411,32 @@ suite('post-pull-request workflow', () => {
 		assert.deepStrictEqual(h.errorMessages, [
 			'Git Sweep Pro: Git is not installed or not available in PATH.',
 		]);
+	});
+
+	test('discovers default branch from non-origin remote', async () => {
+		const h = createHarness({
+			workspaceRoot: '/repo',
+			quickPickSelection: { label: 'main' },
+			git: {
+				...baseGit,
+				'for-each-ref --format=%(refname) refs/remotes/*/HEAD': { stdout: 'refs/remotes/upstream/HEAD' },
+				'rev-parse --abbrev-ref refs/remotes/upstream/HEAD': { stdout: 'upstream/main' },
+				'branch -vv': [
+					{ stdout: '* feature/merged 123 [upstream/feature/merged: gone] msg\n  main 456 [upstream/main] main' },
+					{ stdout: '* main 456 [upstream/main] main' },
+				],
+				'checkout main': { stdout: '' },
+				'branch -D feature/merged': { stdout: '' },
+				'pull': { stdout: '' },
+			},
+		});
+
+		await runPostPullRequestWorkflow(h.deps);
+
+		const quickPick = h.quickPickRequests[0];
+		const mainItem = quickPick?.items.find((i) => i.label === 'main');
+		assert.ok(mainItem?.picked, 'Default branch (main) from upstream should be pre-selected');
+		assert.ok(h.commands.includes('rev-parse --abbrev-ref refs/remotes/upstream/HEAD'));
 	});
 
 	test('handles branch name with slashes in checkout and delete', async () => {
