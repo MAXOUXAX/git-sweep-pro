@@ -202,7 +202,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			deps.output.appendLine(`Deleted branch: ${currentBranch}`);
 		} catch {
 			deps.ui.showErrorMessage(
-				`Git Sweep Pro: Could not delete branch "${currentBranch}". You can delete it manually with: git branch -D "${currentBranch.replace(/"/g, '\\"')}"`
+				`Git Sweep Pro: Could not delete branch "${currentBranch}". You can delete it manually with: git branch -D ${escapeForShell(currentBranch)}`
 			);
 		}
 

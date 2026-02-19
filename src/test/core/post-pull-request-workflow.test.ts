@@ -148,7 +148,7 @@ suite('post-pull-request workflow', () => {
 			git: {
 				...baseGit,
 				'branch -avv': {
-					stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  remotes/origin/HEAD -> origin/main\n  remotes/origin/feature/merged 43a6a46 msg',
+					stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  remotes/origin/HEAD -> origin/main',
 				},
 			},
 		});
@@ -205,7 +205,8 @@ suite('post-pull-request workflow', () => {
 			git: {
 				...baseGit,
 				'branch -vv': { stdout: '* main 456 [origin/main] main' },
-				'checkout -B main origin/main': { stdout: '' },
+				'checkout main': new Error('error: pathspec did not match'),
+				'checkout -b main --track origin/main': { stdout: '' },
 				'branch -D feature/merged': { stdout: '' },
 				'pull': { stdout: '' },
 			},
@@ -213,7 +214,8 @@ suite('post-pull-request workflow', () => {
 
 		await runPostPullRequestWorkflow(h.deps);
 
-		assert.ok(h.commands.includes('checkout -B main origin/main'));
+		assert.ok(h.commands.includes('checkout main'), 'Should try local checkout first');
+		assert.ok(h.commands.includes('checkout -b main --track origin/main'), 'Should fall back to creating tracking branch');
 		assert.ok(h.outputLines.includes('Checked out: main'));
 		assert.ok(h.outputLines.includes('Deleted branch: feature/merged'));
 	});
@@ -280,7 +282,7 @@ suite('post-pull-request workflow', () => {
 		await runPostPullRequestWorkflow(h.deps);
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'Git Sweep Pro: Could not delete branch "feature/merged". You can delete it manually with: git branch -D \'feature/merged\'',
+			'Git Sweep Pro: Could not delete branch "feature/merged". You can delete it manually with: git branch -D "feature/merged"',
 		]);
 		assert.ok(h.commands.includes('pull'));
 		assert.ok(h.outputLines.includes('Checked out: main'));
