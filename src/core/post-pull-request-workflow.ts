@@ -159,6 +159,8 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			);
 		}
 
+		// Sweep here intentionally uses safe delete (-d only): dryRun=false, forceDelete=false.
+		// runSweepWorkflow is not given forceDelete to avoid -D on other gone branches.
 		await runSweepWorkflow({ dryRun: false, forceDelete: false }, deps);
 
 		let pulled = false;
