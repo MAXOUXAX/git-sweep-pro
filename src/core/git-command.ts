@@ -12,6 +12,19 @@ export function escapeForShell(s: string): string {
 	return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+/**
+ * Builds a user-facing command string for display (e.g. in logs or error messages).
+ * Args containing whitespace or single quotes are wrapped with escapeForShell.
+ * Returns 'git' when args is empty.
+ */
+function buildDisplayCmd(args: string[]): string {
+	if (args.length === 0) {
+		return 'git';
+	}
+	const formatted = args.map((a) => (/\s|'/.test(a) ? escapeForShell(a) : a)).join(' ');
+	return `git ${formatted}`;
+}
+
 export type CommandResult = {
 	readonly stdout: string;
 	readonly stderr: string;
@@ -38,7 +51,7 @@ export async function runGitCommand(
 	outputChannel: OutputWriter,
 	execFn: ExecFileFn = execFileAsync
 ): Promise<CommandResult> {
-	const displayCmd = args.length > 0 ? `git ${args.map((a) => (/\s|'/.test(a) ? escapeForShell(a) : a)).join(' ')}` : 'git';
+	const displayCmd = buildDisplayCmd(args);
 	outputChannel.appendLine(`$ ${displayCmd}`);
 	try {
 		const result = await execFn('git', args, { cwd });
