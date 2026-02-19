@@ -170,7 +170,13 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 				{ title: `Git Sweep Pro: Checking out ${localTarget}...` },
 				async () => {
 					if (targetItem.isRemote) {
-						await runGit(['checkout', '-B', localTarget, targetRef]);
+						// Attempt to switch to an existing local branch first to preserve
+						// any local commits; only create a new tracking branch if it doesn't exist.
+						try {
+							await runGit(['checkout', localTarget]);
+						} catch {
+							await runGit(['checkout', '-b', localTarget, '--track', targetRef]);
+						}
 					} else {
 						await runGit(['checkout', targetRef]);
 					}
