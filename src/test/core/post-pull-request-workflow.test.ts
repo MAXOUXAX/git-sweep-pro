@@ -82,19 +82,19 @@ function createHarness(options: HarnessOptions = {}): Harness {
 	return { deps, outputLines, infoMessages, errorMessages, commands, progressTitles, quickPickRequests };
 }
 
+const baseBranchAvv = [
+	'* feature/merged 123 [origin/feature/merged: gone] msg',
+	'  main 456 [origin/main] main',
+	'  develop 789 [origin/develop] develop',
+	'  remotes/origin/HEAD -> origin/main',
+	'  remotes/origin/main 43a6a46 0.2.1',
+	'  remotes/origin/develop 43a6a46 develop',
+].join('\n');
+
 const baseGit = {
 	'fetch -p': { stdout: '' },
 	'rev-parse --abbrev-ref HEAD': { stdout: 'feature/merged' },
-	'branch -a': {
-		stdout: [
-			'* feature/merged',
-			'  main',
-			'  develop',
-			'  remotes/origin/HEAD -> origin/main',
-			'  remotes/origin/main',
-			'  remotes/origin/develop',
-		].join('\n'),
-	},
+	'branch -avv': { stdout: baseBranchAvv },
 	'for-each-ref --format=%(refname) refs/remotes/*/HEAD': { stdout: 'refs/remotes/origin/HEAD' },
 	'rev-parse --abbrev-ref refs/remotes/origin/HEAD': { stdout: 'origin/main' },
 };
@@ -147,7 +147,9 @@ suite('post-pull-request workflow', () => {
 			workspaceRoot: '/repo',
 			git: {
 				...baseGit,
-				'branch -a': { stdout: '* feature/merged\n  remotes/origin/HEAD -> origin/main\n  remotes/origin/feature/merged' },
+				'branch -avv': {
+					stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  remotes/origin/HEAD -> origin/main\n  remotes/origin/feature/merged 43a6a46 msg',
+				},
 			},
 		});
 
@@ -177,10 +179,7 @@ suite('post-pull-request workflow', () => {
 			quickPickSelection: { label: 'main' },
 			git: {
 				...baseGit,
-				'branch -vv': [
-					{ stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  main 456 [origin/main] main' },
-					{ stdout: '* main 456 [origin/main] main\n  develop 789 [origin/develop] develop' },
-				],
+				'branch -vv': { stdout: '* main 456 [origin/main] main\n  develop 789 [origin/develop] develop' },
 				'checkout main': { stdout: '' },
 				'branch -D feature/merged': { stdout: '' },
 				'pull': { stdout: '' },
@@ -205,10 +204,7 @@ suite('post-pull-request workflow', () => {
 			quickPickSelection: { label: 'origin/main (remote)' },
 			git: {
 				...baseGit,
-				'branch -vv': [
-					{ stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  main 456 [origin/main] main' },
-					{ stdout: '* main 456 [origin/main] main' },
-				],
+				'branch -vv': { stdout: '* main 456 [origin/main] main' },
 				'checkout -B main origin/main': { stdout: '' },
 				'branch -D feature/merged': { stdout: '' },
 				'pull': { stdout: '' },
@@ -228,10 +224,7 @@ suite('post-pull-request workflow', () => {
 			quickPickSelection: { label: 'main' },
 			git: {
 				...baseGit,
-				'branch -vv': [
-					{ stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  main 456 [origin/main] main' },
-					{ stdout: '* main 456 [origin/main] main' },
-				],
+				'branch -vv': { stdout: '* main 456 [origin/main] main' },
 				'checkout main': { stdout: '' },
 				'branch -D feature/merged': { stdout: '' },
 				'pull': { stdout: '' },
@@ -253,10 +246,7 @@ suite('post-pull-request workflow', () => {
 			quickPickSelection: { label: 'main' },
 			git: {
 				...baseGit,
-				'branch -vv': [
-					{ stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  main 456 [origin/main] main' },
-					{ stdout: '* main 456 [origin/main] main' },
-				],
+				'branch -vv': { stdout: '* main 456 [origin/main] main' },
 				'checkout main': new Error('fatal: pathspec main did not match any file(s) known to git'),
 				'branch -D feature/merged': { stdout: '' },
 				'pull': { stdout: '' },
@@ -280,10 +270,7 @@ suite('post-pull-request workflow', () => {
 			quickPickSelection: { label: 'main' },
 			git: {
 				...baseGit,
-				'branch -vv': [
-					{ stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  main 456 [origin/main] main' },
-					{ stdout: '* main 456 [origin/main] main' },
-				],
+				'branch -vv': { stdout: '* main 456 [origin/main] main' },
 				'checkout main': { stdout: '' },
 				'branch -D feature/merged': new Error('error: Cannot delete branch \'feature/merged\' checked out'),
 				'pull': { stdout: '' },
@@ -307,11 +294,10 @@ suite('post-pull-request workflow', () => {
 			git: {
 				...baseGit,
 				'rev-parse --abbrev-ref HEAD': { stdout: 'feature/merged' },
-				'branch -a': {
-					stdout: '* feature/merged\n  feature/auth/oauth\n  main\n  remotes/origin/HEAD -> origin/main',
+				'branch -avv': {
+					stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  feature/auth/oauth 456 msg\n  main 789 [origin/main] main\n  remotes/origin/HEAD -> origin/main',
 				},
 				'branch -vv': [
-					{ stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  feature/auth/oauth 456 msg\n  main 789 [origin/main] main' },
 					{ stdout: '* feature/auth/oauth 456 msg\n  main 789 [origin/main] main' },
 				],
 				'checkout feature/auth/oauth': { stdout: '' },
@@ -338,10 +324,7 @@ suite('post-pull-request workflow', () => {
 			quickPickSelection: { label: 'main' },
 			git: {
 				...baseGit,
-				'branch -vv': [
-					{ stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  main 456 [origin/main] main' },
-					{ stdout: '* main 456 [origin/main] main' },
-				],
+				'branch -vv': { stdout: '* main 456 [origin/main] main' },
 				'checkout main': { stdout: '' },
 				'branch -D feature/merged': { stdout: '' },
 				'pull': new Error('error: Your local changes would be overwritten by merge.'),
@@ -362,10 +345,7 @@ suite('post-pull-request workflow', () => {
 			quickPickSelection: { label: 'main' },
 			git: {
 				...baseGit,
-				'branch -vv': [
-					{ stdout: '* feature/merged 123 [origin/feature/merged: gone] msg\n  main 456 [origin/main] main' },
-					{ stdout: '* main 456 [origin/main] main\n  stale 789 [origin/stale: gone] msg' },
-				],
+				'branch -vv': { stdout: '* main 456 [origin/main] main\n  stale 789 [origin/stale: gone] msg' },
 				'checkout main': { stdout: '' },
 				'branch -D feature/merged': { stdout: '' },
 				"branch -d stale": { stdout: '' },
@@ -377,8 +357,8 @@ suite('post-pull-request workflow', () => {
 
 		const fetchCount = h.commands.filter((c) => c === 'fetch -p').length;
 		assert.ok(fetchCount >= 2, 'Should fetch at least twice (post-PR + sweep)');
-		const branchVvCount = h.commands.filter((c) => c === 'branch -vv').length;
-		assert.ok(branchVvCount >= 2, 'Should run branch -vv at least twice');
+		assert.ok(h.commands.includes('branch -avv'), 'Should run branch -avv once for post-PR');
+		assert.ok(h.commands.includes('branch -vv'), 'Sweep workflow should run branch -vv');
 		assert.ok(h.commands.includes('branch -d stale'), 'Sweep should delete stale branch');
 	});
 
@@ -421,10 +401,10 @@ suite('post-pull-request workflow', () => {
 				...baseGit,
 				'for-each-ref --format=%(refname) refs/remotes/*/HEAD': { stdout: 'refs/remotes/upstream/HEAD' },
 				'rev-parse --abbrev-ref refs/remotes/upstream/HEAD': { stdout: 'upstream/main' },
-				'branch -vv': [
-					{ stdout: '* feature/merged 123 [upstream/feature/merged: gone] msg\n  main 456 [upstream/main] main' },
-					{ stdout: '* main 456 [upstream/main] main' },
-				],
+				'branch -avv': {
+					stdout: '* feature/merged 123 [upstream/feature/merged: gone] msg\n  main 456 [upstream/main] main\n  remotes/upstream/HEAD -> upstream/main\n  remotes/upstream/main 43a6a46 main\n  remotes/upstream/develop 43a6a46 develop',
+				},
+				'branch -vv': { stdout: '* main 456 [upstream/main] main' },
 				'checkout main': { stdout: '' },
 				'branch -D feature/merged': { stdout: '' },
 				'pull': { stdout: '' },
@@ -446,11 +426,10 @@ suite('post-pull-request workflow', () => {
 			git: {
 				...baseGit,
 				'rev-parse --abbrev-ref HEAD': { stdout: 'team/subteam/merged-pr' },
-				'branch -a': {
-					stdout: '* team/subteam/merged-pr\n  feature/auth/oauth\n  main\n  remotes/origin/HEAD -> origin/main',
+				'branch -avv': {
+					stdout: '* team/subteam/merged-pr 123 [origin/team/subteam/merged-pr: gone] msg\n  feature/auth/oauth 456 [origin/feature/auth/oauth] oauth\n  main 789 [origin/main] main\n  remotes/origin/HEAD -> origin/main',
 				},
 				'branch -vv': [
-					{ stdout: '* team/subteam/merged-pr 123 [origin/team/subteam/merged-pr: gone] msg\n  feature/auth/oauth 456 [origin/feature/auth/oauth] oauth' },
 					{ stdout: '* feature/auth/oauth 456 [origin/feature/auth/oauth] oauth\n  main 789 [origin/main] main' },
 				],
 				'checkout feature/auth/oauth': { stdout: '' },

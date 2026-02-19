@@ -32,17 +32,45 @@ async function getDefaultBranchName(runGit: (args: string[]) => Promise<{ stdout
 
 /**
  * Returns true if the current branch tracks a gone remote.
+ * Uses pre-fetched `git branch -avv` output; no internal git calls.
  */
-async function isCurrentBranchGone(
-	runGit: (args: string[]) => Promise<{ stdout: string; stderr: string }>,
-	currentBranch: string
-): Promise<boolean> {
+function isCurrentBranchGone(branchOutput: string, currentBranch: string): boolean {
 	try {
-		const r = await runGit(['branch', '-vv']);
-		return parseGoneBranches(r.stdout).includes(currentBranch);
+		return parseGoneBranches(branchOutput).includes(currentBranch);
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * Normalizes `git branch -avv` output to `git branch -a` format for parseBranches.
+ * Strips hash and tracking info from each line, keeping only the branch ref.
+ */
+function toBranchAFormat(avvOutput: string): string {
+	return avvOutput
+		.split(/\r?\n/)
+		.map((line) => {
+			const trimmed = line.trim();
+			if (!trimmed) {
+				return '';
+			}
+			const isCurrent = trimmed.startsWith('*');
+			const rest = trimmed.replace(/^\*\s+/, '').trim();
+			if (!rest || rest === 'HEAD') {
+				return '';
+			}
+			if (rest.startsWith('remotes/')) {
+				const firstToken = rest.split(/\s+/)[0];
+				if (firstToken.endsWith('/HEAD') || firstToken.includes('->')) {
+					return '';
+				}
+				return (isCurrent ? '* ' : '  ') + firstToken;
+			}
+			const firstToken = rest.split(/\s+/)[0];
+			return (isCurrent ? '* ' : '  ') + firstToken;
+		})
+		.filter((l) => l.length > 0)
+		.join('\n');
 }
 
 /**
@@ -78,7 +106,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 
 		const [currentBranchResult, branchListResult] = await Promise.all([
 			runGit(['rev-parse', '--abbrev-ref', 'HEAD']),
-			runGit(['branch', '-a']),
+			runGit(['branch', '-avv']),
 		]);
 
 		const currentBranch = currentBranchResult.stdout.trim();
@@ -87,16 +115,14 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			return;
 		}
 
-		const branchItems = parseBranches(branchListResult.stdout);
+		const branchItems = parseBranches(toBranchAFormat(branchListResult.stdout));
 		if (branchItems.length === 0) {
 			deps.ui.showInformationMessage('Git Sweep Pro: No other branches available to checkout.');
 			return;
 		}
 
-		const [defaultBranch, isGone] = await Promise.all([
-			getDefaultBranchName(runGit),
-			isCurrentBranchGone(runGit, currentBranch),
-		]);
+		const defaultBranch = await getDefaultBranchName(runGit);
+		const isGone = isCurrentBranchGone(branchListResult.stdout, currentBranch);
 
 		const quickPickItems = branchItems.map((b) => {
 			const isDefault = Boolean(defaultBranch && toLocalBranchRef(b.ref, b.isRemote) === defaultBranch);
