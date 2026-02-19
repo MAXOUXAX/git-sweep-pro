@@ -305,8 +305,8 @@ suite('post-pull-request workflow', () => {
 			quickPickSelection: { label: 'feature/auth/oauth' },
 			git: {
 				...baseGit,
-				'git rev-parse --abbrev-ref HEAD': { stdout: 'feature/merged' },
-				'git branch -a': {
+				'rev-parse --abbrev-ref HEAD': { stdout: 'feature/merged' },
+				'branch -a': {
 					stdout: '* feature/merged\n  feature/auth/oauth\n  main\n  remotes/origin/HEAD -> origin/main',
 				},
 				'branch -vv': [
