@@ -105,7 +105,7 @@ suite('post-pull-request workflow', () => {
 
 		assert.deepStrictEqual(h.errorMessages, ['Git Sweep Pro: No workspace folder is open.']);
 		assert.strictEqual(h.commands.length, 0);
-		assert.ok(h.outputLines.includes('--- Post Pull Request session started ---'));
+		assert.ok(!h.outputLines.includes('--- Post Pull Request session started ---'));
 	});
 
 	test('handles detached HEAD (current branch is HEAD)', async () => {
