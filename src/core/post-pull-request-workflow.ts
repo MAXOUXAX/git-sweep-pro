@@ -90,7 +90,9 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			const isDefault = Boolean(defaultBranch && toLocalBranchRef(b.ref, b.isRemote) === defaultBranch);
 			return {
 				label: b.isRemote ? `${b.label} (remote)` : b.label,
-				description: b.isRemote ? 'remote' : isDefault ? 'default' : undefined,
+				description: [b.isRemote ? 'remote' : undefined, isDefault ? 'default' : undefined]
+					.filter(Boolean)
+					.join(', ') || undefined,
 				picked: isDefault,
 			};
 		});
