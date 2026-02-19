@@ -149,6 +149,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			selected === undefined || Array.isArray(selected) ? undefined : (selected as QuickPickItemLike);
 		if (!selectedItem) {
 			deps.output.appendLine('Operation cancelled.');
+			deps.output.appendLine('--- Post Pull Request session ended ---');
 			return;
 		}
 
