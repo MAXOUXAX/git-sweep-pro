@@ -98,6 +98,22 @@ suite('branch-list parseBranches', () => {
 		]);
 	});
 
+	test('filters detached HEAD line prefixed with current-branch asterisk', () => {
+		const output = [
+			'* (HEAD detached at abc1234)',
+			'  main',
+			'  feature/foo',
+		].join('\n');
+
+		const result = parseBranches(output);
+
+		assert.ok(!result.some((r) => r.label.includes('detached') || r.label.includes('abc1234')));
+		assert.deepStrictEqual(result, [
+			{ label: 'main', ref: 'main', isRemote: false },
+			{ label: 'feature/foo', ref: 'feature/foo', isRemote: false },
+		]);
+	});
+
 	test('handles branches with slashes in names', () => {
 		const output = [
 			'  feature/auth/oauth',
