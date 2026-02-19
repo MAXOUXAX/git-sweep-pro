@@ -159,6 +159,8 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			return label === chosenLabel;
 		});
 		if (!targetItem) {
+			deps.output.appendLine('[error] Could not match selected branch to branch list.');
+			deps.ui.showErrorMessage('Git Sweep Pro: Internal error — selected branch not found.');
 			return;
 		}
 
