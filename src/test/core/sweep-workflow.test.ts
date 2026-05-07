@@ -29,7 +29,6 @@ function createHarness(options: HarnessOptions = {}): Harness {
 	const deps: SweepWorkflowDeps = {
 		getWorkspaceRoot: () => options.workspaceRoot,
 		output: {
-			show: () => undefined,
 			appendLine: (line) => outputLines.push(line),
 		},
 		runGitCommand: async (args) => {

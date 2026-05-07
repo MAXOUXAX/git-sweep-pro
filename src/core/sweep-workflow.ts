@@ -13,7 +13,6 @@ type ProgressOptions = {
 export type SweepWorkflowDeps = {
 	readonly getWorkspaceRoot: () => string | undefined;
 	readonly output: {
-		show: (preserveFocus: boolean) => void;
 		appendLine: (line: string) => void;
 	};
 	readonly runGitCommand: (args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
@@ -55,7 +54,6 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		return;
 	}
 
-	deps.output.show(true);
 	deps.output.appendLine('--- Git Sweep session started ---');
 	deps.output.appendLine(`Workspace: ${workspaceRoot}`);
 	deps.output.appendLine(`Mode: ${mode.dryRun ? 'dry-run' : 'delete'}, delete flag: ${mode.forceDelete ? '-D' : '-d'}`);

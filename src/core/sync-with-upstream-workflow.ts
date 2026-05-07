@@ -32,7 +32,6 @@ async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		return;
 	}
 
-	deps.output.show(true);
 	deps.output.appendLine(syncMessages.outputHeader);
 	deps.output.appendLine(`Workspace: ${workspaceRoot}`);
 
@@ -325,7 +324,6 @@ async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		return;
 	}
 
-	deps.output.show(true);
 	deps.output.appendLine(syncMessages.outputResumeHeader);
 
 	const runGit = (args: string[]) => deps.runGitCommand(args, workspaceRoot);

@@ -92,7 +92,6 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		return;
 	}
 
-	deps.output.show(true);
 	deps.output.appendLine('--- Post Pull Request session started ---');
 	deps.output.appendLine(`Workspace: ${workspaceRoot}`);
 

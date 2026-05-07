@@ -23,7 +23,7 @@ function createDeps(overrides: {
 
 	return {
 		getWorkspaceRoot: () => '/repo',
-		output: { show: () => undefined, appendLine: () => undefined },
+		output: { appendLine: () => undefined },
 		runGitCommand: overrides.runGitCommand ?? (async () => ({ stdout: '', stderr: '' })),
 		ui: {
 			withProgress: async (_, task) => task(),

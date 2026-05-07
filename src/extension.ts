@@ -27,7 +27,6 @@ export function activate(context: vscode.ExtensionContext) {
 		return {
 			getWorkspaceRoot,
 			output: {
-				show: (preserveFocus) => outputChannel.show(preserveFocus),
 				appendLine: (line) => outputChannel.appendLine(line),
 			},
 			runGitCommand: runGitCommandForWorkflow,
