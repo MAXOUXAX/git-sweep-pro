@@ -72,10 +72,10 @@ export function activate(context: vscode.ExtensionContext) {
 		await runSweepWorkflow({ dryRun: true, forceDelete: false }, createSweepDeps());
 	});
 
-    const postPullRequestCommand = vscode.commands.registerCommand(
-        "git-sweep-pro.postPullRequest",
-        async () => {
-            await runPostPullRequestWorkflow(createSweepDeps());
+	const postPullRequestCommand = vscode.commands.registerCommand(
+		'git-sweep-pro.postPullRequest',
+		async () => {
+			await runPostPullRequestWorkflow(createSweepDeps());
 		}
 	);
 

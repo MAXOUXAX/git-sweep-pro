@@ -8,7 +8,7 @@ export type HarnessOptions = {
 	workspaceRoot?: string;
 	quickPickSelection?: QuickPickItemLike | undefined;
 	git?: Record<string, GitEntry | GitEntry[]>;
-	/** Return true for .git dir, false for rebase-merge/rebase-apply. Omit to default to false. */
+	/** Return true/false for rebase-state paths (for example rebase-merge, rebase-apply, or head-name). Omit to default to false. */
 	fileExists?: (path: string) => boolean;
 	/** When set, runGitCommand will set .current=true when a rebase (non-continue) command runs. Use with stateful fileExists for conflict tests. */
 	rebaseAttemptedRef?: { current: boolean };
