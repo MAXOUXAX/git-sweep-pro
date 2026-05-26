@@ -138,6 +138,15 @@ suite('sync-with-upstream-state', () => {
 			const dir = await resolveGitDir('/not-a-repo', deps);
 			assert.strictEqual(dir, undefined);
 		});
+
+		test('rethrows when rev-parse fails for reasons other than not a git repo', async () => {
+			const deps = createDeps({
+				runGitCommand: async () => {
+					throw new Error('spawn git ENOENT');
+				},
+			});
+			await assert.rejects(() => resolveGitDir('/repo', deps), /spawn git ENOENT/);
+		});
 	});
 
 	suite('isRebaseInProgress', () => {

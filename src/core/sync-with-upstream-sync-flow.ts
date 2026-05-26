@@ -5,6 +5,7 @@ import {
 	isRebaseInProgress,
 	resolveGitDir,
 	saveMemento,
+	showSyncGitCommandError,
 	TEMP_BRANCH_PREFIX,
 	type SyncWithUpstreamDeps,
 } from './sync-with-upstream-state';
@@ -135,17 +136,6 @@ async function cleanupAfterSyncError(
 	}
 }
 
-function showSyncErrorMessage(deps: SyncWithUpstreamDeps, message: string): void {
-	const lowerMessage = message.toLowerCase();
-	if (lowerMessage.includes('not a git repository')) {
-		deps.ui.showErrorMessage(syncMessages.notGitRepo);
-	} else if (lowerMessage.includes('command not found') || lowerMessage.includes('enoent')) {
-		deps.ui.showErrorMessage(syncMessages.gitNotInstalled);
-	} else {
-		deps.ui.showErrorMessage(syncMessages.errorGeneric(message));
-	}
-}
-
 export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	const workspaceRoot = deps.getWorkspaceRoot();
 	if (!workspaceRoot) {
@@ -153,7 +143,14 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		return;
 	}
 
-	const gitDir = await resolveGitDir(workspaceRoot, deps);
+	let gitDir: string | undefined;
+	try {
+		gitDir = await resolveGitDir(workspaceRoot, deps);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		showSyncGitCommandError(deps, message);
+		return;
+	}
 	if (!gitDir) {
 		deps.ui.showErrorMessage(syncMessages.notGitRepo);
 		return;
@@ -345,7 +342,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		const message = error instanceof Error ? error.message : String(error);
 
 		if (!skipOuterCleanup) {
-			showSyncErrorMessage(deps, message);
+			showSyncGitCommandError(deps, message);
 		}
 		deps.output.appendLine(`[error] ${message}`);
 		deps.output.appendLine(syncMessages.outputFailed);

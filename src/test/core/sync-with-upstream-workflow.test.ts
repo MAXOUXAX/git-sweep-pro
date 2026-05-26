@@ -31,6 +31,17 @@ suite('sync-with-upstream workflow', () => {
 			assert.ok(h.commands.length >= 1);
 		});
 
+		test('maps git-not-installed errors from rev-parse to friendly message', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				git: { 'rev-parse --absolute-git-dir': new Error('spawn git ENOENT') },
+			});
+			await runSyncWithUpstreamWorkflow(h.deps);
+
+			assert.deepStrictEqual(h.errorMessages, [syncMessages.gitNotInstalled]);
+			assert.strictEqual(h.commands.length, 1);
+		});
+
 		test('fails fast when rebase already in progress', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
