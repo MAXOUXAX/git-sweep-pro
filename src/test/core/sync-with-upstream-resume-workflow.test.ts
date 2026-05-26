@@ -64,6 +64,7 @@ suite('sync-with-upstream resume workflow', () => {
 			await runSyncWithUpstreamResumeWorkflow(h.deps);
 
 			assert.ok(h.commands.includes('rebase --continue'));
+			assert.ok(!h.commands.some((c) => c.startsWith('checkout ')));
 			assert.ok(h.commands.includes('push --force-with-lease'));
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedSuccess('feature/my-branch')]);
 			assert.ok(h.outputLines.includes(syncMessages.outputResumeComplete));
@@ -71,7 +72,7 @@ suite('sync-with-upstream resume workflow', () => {
 			assert.ok(clearUpdate, 'Memento should be cleared after successful resume');
 		});
 
-		test('resume with memento only (no rebase): skips continue, push, clears memento', async () => {
+		test('resume with memento only (no rebase): checks out feature branch, push, clears memento', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
 				fileExists: fileExistsNoRebase,
@@ -83,12 +84,14 @@ suite('sync-with-upstream resume workflow', () => {
 				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
+					'checkout feature/my-branch': { stdout: '' },
 					'push --force-with-lease': { stdout: '' },
 				},
 			});
 			await runSyncWithUpstreamResumeWorkflow(h.deps);
 
 			assert.ok(!h.commands.includes('rebase --continue'));
+			assert.ok(h.commands.includes('checkout feature/my-branch'));
 			assert.ok(h.commands.includes('push --force-with-lease'));
 			assert.ok(h.outputLines.includes(syncMessages.infoNoRebaseInProgress));
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedSuccess('feature/my-branch')]);
@@ -109,6 +112,7 @@ suite('sync-with-upstream resume workflow', () => {
 				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
+					'checkout feature/my-branch': { stdout: '' },
 					'push --force-with-lease': { stdout: '' },
 					'branch -D __gsp_sync_origin_main': { stdout: '' },
 				},
@@ -131,6 +135,7 @@ suite('sync-with-upstream resume workflow', () => {
 				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
+					'checkout feature/my-branch': { stdout: '' },
 					'push --force-with-lease': { stdout: '' },
 					'stash pop': { stdout: '' },
 				},
@@ -196,6 +201,61 @@ suite('sync-with-upstream resume workflow', () => {
 			assert.deepStrictEqual(h.errorMessages, [syncMessages.couldNotDetermineRebaseBranch]);
 		});
 
+		test('resume with active rebase does not checkout before push', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: (p) => p.includes('rebase-merge') || p.includes('rebase-apply'),
+				readFileUtf8: (p) => (p.includes('head-name') ? 'refs/heads/feature/my-branch' : ''),
+				memento: undefined,
+				git: {
+					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
+					'rebase --continue': { stdout: '' },
+					'push --force-with-lease': { stdout: '' },
+				},
+			});
+			await runSyncWithUpstreamResumeWorkflow(h.deps);
+
+			assert.ok(h.commands.includes('rebase --continue'));
+			assert.ok(!h.commands.some((c) => c.startsWith('checkout ')));
+		});
+
+		test('maps git-not-installed errors from rev-parse to friendly message', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: fileExistsNoRebase,
+				git: {
+					'rev-parse --absolute-git-dir': new Error('spawn git ENOENT'),
+				},
+			});
+			await runSyncWithUpstreamResumeWorkflow(h.deps);
+
+			assert.deepStrictEqual(h.errorMessages, [syncMessages.gitNotInstalled]);
+			assert.ok(!h.commands.includes('push --force-with-lease'));
+			assert.ok(!h.commands.some((c) => c.startsWith('checkout ')));
+		});
+
+		test('resume shows error when checkout fails before push', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: fileExistsNoRebase,
+				memento: {
+					workspaceRoot: '/repo',
+					featureBranch: 'feature/my-branch',
+					hasStash: false,
+					upstreamRef: 'main',
+				},
+				git: {
+					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
+					'checkout feature/my-branch': new Error('error: pathspec did not match'),
+				},
+			});
+			await runSyncWithUpstreamResumeWorkflow(h.deps);
+
+			assert.ok(h.errorMessages.some((m) => m.includes('pathspec did not match')));
+			assert.ok(!h.commands.includes('push --force-with-lease'));
+			assert.ok(!h.mementoUpdates.some((u) => u.key === MEMENTO_KEY && u.value === undefined));
+		});
+
 		test('resume shows error when push fails', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
@@ -208,6 +268,7 @@ suite('sync-with-upstream resume workflow', () => {
 				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
+					'checkout feature/my-branch': { stdout: '' },
 					'push --force-with-lease': new Error('rejected: failed to push'),
 				},
 			});

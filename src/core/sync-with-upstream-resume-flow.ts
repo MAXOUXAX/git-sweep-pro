@@ -5,6 +5,7 @@ import {
 	isRebaseInProgress,
 	readRebaseHeadName,
 	resolveGitDir,
+	showSyncGitCommandError,
 	type SyncWithUpstreamDeps,
 } from './sync-with-upstream-state';
 
@@ -15,7 +16,14 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		return;
 	}
 
-	const gitDir = await resolveGitDir(workspaceRoot, deps);
+	let gitDir: string | undefined;
+	try {
+		gitDir = await resolveGitDir(workspaceRoot, deps);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		showSyncGitCommandError(deps, message);
+		return;
+	}
 	if (!gitDir) {
 		deps.ui.showErrorMessage(syncMessages.notGitRepo);
 		return;
@@ -68,6 +76,20 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		}
 	} else {
 		deps.output.appendLine(syncMessages.infoNoRebaseInProgress);
+	}
+
+	if (!rebaseActive) {
+		try {
+			await deps.ui.withProgress(
+				{ title: syncMessages.returningTo(featureBranch) },
+				() => runGit(['checkout', featureBranch])
+			);
+		} catch (checkoutError) {
+			const msg = checkoutError instanceof Error ? checkoutError.message : String(checkoutError);
+			deps.ui.showErrorMessage(syncMessages.errorGeneric(msg));
+			deps.output.appendLine(`[error] ${msg}`);
+			return;
+		}
 	}
 
 	try {
