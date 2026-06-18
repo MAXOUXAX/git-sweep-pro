@@ -23,8 +23,9 @@ Safely identify and prune local branches that are gone on the remote.
 	- Runs the dry-run flow directly.
 
 - `Git Sweep Pro: Post Pull Request` (`git-sweep-pro.postPullRequest`)
-	- Shows local and remote branches to checkout.
-	- After checkout: deletes the previous branch, prunes, runs the main sweep, then pulls.
+	- After merging your branch into another one (e.g. `dev` → `main`), keeps the current branch and brings it up to date: rebases it onto the selected branch (after pulling that branch) and force-pushes it.
+	- Pre-selects the default branch as the rebase target. Never deletes the current branch.
+	- On rebase conflicts, resolve them and run `Sync With Upstream (Resume)` to continue. To delete stale branches, use the Sweep commands.
 
 ## UX and logging
 

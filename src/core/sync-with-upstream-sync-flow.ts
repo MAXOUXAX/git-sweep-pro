@@ -136,7 +136,24 @@ async function cleanupAfterSyncError(
 	}
 }
 
-export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
+export type SyncFlowOptions = {
+	/** Local branch name to pre-select in the quick pick (e.g. the default branch). */
+	readonly preselectBranch?: string;
+	/** Overrides the quick-pick title (used by Post Pull Request). */
+	readonly pickBranchTitle?: string;
+	/** Overrides the quick-pick placeholder (used by Post Pull Request). */
+	readonly pickBranchPlaceholder?: string;
+};
+
+function localBranchName(b: BranchItem): string {
+	if (!b.isRemote) {
+		return b.ref;
+	}
+	const slashIdx = b.ref.indexOf('/');
+	return slashIdx > 0 ? b.ref.slice(slashIdx + 1) : b.ref;
+}
+
+export async function runSyncFlow(deps: SyncWithUpstreamDeps, options: SyncFlowOptions = {}): Promise<void> {
 	const workspaceRoot = deps.getWorkspaceRoot();
 	if (!workspaceRoot) {
 		deps.ui.showErrorMessage(syncMessages.noWorkspace);
@@ -197,15 +214,15 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		const quickPickItems = branchItems.map((b) => ({
 			label: b.isRemote ? `${b.label} (remote)` : b.label,
 			description: b.isRemote ? undefined : 'local',
-			picked: false,
+			picked: options.preselectBranch !== undefined && localBranchName(b) === options.preselectBranch,
 		}));
 
 		const selected = await deps.ui.showQuickPick(quickPickItems, {
 			canPickMany: false,
 			ignoreFocusOut: true,
 			matchOnDescription: true,
-			title: syncMessages.pickBranchTitle,
-			placeHolder: syncMessages.pickBranchPlaceholder,
+			title: options.pickBranchTitle ?? syncMessages.pickBranchTitle,
+			placeHolder: options.pickBranchPlaceholder ?? syncMessages.pickBranchPlaceholder,
 		});
 
 		const selectedItem: QuickPickItemLike | undefined =
