@@ -56,7 +56,6 @@ export const syncMessages = {
 	outputFailed: '--- Sync With Upstream failed ---',
 	outputResumeComplete: '--- Resume complete ---',
 	nothingToResume: 'Nothing to resume.',
-	infoNoStash: '[info] No changes to stash.',
 	infoPullSkipped: '[info] Pull skipped (already up to date or no upstream).',
 	infoPullSkippedLocal: '[info] Pull skipped.',
 	infoTempBranchNotDeleted: (branch: string) => `[info] Temporary branch ${branch} not deleted.`,

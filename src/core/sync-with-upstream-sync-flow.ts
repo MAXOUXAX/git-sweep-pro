@@ -162,6 +162,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		return;
 	}
 
+	deps.output.show(true);
 	deps.output.appendLine(syncMessages.outputHeader);
 	deps.output.appendLine(`Workspace: ${workspaceRoot}`);
 
@@ -235,12 +236,10 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		const statusResult = await runGit(['status', '--porcelain', '-u']).catch(() => ({ stdout: '', stderr: '' }));
 		const hasLocalChanges = statusResult.stdout.trim().length > 0;
 		if (hasLocalChanges) {
-			try {
-				await runGit(['stash', 'push', '-u', '-m', 'gsp-sync-with-upstream']);
-				hasStash = true;
-			} catch {
-				deps.output.appendLine(syncMessages.infoNoStash);
-			}
+			// A stash failure here is a real error: continuing would rebase on a
+			// dirty tree, so let the outer catch abort and clean up.
+			await runGit(['stash', 'push', '-u', '-m', 'gsp-sync-with-upstream']);
+			hasStash = true;
 		}
 
 		const isRemote = targetItem.isRemote;

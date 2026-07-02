@@ -30,6 +30,7 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		return;
 	}
 
+	deps.output.show(true);
 	deps.output.appendLine(syncMessages.outputResumeHeader);
 
 	const runGit = (args: string[]) => deps.runGitCommand(args, workspaceRoot);
