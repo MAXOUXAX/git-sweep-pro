@@ -7,6 +7,8 @@ type GitEntry = { stdout?: string; stderr?: string } | Error;
 type HarnessOptions = {
 	workspaceRoot?: string;
 	quickPickSelection?: QuickPickItemLike | undefined;
+	/** Per-call quick-pick answers (post-PR pick, then sweep multi-select). Takes precedence over quickPickSelection. */
+	quickPickSelections?: Array<QuickPickItemLike | QuickPickItemLike[] | undefined>;
 	/** Git commands: value or array (for repeated calls, e.g. git branch -vv) */
 	git?: Record<string, GitEntry | GitEntry[]>;
 };
@@ -68,6 +70,9 @@ function createHarness(options: HarnessOptions = {}): Harness {
 			},
 			showQuickPick: async (items, config) => {
 				quickPickRequests.push({ items, title: config.title });
+				if (options.quickPickSelections) {
+					return options.quickPickSelections[quickPickRequests.length - 1];
+				}
 				return options.quickPickSelection;
 			},
 			showInformationMessage: (message) => {
@@ -194,7 +199,10 @@ suite('post-pull-request workflow', () => {
 		assert.ok(h.outputLines.includes('Deleted branch: feature/merged'));
 		assert.ok(h.commands.includes('fetch -p'));
 		assert.ok(h.commands.includes('pull'));
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Switched to main and pulled.']);
+		assert.deepStrictEqual(h.infoMessages, [
+			'Git Sweep Pro: No stale branches found.',
+			'Git Sweep Pro: Switched to main and pulled.',
+		]);
 		assert.ok(h.outputLines.includes('--- Post Pull Request session ended ---'));
 	});
 
@@ -282,11 +290,14 @@ suite('post-pull-request workflow', () => {
 		await runPostPullRequestWorkflow(h.deps);
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'Git Sweep Pro: Could not delete branch "feature/merged". You can delete it manually with: git branch -D "feature/merged"',
+			"Git Sweep Pro: Could not delete branch \"feature/merged\". You can delete it manually with: git branch -D 'feature/merged'",
 		]);
 		assert.ok(h.commands.includes('pull'));
 		assert.ok(h.outputLines.includes('Checked out: main'));
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Switched to main and pulled.']);
+		assert.deepStrictEqual(h.infoMessages, [
+			'Git Sweep Pro: No stale branches found.',
+			'Git Sweep Pro: Switched to main and pulled.',
+		]);
 	});
 
 	test('handles branch without upstream—skips pull and shows friendly message', async () => {
@@ -314,6 +325,7 @@ suite('post-pull-request workflow', () => {
 
 		assert.deepStrictEqual(h.errorMessages, []);
 		assert.deepStrictEqual(h.infoMessages, [
+			'Git Sweep Pro: No stale branches found.',
 			'Git Sweep Pro: Switched to feature/auth/oauth. (No upstream—pull skipped.)',
 		]);
 		assert.ok(h.outputLines.includes('No upstream configured for feature/auth/oauth. Pull skipped.'));
@@ -344,7 +356,7 @@ suite('post-pull-request workflow', () => {
 	test('invokes sweep workflow after checkout and delete', async () => {
 		const h = createHarness({
 			workspaceRoot: '/repo',
-			quickPickSelection: { label: 'main' },
+			quickPickSelections: [{ label: 'main' }, [{ label: 'stale' }]],
 			git: {
 				...baseGit,
 				'branch -vv': { stdout: '* main 456 [origin/main] main\n  stale 789 [origin/stale: gone] msg' },

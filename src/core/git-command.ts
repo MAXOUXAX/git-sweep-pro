@@ -33,7 +33,7 @@ export type CommandResult = {
 export type ExecFileFn = (
 	file: string,
 	args: string[],
-	options: { cwd: string }
+	options: { cwd: string; env?: NodeJS.ProcessEnv }
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export type OutputWriter = {
@@ -54,7 +54,16 @@ export async function runGitCommand(
 	const displayCmd = buildDisplayCmd(args);
 	outputChannel.appendLine(`$ ${displayCmd}`);
 	try {
-		const result = await execFn('git', args, { cwd });
+		// The extension host has no terminal: any git command that tries to open
+		// an editor (e.g. `rebase --continue`) or prompt for credentials would
+		// fail or hang, so force git into non-interactive mode.
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			GIT_EDITOR: 'true',
+			GIT_SEQUENCE_EDITOR: 'true',
+			GIT_TERMINAL_PROMPT: '0',
+		};
+		const result = await execFn('git', args, { cwd, env });
 		if (result.stdout.trim()) {
 			outputChannel.appendLine(result.stdout.trim());
 		}

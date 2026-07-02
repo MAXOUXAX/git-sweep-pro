@@ -96,4 +96,23 @@ suite('git-command', () => {
 
 		assert.deepStrictEqual(receivedArgs, ['branch', '-d', '; rm -rf /']);
 	});
+
+	test('runs git in non-interactive mode (no editor, no terminal prompt)', async () => {
+		let receivedEnv: NodeJS.ProcessEnv | undefined;
+		const execFileFn: ExecFileFn = async (_file, _args, options) => {
+			receivedEnv = options.env;
+			return { stdout: '', stderr: '' };
+		};
+
+		await runGitCommand(
+			['rebase', '--continue'],
+			'/repo',
+			{ appendLine: () => undefined },
+			execFileFn
+		);
+
+		assert.strictEqual(receivedEnv?.GIT_EDITOR, 'true');
+		assert.strictEqual(receivedEnv?.GIT_SEQUENCE_EDITOR, 'true');
+		assert.strictEqual(receivedEnv?.GIT_TERMINAL_PROMPT, '0');
+	});
 });

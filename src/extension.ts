@@ -1,6 +1,8 @@
+import * as fs from 'node:fs';
 import * as vscode from 'vscode';
 import { runGitCommand } from './core/git-command';
 import { runPostPullRequestWorkflow } from './core/post-pull-request-workflow';
+import { runSyncWithUpstreamResumeWorkflow, runSyncWithUpstreamWorkflow, type SyncWithUpstreamDeps } from './core/sync-with-upstream-workflow';
 import { resolveSweepModeAction } from './core/sweep-logic';
 import { runSweepWorkflow, type SweepWorkflowDeps } from './core/sweep-workflow';
 import { resolveWorkspaceRoot } from './core/workspace';
@@ -71,14 +73,38 @@ export function activate(context: vscode.ExtensionContext) {
 		await runSweepWorkflow({ dryRun: true, forceDelete: false }, createSweepDeps());
 	});
 
-    const postPullRequestCommand = vscode.commands.registerCommand(
-        "git-sweep-pro.postPullRequest",
-        async () => {
-            await runPostPullRequestWorkflow(createSweepDeps());
-        },
-    );
+	const postPullRequestCommand = vscode.commands.registerCommand(
+		'git-sweep-pro.postPullRequest',
+		async () => {
+			await runPostPullRequestWorkflow(createSweepDeps());
+		}
+	);
 
-    context.subscriptions.push(outputChannel, runCommand, dryRunCommand, postPullRequestCommand);
+	const createSyncDeps = (): SyncWithUpstreamDeps => ({
+		...createSweepDeps(),
+		workspaceState: context.workspaceState,
+		fileExists: (p) => fs.existsSync(p),
+		readFileUtf8: (p) => fs.readFileSync(p, 'utf8'),
+	});
+
+	const syncWithUpstreamCommand = vscode.commands.registerCommand(
+		'git-sweep-pro.syncWithUpstream',
+		async () => runSyncWithUpstreamWorkflow(createSyncDeps())
+	);
+
+	const syncWithUpstreamResumeCommand = vscode.commands.registerCommand(
+		'git-sweep-pro.syncWithUpstreamResume',
+		async () => runSyncWithUpstreamResumeWorkflow(createSyncDeps())
+	);
+
+	context.subscriptions.push(
+		outputChannel,
+		runCommand,
+		dryRunCommand,
+		postPullRequestCommand,
+		syncWithUpstreamCommand,
+		syncWithUpstreamResumeCommand
+	);
 }
 
 export function deactivate() {}

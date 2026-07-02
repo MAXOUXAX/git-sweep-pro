@@ -26,6 +26,14 @@ Safely identify and prune local branches that are gone on the remote.
 	- Shows local and remote branches to checkout.
 	- After checkout: deletes the previous branch, prunes, runs the main sweep, then pulls.
 
+- `Git Sweep Pro: Sync With Upstream` (`git-sweep-pro.syncWithUpstream`)
+	- Keeps your feature branch up to date with a base branch (`main`, `develop`, etc.).
+	- Stashes local changes, pulls the selected branch, rebases the current branch onto it, force-pushes (`--force-with-lease`), then restores the stash.
+	- On rebase conflicts, the flow pauses; resolve them and run `Sync With Upstream (Resume)` to continue.
+
+- `Git Sweep Pro: Sync With Upstream (Resume)` (`git-sweep-pro.syncWithUpstreamResume`)
+	- Resumes a paused sync: after you resolved rebase conflicts (continues the rebase, force-pushes, restores the stash), or after a failed force-push (retries the push and finishes the cleanup).
+
 ## UX and logging
 
 - Uses a progress notification while fetching and pruning remotes.

@@ -8,7 +8,7 @@
   },
   "publisher": "MAXOUXAX",
   "icon": "assets/icon.png",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -30,6 +30,14 @@
       {
         "command": "git-sweep-pro.postPullRequest",
         "title": "Git Sweep Pro: Post Pull Request"
+      },
+      {
+        "command": "git-sweep-pro.syncWithUpstream",
+        "title": "Git Sweep Pro: Sync With Upstream"
+      },
+      {
+        "command": "git-sweep-pro.syncWithUpstreamResume",
+        "title": "Git Sweep Pro: Sync With Upstream (Resume)"
       }
     ]
   },
