@@ -43,7 +43,7 @@ async function prepareUpstreamForRebase(
 		const branchName = upstreamRef.slice(slashIdx + 1);
 		await deps.ui.withProgress(
 			{ title: syncMessages.pulling(upstreamRef) },
-			() => runGit(['pull', remoteName, branchName])
+			() => runGit(['pull', '--ff-only', remoteName, branchName])
 		);
 
 		return tempBranch;
@@ -57,7 +57,7 @@ async function prepareUpstreamForRebase(
 	try {
 		await deps.ui.withProgress(
 			{ title: syncMessages.pulling(upstreamRef) },
-			() => runGit(['pull'])
+			() => runGit(['pull', '--ff-only'])
 		);
 	} catch (pullError) {
 		const msg = pullError instanceof Error ? pullError.message : String(pullError);

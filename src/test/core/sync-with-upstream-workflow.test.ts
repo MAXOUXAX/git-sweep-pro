@@ -126,7 +126,7 @@ suite('sync-with-upstream workflow', () => {
 					...baseGitForSync,
 					'status --porcelain -u': { stdout: '' },
 					'checkout main': { stdout: '' },
-					'pull': { stdout: '' },
+					'pull --ff-only': { stdout: '' },
 					'checkout feature/my-branch': { stdout: '' },
 					'rebase main': { stdout: '' },
 					'push --force-with-lease': { stdout: '' },
@@ -141,7 +141,7 @@ suite('sync-with-upstream workflow', () => {
 			assert.ok(!h.commands.includes('stash push -u -m gsp-sync-with-upstream'));
 			assert.ok(!h.commands.includes('stash pop'));
 			assert.ok(h.commands.includes('checkout main'));
-			assert.ok(h.commands.includes('pull'));
+			assert.ok(h.commands.includes('pull --ff-only'));
 			assert.ok(h.commands.includes('checkout feature/my-branch'));
 			assert.ok(h.commands.includes('rebase main'));
 			assert.ok(h.commands.includes('push --force-with-lease'));
@@ -164,7 +164,7 @@ suite('sync-with-upstream workflow', () => {
 					...baseGitForSync,
 					'status --porcelain -u': { stdout: '' },
 					'checkout main': { stdout: '' },
-					'pull': { stdout: '' },
+					'pull --ff-only': { stdout: '' },
 					'checkout feature/my-branch': { stdout: '' },
 					'rebase main': { stdout: '' },
 					'push --force-with-lease': { stdout: '' },
@@ -187,7 +187,7 @@ suite('sync-with-upstream workflow', () => {
 					'status --porcelain -u': { stdout: ' M foo.txt' },
 					'stash push -u -m gsp-sync-with-upstream': { stdout: '' },
 					'checkout main': { stdout: '' },
-					'pull': { stdout: '' },
+					'pull --ff-only': { stdout: '' },
 					'checkout feature/my-branch': { stdout: '' },
 					'rebase main': { stdout: '' },
 					'push --force-with-lease': { stdout: '' },
@@ -212,7 +212,7 @@ suite('sync-with-upstream workflow', () => {
 					...baseGitForSync,
 					'status --porcelain -u': { stdout: '' },
 					[`checkout -B ${tempMain} origin/main`]: { stdout: '' },
-					'pull origin main': { stdout: '' },
+					'pull --ff-only origin main': { stdout: '' },
 					'checkout feature/my-branch': { stdout: '' },
 					[`rebase ${tempMain}`]: { stdout: '' },
 					'push --force-with-lease': { stdout: '' },
@@ -223,7 +223,7 @@ suite('sync-with-upstream workflow', () => {
 			await runSyncWithUpstreamWorkflow(h.deps);
 
 			assert.ok(h.commands.includes(`checkout -B ${tempMain} origin/main`));
-			assert.ok(h.commands.includes('pull origin main'));
+			assert.ok(h.commands.includes('pull --ff-only origin main'));
 			assert.ok(h.commands.includes(`rebase ${tempMain}`));
 			assert.ok(h.commands.includes(`branch -D ${tempMain}`));
 			assert.ok(h.commands.includes('rev-parse --verify refs/heads/main'));
@@ -240,7 +240,7 @@ suite('sync-with-upstream workflow', () => {
 					...baseGitForSync,
 					'status --porcelain -u': { stdout: '' },
 					[`checkout -B ${tempMain} origin/main`]: { stdout: '' },
-					'pull origin main': { stdout: '' },
+					'pull --ff-only origin main': { stdout: '' },
 					'checkout feature/my-branch': { stdout: '' },
 					[`rebase ${tempMain}`]: { stdout: '' },
 					'push --force-with-lease': { stdout: '' },
@@ -284,7 +284,7 @@ suite('sync-with-upstream workflow', () => {
 					...baseGitForSync,
 					'status --porcelain -u': { stdout: '' },
 					'checkout main': { stdout: '' },
-					'pull': new Error('error: Your local changes would be overwritten by merge.'),
+					'pull --ff-only': new Error('error: Your local changes would be overwritten by merge.'),
 					'checkout feature/my-branch': { stdout: '' },
 				},
 			});
@@ -306,7 +306,7 @@ suite('sync-with-upstream workflow', () => {
 					...baseGitForSync,
 					'status --porcelain -u': { stdout: '' },
 					'checkout main': { stdout: '' },
-					'pull': new Error('There is no tracking information for the current branch.'),
+					'pull --ff-only': new Error('There is no tracking information for the current branch.'),
 					'checkout feature/my-branch': { stdout: '' },
 					'rebase main': { stdout: '' },
 					'push --force-with-lease': { stdout: '' },
@@ -332,7 +332,7 @@ suite('sync-with-upstream workflow', () => {
 					},
 					'status --porcelain -u': { stdout: '' },
 					[`checkout -B ${tempDevelop} origin/develop`]: { stdout: '' },
-					'pull origin develop': new Error('fatal: unable to access remote'),
+					'pull --ff-only origin develop': new Error('fatal: unable to access remote'),
 					'checkout feature/my-branch': { stdout: '' },
 					[`branch -D ${tempDevelop}`]: { stdout: '' },
 				},
@@ -357,7 +357,7 @@ suite('sync-with-upstream workflow', () => {
 					...baseGitForSync,
 					'status --porcelain -u': { stdout: '' },
 					'checkout main': { stdout: '' },
-					'pull': { stdout: '' },
+					'pull --ff-only': { stdout: '' },
 					'checkout feature/my-branch': { stdout: '' },
 					'rebase main': new Error('CONFLICT (content): Merge conflict in foo.ts'),
 				},
@@ -383,7 +383,7 @@ suite('sync-with-upstream workflow', () => {
 					...baseGitForSync,
 					'status --porcelain -u': { stdout: '' },
 					'checkout main': { stdout: '' },
-					'pull': { stdout: '' },
+					'pull --ff-only': { stdout: '' },
 					'checkout feature/my-branch': { stdout: '' },
 					'rebase main': { stdout: '' },
 					'push --force-with-lease': new Error('rejected: non-fast-forward'),
