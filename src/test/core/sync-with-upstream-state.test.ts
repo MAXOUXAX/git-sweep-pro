@@ -23,7 +23,7 @@ function createDeps(overrides: {
 
 	return {
 		getWorkspaceRoot: () => '/repo',
-		output: { appendLine: () => undefined },
+		output: { show: () => undefined, appendLine: () => undefined },
 		runGitCommand: overrides.runGitCommand ?? (async () => ({ stdout: '', stderr: '' })),
 		ui: {
 			withProgress: async (_, task) => task(),
@@ -68,6 +68,7 @@ suite('sync-with-upstream-state', () => {
 				featureBranch: 'feature/foo',
 				hasStash: true,
 				upstreamRef: 'origin/main',
+				upstreamIsRemote: true,
 			};
 
 			await saveMemento(deps, memento);
@@ -81,6 +82,7 @@ suite('sync-with-upstream-state', () => {
 				featureBranch: 'feature/foo',
 				hasStash: false,
 				upstreamRef: 'origin/main',
+				upstreamIsRemote: true,
 				tempBranchToCleanup: '__gsp_sync_origin_main',
 			};
 
@@ -95,6 +97,7 @@ suite('sync-with-upstream-state', () => {
 				featureBranch: 'main',
 				hasStash: false,
 				upstreamRef: 'origin/develop',
+				upstreamIsRemote: true,
 			};
 
 			await saveMemento(deps, memento);

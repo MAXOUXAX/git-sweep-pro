@@ -6,5 +6,5 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
-- Post Pull Request: keep the current branch and rebase it onto the selected branch (after a pull), then force-push it, instead of deleting/pruning it. Delegates to the Sync With Upstream flow (stash, conflict resume, `--force-with-lease`) and pre-selects the default branch as the target.
+- New commands: `Sync With Upstream` and `Sync With Upstream (Resume)` — keep a feature branch up to date with a base branch (stash, pull, rebase, `--force-with-lease` push, conflict pause/resume).
 - Initial release

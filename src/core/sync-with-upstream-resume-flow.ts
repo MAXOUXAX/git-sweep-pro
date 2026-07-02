@@ -8,6 +8,7 @@ import {
 	showSyncGitCommandError,
 	type SyncWithUpstreamDeps,
 } from './sync-with-upstream-state';
+import { syncLocalBranchFromRemote } from './sync-with-upstream-sync-flow';
 
 export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	const workspaceRoot = deps.getWorkspaceRoot();
@@ -36,26 +37,41 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	const rebaseActive = isRebaseInProgress(gitDir, deps);
 	const memento = getMemento(deps);
 
-	if (memento && memento.workspaceRoot !== workspaceRoot) {
+	if (!memento) {
+		// Never resume a rebase this extension did not start: continuing and
+		// force-pushing someone's manual rebase would be destructive.
+		if (rebaseActive) {
+			deps.ui.showErrorMessage(syncMessages.rebaseNotStartedByExtension);
+			deps.output.appendLine(syncMessages.rebaseNotStartedByExtension);
+		} else {
+			deps.ui.showInformationMessage(syncMessages.noRebaseNothingToResume);
+			deps.output.appendLine(syncMessages.nothingToResume);
+		}
+		return;
+	}
+
+	if (memento.workspaceRoot !== workspaceRoot) {
 		deps.ui.showErrorMessage(syncMessages.rebaseInOtherWorkspace);
 		deps.output.appendLine(syncMessages.rebaseInOtherWorkspace);
 		return;
 	}
 
-	if (!rebaseActive && !memento) {
-		deps.ui.showInformationMessage(syncMessages.noRebaseNothingToResume);
-		deps.output.appendLine(syncMessages.nothingToResume);
-		return;
-	}
-
-	const featureBranch = memento?.featureBranch ?? readRebaseHeadName(gitDir, deps);
+	const featureBranch = memento.featureBranch;
 	if (!featureBranch) {
 		deps.ui.showErrorMessage(syncMessages.couldNotDetermineRebaseBranch);
 		return;
 	}
+	const hasStash = memento.hasStash;
+	const tempBranchToCleanup = memento.tempBranchToCleanup;
 
-	const hasStash = memento?.hasStash ?? false;
-	const tempBranchToCleanup = memento?.tempBranchToCleanup;
+	if (rebaseActive) {
+		const rebasingBranch = readRebaseHeadName(gitDir, deps);
+		if (rebasingBranch && rebasingBranch !== featureBranch) {
+			deps.ui.showErrorMessage(syncMessages.rebaseBranchMismatch(featureBranch, rebasingBranch));
+			deps.output.appendLine(syncMessages.rebaseBranchMismatch(featureBranch, rebasingBranch));
+			return;
+		}
+	}
 
 	if (rebaseActive) {
 		try {
@@ -111,6 +127,10 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		} catch {
 			deps.output.appendLine(syncMessages.infoTempBranchNotDeleted(tempBranchToCleanup));
 		}
+	}
+
+	if (memento.upstreamIsRemote) {
+		await syncLocalBranchFromRemote(deps, runGit, memento.upstreamRef, featureBranch);
 	}
 
 	if (hasStash) {

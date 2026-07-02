@@ -209,7 +209,7 @@ suite('sync-with-upstream workflow', () => {
 			assert.ok(h.outputLines.some((l) => l.includes(syncMessages.infoLocalBranchSynced('main', 'origin/main'))));
 		});
 
-		test('success path with remote branch: skips update when syncing branch equals local upstream', async () => {
+		test('blocks syncing a branch onto its own remote counterpart', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
 				fileExists: fileExistsNoRebase,
@@ -217,20 +217,85 @@ suite('sync-with-upstream workflow', () => {
 				git: {
 					...baseGitForSync,
 					'rev-parse --abbrev-ref HEAD': { stdout: 'main' },
-					'status --porcelain -u': { stdout: '' },
-					'checkout -B __gsp_sync_origin_main origin/main': { stdout: '' },
-					'pull origin main': { stdout: '' },
-					'checkout main': { stdout: '' },
-					'rebase __gsp_sync_origin_main': { stdout: '' },
-					'push --force-with-lease': { stdout: '' },
-					'branch -D __gsp_sync_origin_main': { stdout: '' },
 				},
 			});
 			await runSyncWithUpstreamWorkflow(h.deps);
 
-			assert.ok(!h.commands.some((c) => c.includes('rev-parse --verify refs/heads/main')));
-			assert.ok(!h.commands.some((c) => c.includes('branch main') || c.includes('branch -f')));
-			assert.ok(h.outputLines.some((l) => l.includes(syncMessages.infoUpdateSkippedSameBranch('main'))));
+			assert.deepStrictEqual(h.infoMessages, [syncMessages.cannotSyncOntoItself('main')]);
+			assert.ok(h.outputLines.includes(syncMessages.operationCancelled));
+			assert.ok(!h.commands.some((c) => c.startsWith('rebase')));
+			assert.ok(!h.commands.includes('push --force-with-lease'));
+			assert.ok(!h.commands.some((c) => c.startsWith('stash')));
+		});
+
+		test('aborts and cleans up when pulling the target branch fails for a real reason', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: fileExistsNoRebase,
+				quickPickSelection: { label: 'main' },
+				git: {
+					...baseGitForSync,
+					'status --porcelain -u': { stdout: '' },
+					'checkout main': { stdout: '' },
+					'pull': new Error('error: Your local changes would be overwritten by merge.'),
+					'checkout feature/my-branch': { stdout: '' },
+				},
+			});
+			await runSyncWithUpstreamWorkflow(h.deps);
+
+			assert.ok(!h.commands.some((c) => c.startsWith('rebase')));
+			assert.ok(!h.commands.includes('push --force-with-lease'));
+			assert.ok(h.errorMessages.some((m) => m.includes('local changes would be overwritten')));
+			assert.ok(h.commands.includes('checkout feature/my-branch'), 'cleanup should return to the feature branch');
+			assert.ok(h.outputLines.includes(syncMessages.outputFailed));
+		});
+
+		test('still skips pull when the local target branch has no upstream', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: fileExistsNoRebase,
+				quickPickSelection: { label: 'main' },
+				git: {
+					...baseGitForSync,
+					'status --porcelain -u': { stdout: '' },
+					'checkout main': { stdout: '' },
+					'pull': new Error('There is no tracking information for the current branch.'),
+					'checkout feature/my-branch': { stdout: '' },
+					'rebase main': { stdout: '' },
+					'push --force-with-lease': { stdout: '' },
+				},
+			});
+			await runSyncWithUpstreamWorkflow(h.deps);
+
+			assert.ok(h.outputLines.includes(syncMessages.infoPullSkippedLocal));
+			assert.ok(h.commands.includes('rebase main'));
+			assert.ok(h.commands.includes('push --force-with-lease'));
+			assert.deepStrictEqual(h.errorMessages, []);
+		});
+
+		test('aborts when pulling a remote target fails', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: fileExistsNoRebase,
+				quickPickSelection: { label: 'origin/develop (remote)' },
+				git: {
+					...baseGitForSync,
+					'branch -a': {
+						stdout: '* feature/my-branch\n  main\n  remotes/origin/develop\n  remotes/origin/HEAD -> origin/main',
+					},
+					'status --porcelain -u': { stdout: '' },
+					'checkout -B __gsp_sync_origin_develop origin/develop': { stdout: '' },
+					'pull origin develop': new Error('fatal: unable to access remote'),
+					'checkout feature/my-branch': { stdout: '' },
+					'branch -D __gsp_sync_origin_develop': { stdout: '' },
+				},
+			});
+			await runSyncWithUpstreamWorkflow(h.deps);
+
+			assert.ok(!h.commands.some((c) => c.startsWith('rebase')));
+			assert.ok(!h.commands.includes('push --force-with-lease'));
+			assert.ok(h.commands.includes('branch -D __gsp_sync_origin_develop'), 'cleanup should delete the temp branch');
+			assert.ok(h.errorMessages.some((m) => m.includes('unable to access remote')));
 		});
 
 		test('conflict path: rebase fails with conflict, saves memento and pauses', async () => {

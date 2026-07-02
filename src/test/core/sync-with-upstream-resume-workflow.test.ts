@@ -36,6 +36,7 @@ suite('sync-with-upstream resume workflow', () => {
 					featureBranch: 'feature/my-branch',
 					hasStash: false,
 					upstreamRef: 'main',
+					upstreamIsRemote: false,
 				},
 				git: { 'rev-parse --absolute-git-dir': { stdout: '/other-repo/.git' } },
 			});
@@ -49,12 +50,86 @@ suite('sync-with-upstream resume workflow', () => {
 			);
 		});
 
+		test('refuses to resume a rebase not started by the extension (no memento)', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: (p) => p.includes('rebase-merge') || p.includes('rebase-apply'),
+				readFileUtf8: (p) => (p.includes('head-name') ? 'refs/heads/feature/my-branch' : ''),
+				git: {
+					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
+				},
+			});
+			await runSyncWithUpstreamResumeWorkflow(h.deps);
+
+			assert.deepStrictEqual(h.errorMessages, [syncMessages.rebaseNotStartedByExtension]);
+			assert.ok(!h.commands.includes('rebase --continue'));
+			assert.ok(!h.commands.includes('push --force-with-lease'));
+		});
+
+		test('refuses to resume when the active rebase is on a different branch than the memento', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: (p) => p.includes('rebase-merge') || p.includes('rebase-apply'),
+				readFileUtf8: (p) => (p.includes('head-name') ? 'refs/heads/other-branch' : ''),
+				memento: {
+					workspaceRoot: '/repo',
+					featureBranch: 'feature/my-branch',
+					hasStash: false,
+					upstreamRef: 'main',
+					upstreamIsRemote: false,
+				},
+				git: {
+					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
+				},
+			});
+			await runSyncWithUpstreamResumeWorkflow(h.deps);
+
+			assert.deepStrictEqual(h.errorMessages, [
+				syncMessages.rebaseBranchMismatch('feature/my-branch', 'other-branch'),
+			]);
+			assert.ok(!h.commands.includes('rebase --continue'));
+			assert.ok(!h.commands.includes('push --force-with-lease'));
+		});
+
+		test('resume with remote upstream syncs the local branch after push', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: fileExistsNoRebase,
+				memento: {
+					workspaceRoot: '/repo',
+					featureBranch: 'feature/my-branch',
+					hasStash: false,
+					upstreamRef: 'origin/main',
+					upstreamIsRemote: true,
+					tempBranchToCleanup: '__gsp_sync_origin_main',
+				},
+				git: {
+					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
+					'checkout feature/my-branch': { stdout: '' },
+					'push --force-with-lease': { stdout: '' },
+					'branch -D __gsp_sync_origin_main': { stdout: '' },
+					'rev-parse --verify refs/heads/main': new Error('fatal: Needed a single revision'),
+					'branch main origin/main': { stdout: '' },
+				},
+			});
+			await runSyncWithUpstreamResumeWorkflow(h.deps);
+
+			assert.ok(h.commands.includes('branch main origin/main'), 'Should create the local branch from the remote ref');
+			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedSuccess('feature/my-branch')]);
+		});
+
 		test('resume with rebase in progress: continues rebase, push, clears memento', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
 				fileExists: (p) => p.includes('rebase-merge') || p.includes('rebase-apply'),
 				readFileUtf8: (p) => (p.includes('head-name') ? 'refs/heads/feature/my-branch' : ''),
-				memento: undefined,
+				memento: {
+					workspaceRoot: '/repo',
+					featureBranch: 'feature/my-branch',
+					hasStash: false,
+					upstreamRef: 'main',
+					upstreamIsRemote: false,
+				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
 					'rebase --continue': { stdout: '' },
@@ -81,6 +156,7 @@ suite('sync-with-upstream resume workflow', () => {
 					featureBranch: 'feature/my-branch',
 					hasStash: false,
 					upstreamRef: 'main',
+					upstreamIsRemote: false,
 				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
@@ -108,6 +184,7 @@ suite('sync-with-upstream resume workflow', () => {
 					featureBranch: 'feature/my-branch',
 					hasStash: false,
 					upstreamRef: 'origin/main',
+					upstreamIsRemote: true,
 					tempBranchToCleanup: '__gsp_sync_origin_main',
 				},
 				git: {
@@ -132,6 +209,7 @@ suite('sync-with-upstream resume workflow', () => {
 					featureBranch: 'feature/my-branch',
 					hasStash: true,
 					upstreamRef: 'main',
+					upstreamIsRemote: false,
 				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
@@ -151,7 +229,13 @@ suite('sync-with-upstream resume workflow', () => {
 				workspaceRoot: '/repo',
 				fileExists: (p) => p.includes('rebase-merge') || p.includes('rebase-apply'),
 				readFileUtf8: (p) => (p.includes('head-name') ? 'refs/heads/feature/my-branch' : ''),
-				memento: undefined,
+				memento: {
+					workspaceRoot: '/repo',
+					featureBranch: 'feature/my-branch',
+					hasStash: false,
+					upstreamRef: 'main',
+					upstreamIsRemote: false,
+				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
 					'rebase --continue': new Error('CONFLICT (content): Merge conflict in bar.ts'),
@@ -172,7 +256,13 @@ suite('sync-with-upstream resume workflow', () => {
 					!rebaseContinueRanRef.current &&
 					(p.includes('rebase-merge') || p.includes('rebase-apply')),
 				readFileUtf8: (p) => (p.includes('head-name') ? 'refs/heads/feature/my-branch' : ''),
-				memento: undefined,
+				memento: {
+					workspaceRoot: '/repo',
+					featureBranch: 'feature/my-branch',
+					hasStash: false,
+					upstreamRef: 'main',
+					upstreamIsRemote: false,
+				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
 					'rebase --continue': { stdout: '' },
@@ -193,7 +283,7 @@ suite('sync-with-upstream resume workflow', () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
 				fileExists: fileExistsNoRebase,
-				memento: { workspaceRoot: '/repo', featureBranch: '', hasStash: false, upstreamRef: 'main' },
+				memento: { workspaceRoot: '/repo', featureBranch: '', hasStash: false, upstreamRef: 'main', upstreamIsRemote: false },
 				git: { 'rev-parse --absolute-git-dir': { stdout: '/repo/.git' } },
 			});
 			await runSyncWithUpstreamResumeWorkflow(h.deps);
@@ -206,7 +296,13 @@ suite('sync-with-upstream resume workflow', () => {
 				workspaceRoot: '/repo',
 				fileExists: (p) => p.includes('rebase-merge') || p.includes('rebase-apply'),
 				readFileUtf8: (p) => (p.includes('head-name') ? 'refs/heads/feature/my-branch' : ''),
-				memento: undefined,
+				memento: {
+					workspaceRoot: '/repo',
+					featureBranch: 'feature/my-branch',
+					hasStash: false,
+					upstreamRef: 'main',
+					upstreamIsRemote: false,
+				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
 					'rebase --continue': { stdout: '' },
@@ -243,6 +339,7 @@ suite('sync-with-upstream resume workflow', () => {
 					featureBranch: 'feature/my-branch',
 					hasStash: false,
 					upstreamRef: 'main',
+					upstreamIsRemote: false,
 				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
@@ -265,6 +362,7 @@ suite('sync-with-upstream resume workflow', () => {
 					featureBranch: 'feature/my-branch',
 					hasStash: false,
 					upstreamRef: 'main',
+					upstreamIsRemote: false,
 				},
 				git: {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },

@@ -28,6 +28,10 @@ export const syncMessages = {
 	pushFailed: (msg: string) =>
 		`${PREFIX} Push failed: ${msg}. Run "Sync With Upstream (Resume)" to retry.`,
 	rebaseOkStashFailed: `${PREFIX} Rebase succeeded but stash pop failed. Use "git stash pop" manually.`,
+	cannotSyncOntoItself: (branch: string) =>
+		`${PREFIX} "${branch}" is the current branch. Choose a different branch to sync with.`,
+	stashNotRestored: (ref: string) =>
+		`${PREFIX} Your stashed changes were NOT restored. Recover them with: git stash apply ${ref}`,
 	stashPopFailed: `${PREFIX} Stash could not be recovered. Use "git stash pop" manually.`,
 	syncedWith: (branch: string, upstream: string) => `${PREFIX} ${branch} synced with ${upstream}.`,
 	syncedSuccess: (branch: string) => `${PREFIX} ${branch} synced successfully.`,
@@ -40,6 +44,9 @@ export const syncMessages = {
 	rebaseOkPushFailed: (msg: string) => `${PREFIX} Rebase OK but push failed: ${msg}`,
 	rebaseContinue: `${PREFIX} Rebase --continue...`,
 	rebaseAlreadyInProgress: `${PREFIX} A rebase is already in progress. Use "Sync With Upstream (Resume)" to continue.`,
+	rebaseNotStartedByExtension: `${PREFIX} A rebase is in progress, but it was not started by Sync With Upstream. Finish it manually (git rebase --continue / --abort).`,
+	rebaseBranchMismatch: (expected: string, actual: string) =>
+		`${PREFIX} The rebase in progress is on "${actual}", but the paused sync was for "${expected}". Finish the current rebase manually, then run Resume again.`,
 
 	// output panel
 	outputHeader: '--- Sync With Upstream ---',

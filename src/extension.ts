@@ -27,6 +27,7 @@ export function activate(context: vscode.ExtensionContext) {
 		return {
 			getWorkspaceRoot,
 			output: {
+				show: (preserveFocus) => outputChannel.show(preserveFocus),
 				appendLine: (line) => outputChannel.appendLine(line),
 			},
 			runGitCommand: runGitCommandForWorkflow,
@@ -72,19 +73,19 @@ export function activate(context: vscode.ExtensionContext) {
 		await runSweepWorkflow({ dryRun: true, forceDelete: false }, createSweepDeps());
 	});
 
+	const postPullRequestCommand = vscode.commands.registerCommand(
+		'git-sweep-pro.postPullRequest',
+		async () => {
+			await runPostPullRequestWorkflow(createSweepDeps());
+		}
+	);
+
 	const createSyncDeps = (): SyncWithUpstreamDeps => ({
 		...createSweepDeps(),
 		workspaceState: context.workspaceState,
 		fileExists: (p) => fs.existsSync(p),
 		readFileUtf8: (p) => fs.readFileSync(p, 'utf8'),
 	});
-
-	const postPullRequestCommand = vscode.commands.registerCommand(
-		'git-sweep-pro.postPullRequest',
-		async () => {
-			await runPostPullRequestWorkflow(createSyncDeps());
-		}
-	);
 
 	const syncWithUpstreamCommand = vscode.commands.registerCommand(
 		'git-sweep-pro.syncWithUpstream',

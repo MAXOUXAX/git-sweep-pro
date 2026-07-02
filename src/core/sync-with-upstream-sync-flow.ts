@@ -13,39 +13,33 @@ import type { QuickPickItemLike } from './sweep-workflow';
 
 type RunGit = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 
-type PrepareUpstreamResult = {
-	branchToRebaseOnto: string;
-	tempBranchToCleanup: string | undefined;
-};
+function tempBranchNameFor(upstreamRef: string): string {
+	const safeSuffix = upstreamRef.replace(/[/\s]/g, '_').slice(0, 40);
+	return `${TEMP_BRANCH_PREFIX}${safeSuffix}`;
+}
 
 async function prepareUpstreamForRebase(
 	deps: SyncWithUpstreamDeps,
 	runGit: RunGit,
 	targetItem: BranchItem,
-	upstreamRef: string
-): Promise<PrepareUpstreamResult> {
-	if (targetItem.isRemote) {
-		const safeSuffix = upstreamRef.replace(/[/\s]/g, '_').slice(0, 40);
-		const tempBranch = `${TEMP_BRANCH_PREFIX}${safeSuffix}`;
-
+	upstreamRef: string,
+	tempBranch: string | undefined
+): Promise<string> {
+	if (targetItem.isRemote && tempBranch) {
 		await deps.ui.withProgress(
 			{ title: syncMessages.creatingTempBranch(upstreamRef) },
 			() => runGit(['checkout', '-B', tempBranch, upstreamRef])
 		);
 
-		try {
-			const slashIdx = upstreamRef.indexOf('/');
-			const remoteName = upstreamRef.slice(0, slashIdx);
-			const branchName = upstreamRef.slice(slashIdx + 1);
-			await deps.ui.withProgress(
-				{ title: syncMessages.pulling(upstreamRef) },
-				() => runGit(['pull', remoteName, branchName])
-			);
-		} catch {
-			deps.output.appendLine(syncMessages.infoPullSkipped);
-		}
+		const slashIdx = upstreamRef.indexOf('/');
+		const remoteName = upstreamRef.slice(0, slashIdx);
+		const branchName = upstreamRef.slice(slashIdx + 1);
+		await deps.ui.withProgress(
+			{ title: syncMessages.pulling(upstreamRef) },
+			() => runGit(['pull', remoteName, branchName])
+		);
 
-		return { branchToRebaseOnto: tempBranch, tempBranchToCleanup: tempBranch };
+		return tempBranch;
 	}
 
 	await deps.ui.withProgress(
@@ -58,25 +52,23 @@ async function prepareUpstreamForRebase(
 			{ title: syncMessages.pulling(upstreamRef) },
 			() => runGit(['pull'])
 		);
-	} catch {
+	} catch (pullError) {
+		const msg = pullError instanceof Error ? pullError.message : String(pullError);
+		if (!/no upstream|no tracking|please specify.*branch/i.test(msg)) {
+			throw pullError;
+		}
 		deps.output.appendLine(syncMessages.infoPullSkippedLocal);
 	}
 
-	return { branchToRebaseOnto: upstreamRef, tempBranchToCleanup: undefined };
+	return upstreamRef;
 }
 
-async function maybeSyncLocalBranchFromRemote(
+export async function syncLocalBranchFromRemote(
 	deps: SyncWithUpstreamDeps,
 	runGit: RunGit,
 	upstreamRef: string,
-	featureBranch: string,
-	branchToRebaseOnto: string
+	featureBranch: string
 ): Promise<void> {
-	try {
-		await runGit(['branch', '-D', branchToRebaseOnto]);
-	} catch {
-		deps.output.appendLine(syncMessages.infoTempBranchNotDeleted(branchToRebaseOnto));
-	}
 	const slashIdx = upstreamRef.indexOf('/');
 	const localUpstream = slashIdx > 0 ? upstreamRef.slice(slashIdx + 1) : upstreamRef;
 
@@ -132,18 +124,10 @@ async function cleanupAfterSyncError(
 			const match = line?.match(/^(stash@\{\d+\})/);
 			const ref = match?.[1] ?? 'stash@{0}';
 			deps.output.appendLine(syncMessages.infoStashRefOnFailure(ref));
+			deps.ui.showErrorMessage(syncMessages.stashNotRestored(ref));
 		}
 	}
 }
-
-export type SyncFlowOptions = {
-	/** Local branch name to pre-select in the quick pick (e.g. the default branch). */
-	readonly preselectBranch?: string;
-	/** Overrides the quick-pick title (used by Post Pull Request). */
-	readonly pickBranchTitle?: string;
-	/** Overrides the quick-pick placeholder (used by Post Pull Request). */
-	readonly pickBranchPlaceholder?: string;
-};
 
 function localBranchName(b: BranchItem): string {
 	if (!b.isRemote) {
@@ -153,7 +137,7 @@ function localBranchName(b: BranchItem): string {
 	return slashIdx > 0 ? b.ref.slice(slashIdx + 1) : b.ref;
 }
 
-export async function runSyncFlow(deps: SyncWithUpstreamDeps, options: SyncFlowOptions = {}): Promise<void> {
+export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	const workspaceRoot = deps.getWorkspaceRoot();
 	if (!workspaceRoot) {
 		deps.ui.showErrorMessage(syncMessages.noWorkspace);
@@ -214,15 +198,14 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps, options: SyncFlowO
 		const quickPickItems = branchItems.map((b) => ({
 			label: b.isRemote ? `${b.label} (remote)` : b.label,
 			description: b.isRemote ? undefined : 'local',
-			picked: options.preselectBranch !== undefined && localBranchName(b) === options.preselectBranch,
 		}));
 
 		const selected = await deps.ui.showQuickPick(quickPickItems, {
 			canPickMany: false,
 			ignoreFocusOut: true,
 			matchOnDescription: true,
-			title: options.pickBranchTitle ?? syncMessages.pickBranchTitle,
-			placeHolder: options.pickBranchPlaceholder ?? syncMessages.pickBranchPlaceholder,
+			title: syncMessages.pickBranchTitle,
+			placeHolder: syncMessages.pickBranchPlaceholder,
 		});
 
 		const selectedItem: QuickPickItemLike | undefined =
@@ -243,6 +226,12 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps, options: SyncFlowO
 
 		const upstreamRef = targetItem.ref;
 
+		if (localBranchName(targetItem) === featureBranch) {
+			deps.ui.showInformationMessage(syncMessages.cannotSyncOntoItself(featureBranch));
+			deps.output.appendLine(syncMessages.operationCancelled);
+			return;
+		}
+
 		const statusResult = await runGit(['status', '--porcelain', '-u']).catch(() => ({ stdout: '', stderr: '' }));
 		const hasLocalChanges = statusResult.stdout.trim().length > 0;
 		if (hasLocalChanges) {
@@ -255,13 +244,27 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps, options: SyncFlowO
 		}
 
 		const isRemote = targetItem.isRemote;
-		const { branchToRebaseOnto, tempBranchToCleanup: preparedTemp } = await prepareUpstreamForRebase(
+		// Register the temp branch for cleanup before creating it, so a failure
+		// inside prepareUpstreamForRebase (e.g. pull error) still cleans it up.
+		if (isRemote) {
+			tempBranchToCleanup = tempBranchNameFor(upstreamRef);
+		}
+		const branchToRebaseOnto = await prepareUpstreamForRebase(
 			deps,
 			runGit,
 			targetItem,
-			upstreamRef
+			upstreamRef,
+			tempBranchToCleanup
 		);
-		tempBranchToCleanup = preparedTemp;
+
+		const makeMemento = () => ({
+			workspaceRoot,
+			featureBranch: featureBranch!,
+			hasStash,
+			upstreamRef,
+			upstreamIsRemote: isRemote,
+			...(isRemote && { tempBranchToCleanup: branchToRebaseOnto }),
+		});
 
 		await deps.ui.withProgress(
 			{ title: syncMessages.returningTo(featureBranch) },
@@ -277,13 +280,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps, options: SyncFlowO
 			const isConflict = isRebaseInProgress(gitDir, deps);
 
 			if (isConflict) {
-				await saveMemento(deps, {
-					workspaceRoot,
-					featureBranch,
-					hasStash,
-					upstreamRef,
-					...(isRemote && { tempBranchToCleanup: branchToRebaseOnto }),
-				});
+				await saveMemento(deps, makeMemento());
 				deps.ui.showInformationMessage(syncMessages.rebaseConflicts);
 				deps.output.appendLine(syncMessages.outputRebasePaused);
 				return;
@@ -299,13 +296,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps, options: SyncFlowO
 		} catch (pushError) {
 			const msg = pushError instanceof Error ? pushError.message : String(pushError);
 
-			let memento = {
-				workspaceRoot,
-				featureBranch,
-				hasStash,
-				upstreamRef,
-				...(isRemote && { tempBranchToCleanup: branchToRebaseOnto }),
-			};
+			let memento = makeMemento();
 			await saveMemento(deps, memento);
 			deps.output.appendLine(syncMessages.infoStateSavedForResume);
 
@@ -334,7 +325,12 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps, options: SyncFlowO
 		}
 
 		if (isRemote) {
-			await maybeSyncLocalBranchFromRemote(deps, runGit, upstreamRef, featureBranch, branchToRebaseOnto);
+			try {
+				await runGit(['branch', '-D', branchToRebaseOnto]);
+			} catch {
+				deps.output.appendLine(syncMessages.infoTempBranchNotDeleted(branchToRebaseOnto));
+			}
+			await syncLocalBranchFromRemote(deps, runGit, upstreamRef, featureBranch);
 		}
 
 		if (hasStash) {
