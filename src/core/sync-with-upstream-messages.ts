@@ -56,6 +56,7 @@ export const syncMessages = {
 	outputComplete: '--- Sync With Upstream complete ---',
 	outputFailed: '--- Sync With Upstream failed ---',
 	outputResumeComplete: '--- Resume complete ---',
+	outputSessionEnded: '--- Sync With Upstream session ended ---',
 	nothingToResume: 'Nothing to resume.',
 	infoPullSkipped: '[info] Pull skipped (already up to date or no upstream).',
 	infoPullSkippedLocal: '[info] Pull skipped.',

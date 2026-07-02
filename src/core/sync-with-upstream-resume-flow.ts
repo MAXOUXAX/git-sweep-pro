@@ -32,7 +32,14 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 
 	deps.output.show(true);
 	deps.output.appendLine(syncMessages.outputResumeHeader);
+	try {
+		await doResume(deps, workspaceRoot, gitDir);
+	} finally {
+		deps.output.appendLine(syncMessages.outputSessionEnded);
+	}
+}
 
+async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDir: string): Promise<void> {
 	const runGit = (args: string[]) => deps.runGitCommand(args, workspaceRoot);
 
 	let rebaseActive = isRebaseInProgress(gitDir, deps);

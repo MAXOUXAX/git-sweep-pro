@@ -117,6 +117,26 @@ suite('sync-with-upstream workflow', () => {
 			assert.ok(!h.commands.some((c) => c.startsWith('rebase')));
 		});
 
+		test('aborts when git status fails instead of assuming a clean tree', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: fileExistsNoRebase,
+				quickPickSelection: { label: 'main' },
+				git: {
+					...baseGitForSync,
+					'status --porcelain -u': new Error('fatal: index file corrupt'),
+					'checkout feature/my-branch': { stdout: '' },
+				},
+			});
+			await runSyncWithUpstreamWorkflow(h.deps);
+
+			assert.ok(h.errorMessages.some((m) => m.includes('index file corrupt')));
+			assert.ok(!h.commands.some((c) => c.startsWith('stash push')));
+			assert.ok(!h.commands.some((c) => c.startsWith('rebase')));
+			assert.ok(h.outputLines.includes(syncMessages.outputFailed));
+			assert.ok(h.outputLines.includes(syncMessages.outputSessionEnded));
+		});
+
 		test('success path with local branch: fetch, checkout, pull, rebase, force-push', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',

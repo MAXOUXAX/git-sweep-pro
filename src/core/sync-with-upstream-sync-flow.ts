@@ -246,7 +246,9 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 			return;
 		}
 
-		const statusResult = await runGit(['status', '--porcelain', '-u']).catch(() => ({ stdout: '', stderr: '' }));
+		// A status failure must not pass for a clean tree: proceeding without a
+		// stash would rebase over local changes, so let the outer catch abort.
+		const statusResult = await runGit(['status', '--porcelain', '-u']);
 		const hasLocalChanges = statusResult.stdout.trim().length > 0;
 		if (hasLocalChanges) {
 			// A stash failure here is a real error: continuing would rebase on a
@@ -377,5 +379,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		}
 		deps.output.appendLine(`[error] ${message}`);
 		deps.output.appendLine(syncMessages.outputFailed);
+	} finally {
+		deps.output.appendLine(syncMessages.outputSessionEnded);
 	}
 }
