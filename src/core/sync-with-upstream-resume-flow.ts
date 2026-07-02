@@ -44,9 +44,11 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		if (rebaseActive) {
 			deps.ui.showErrorMessage(syncMessages.rebaseNotStartedByExtension);
 			deps.output.appendLine(syncMessages.rebaseNotStartedByExtension);
+			deps.output.appendLine(syncMessages.outputFailed);
 		} else {
 			deps.ui.showInformationMessage(syncMessages.noRebaseNothingToResume);
 			deps.output.appendLine(syncMessages.nothingToResume);
+			deps.output.appendLine(syncMessages.outputResumeComplete);
 		}
 		return;
 	}
@@ -54,12 +56,15 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	if (memento.workspaceRoot !== workspaceRoot) {
 		deps.ui.showErrorMessage(syncMessages.rebaseInOtherWorkspace);
 		deps.output.appendLine(syncMessages.rebaseInOtherWorkspace);
+		deps.output.appendLine(syncMessages.outputFailed);
 		return;
 	}
 
 	const featureBranch = memento.featureBranch;
 	if (!featureBranch) {
 		deps.ui.showErrorMessage(syncMessages.couldNotDetermineRebaseBranch);
+		deps.output.appendLine(`[error] ${syncMessages.couldNotDetermineRebaseBranch}`);
+		deps.output.appendLine(syncMessages.outputFailed);
 		return;
 	}
 	const hasStash = memento.hasStash;
@@ -70,6 +75,7 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		if (rebasingBranch && rebasingBranch !== featureBranch) {
 			deps.ui.showErrorMessage(syncMessages.rebaseBranchMismatch(featureBranch, rebasingBranch));
 			deps.output.appendLine(syncMessages.rebaseBranchMismatch(featureBranch, rebasingBranch));
+			deps.output.appendLine(syncMessages.outputFailed);
 			return;
 		}
 	}
@@ -143,8 +149,9 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 				() => runGit(['stash', 'pop'])
 			);
 		} catch (popError) {
+			const popMsg = popError instanceof Error ? popError.message : String(popError);
 			deps.ui.showErrorMessage(syncMessages.stashPopFailed);
-			deps.output.appendLine(`[stash-pop-error] ${popError}`);
+			deps.output.appendLine(`[stash-pop-error] ${popMsg}`);
 		}
 	}
 

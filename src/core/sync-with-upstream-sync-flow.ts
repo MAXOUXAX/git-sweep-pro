@@ -194,12 +194,15 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		featureBranch = currentBranchResult.stdout.trim();
 		if (!featureBranch || featureBranch === 'HEAD') {
 			deps.ui.showErrorMessage(syncMessages.couldNotDetermineBranch);
+			deps.output.appendLine(`[error] ${syncMessages.couldNotDetermineBranch}`);
+			deps.output.appendLine(syncMessages.outputFailed);
 			return;
 		}
 
 		const branchItems = parseBranches(branchListResult.stdout);
 		if (branchItems.length === 0) {
 			deps.ui.showInformationMessage(syncMessages.noBranchesForSync);
+			deps.output.appendLine(syncMessages.operationCancelled);
 			return;
 		}
 
@@ -349,8 +352,9 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 					() => runGit(['stash', 'pop'])
 				);
 			} catch (popError) {
+				const popMsg = popError instanceof Error ? popError.message : String(popError);
 				deps.ui.showErrorMessage(syncMessages.rebaseOkStashFailed);
-				deps.output.appendLine(`[stash-pop-error] ${popError}`);
+				deps.output.appendLine(`[stash-pop-error] ${popMsg}`);
 			}
 		}
 
