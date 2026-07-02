@@ -3,11 +3,15 @@ import { runSyncWithUpstreamWorkflow } from '../../core/sync-with-upstream-workf
 import { syncMessages } from '../../core/sync-with-upstream-messages';
 import type { SyncMemento } from '../../core/sync-with-upstream-state';
 import { MEMENTO_KEY } from '../../core/sync-with-upstream-state';
+import { tempBranchNameFor } from '../../core/sync-with-upstream-sync-flow';
 import {
 	baseGitForSync,
 	createHarness,
 	fileExistsNoRebase,
 } from './sync-with-upstream.harness';
+
+const tempMain = tempBranchNameFor('origin/main');
+const tempDevelop = tempBranchNameFor('origin/develop');
 
 suite('sync-with-upstream workflow', () => {
 	suite('runSyncWithUpstreamWorkflow', () => {
@@ -193,21 +197,21 @@ suite('sync-with-upstream workflow', () => {
 				git: {
 					...baseGitForSync,
 					'status --porcelain -u': { stdout: '' },
-					'checkout -B __gsp_sync_origin_main origin/main': { stdout: '' },
+					[`checkout -B ${tempMain} origin/main`]: { stdout: '' },
 					'pull origin main': { stdout: '' },
 					'checkout feature/my-branch': { stdout: '' },
-					'rebase __gsp_sync_origin_main': { stdout: '' },
+					[`rebase ${tempMain}`]: { stdout: '' },
 					'push --force-with-lease': { stdout: '' },
-					'branch -D __gsp_sync_origin_main': { stdout: '' },
+					[`branch -D ${tempMain}`]: { stdout: '' },
 					'rev-parse --verify refs/heads/main': { stdout: 'abc123' },
 				},
 			});
 			await runSyncWithUpstreamWorkflow(h.deps);
 
-			assert.ok(h.commands.includes('checkout -B __gsp_sync_origin_main origin/main'));
+			assert.ok(h.commands.includes(`checkout -B ${tempMain} origin/main`));
 			assert.ok(h.commands.includes('pull origin main'));
-			assert.ok(h.commands.includes('rebase __gsp_sync_origin_main'));
-			assert.ok(h.commands.includes('branch -D __gsp_sync_origin_main'));
+			assert.ok(h.commands.includes(`rebase ${tempMain}`));
+			assert.ok(h.commands.includes(`branch -D ${tempMain}`));
 			assert.ok(h.commands.includes('rev-parse --verify refs/heads/main'));
 			assert.ok(!h.commands.some((c) => c.includes('branch -f')), 'should not force-update local branch');
 			assert.ok(h.outputLines.some((l) => l.includes(syncMessages.infoUpdateSkippedExisting('main'))));
@@ -221,12 +225,12 @@ suite('sync-with-upstream workflow', () => {
 				git: {
 					...baseGitForSync,
 					'status --porcelain -u': { stdout: '' },
-					'checkout -B __gsp_sync_origin_main origin/main': { stdout: '' },
+					[`checkout -B ${tempMain} origin/main`]: { stdout: '' },
 					'pull origin main': { stdout: '' },
 					'checkout feature/my-branch': { stdout: '' },
-					'rebase __gsp_sync_origin_main': { stdout: '' },
+					[`rebase ${tempMain}`]: { stdout: '' },
 					'push --force-with-lease': { stdout: '' },
-					'branch -D __gsp_sync_origin_main': { stdout: '' },
+					[`branch -D ${tempMain}`]: { stdout: '' },
 					'rev-parse --verify refs/heads/main': new Error('not a valid ref'),
 					'branch main origin/main': { stdout: '' },
 				},
@@ -313,17 +317,17 @@ suite('sync-with-upstream workflow', () => {
 						stdout: '* feature/my-branch\n  main\n  remotes/origin/develop\n  remotes/origin/HEAD -> origin/main',
 					},
 					'status --porcelain -u': { stdout: '' },
-					'checkout -B __gsp_sync_origin_develop origin/develop': { stdout: '' },
+					[`checkout -B ${tempDevelop} origin/develop`]: { stdout: '' },
 					'pull origin develop': new Error('fatal: unable to access remote'),
 					'checkout feature/my-branch': { stdout: '' },
-					'branch -D __gsp_sync_origin_develop': { stdout: '' },
+					[`branch -D ${tempDevelop}`]: { stdout: '' },
 				},
 			});
 			await runSyncWithUpstreamWorkflow(h.deps);
 
 			assert.ok(!h.commands.some((c) => c.startsWith('rebase')));
 			assert.ok(!h.commands.includes('push --force-with-lease'));
-			assert.ok(h.commands.includes('branch -D __gsp_sync_origin_develop'), 'cleanup should delete the temp branch');
+			assert.ok(h.commands.includes(`branch -D ${tempDevelop}`), 'cleanup should delete the temp branch');
 			assert.ok(h.errorMessages.some((m) => m.includes('unable to access remote')));
 		});
 
@@ -422,6 +426,19 @@ suite('sync-with-upstream workflow', () => {
 			await runSyncWithUpstreamWorkflow(h.deps);
 
 			assert.deepStrictEqual(h.errorMessages, [syncMessages.errorGeneric('mysterious failure')]);
+		});
+	});
+
+	suite('tempBranchNameFor', () => {
+		test('long refs sharing a 40-char prefix do not collide', () => {
+			const prefix = 'origin/feature/really-long-shared-prefix-name';
+			const a = tempBranchNameFor(`${prefix}-aaaa`);
+			const b = tempBranchNameFor(`${prefix}-bbbb`);
+			assert.notStrictEqual(a, b);
+		});
+
+		test('is deterministic for the same ref', () => {
+			assert.strictEqual(tempBranchNameFor('origin/main'), tempBranchNameFor('origin/main'));
 		});
 	});
 });

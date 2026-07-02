@@ -109,7 +109,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
 }
 
 /** No rebase in progress. Use for sync-flow tests that should proceed past the initial checks. */
-export const fileExistsNoRebase = (p: string) => !p.includes('rebase');
+export const fileExistsNoRebase = (_p: string) => false;
 
 /** Matches git branch -a: simple branch names; parseBranches uses whole line as name. */
 export const baseBranchList = [

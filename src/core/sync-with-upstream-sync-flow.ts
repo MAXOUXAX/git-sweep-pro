@@ -14,9 +14,15 @@ import type { QuickPickItemLike } from './sweep-workflow';
 
 type RunGit = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 
-function tempBranchNameFor(upstreamRef: string): string {
+export function tempBranchNameFor(upstreamRef: string): string {
 	const safeSuffix = upstreamRef.replace(/[/\s]/g, '_').slice(0, 40);
-	return `${TEMP_BRANCH_PREFIX}${safeSuffix}`;
+	// djb2 hash of the full ref: refs sharing a 40-char prefix must not
+	// collide, or sync/cleanup could delete the wrong temp branch.
+	let hash = 5381;
+	for (let i = 0; i < upstreamRef.length; i++) {
+		hash = ((hash << 5) + hash + upstreamRef.charCodeAt(i)) >>> 0;
+	}
+	return `${TEMP_BRANCH_PREFIX}${safeSuffix}_${hash.toString(16)}`;
 }
 
 async function prepareUpstreamForRebase(
