@@ -12,6 +12,7 @@ export const syncMessages = {
 
 	// runSyncFlow
 	couldNotDetermineBranch: `${PREFIX} Could not determine current branch (detached HEAD?).`,
+	internalBranchNotFound: `${PREFIX} Internal error — selected branch not found.`,
 	noBranchesForSync: `${PREFIX} No other branches available for sync.`,
 	pickBranchTitle: 'Sync With Upstream: Choose branch to sync with',
 	pickBranchPlaceholder: 'Local or remote branch',

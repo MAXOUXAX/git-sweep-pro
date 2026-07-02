@@ -229,6 +229,9 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 			return label === chosenLabel;
 		});
 		if (!targetItem) {
+			deps.ui.showErrorMessage(syncMessages.internalBranchNotFound);
+			deps.output.appendLine(`[error] ${syncMessages.internalBranchNotFound}`);
+			deps.output.appendLine(syncMessages.outputFailed);
 			return;
 		}
 

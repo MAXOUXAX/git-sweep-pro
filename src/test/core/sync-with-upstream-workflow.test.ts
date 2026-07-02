@@ -103,6 +103,20 @@ suite('sync-with-upstream workflow', () => {
 			assert.strictEqual(h.quickPickRequests[0]?.title, syncMessages.pickBranchTitle);
 		});
 
+		test('reports an internal error when the selected label matches no branch', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: fileExistsNoRebase,
+				quickPickSelection: { label: 'does-not-exist' },
+				git: baseGitForSync,
+			});
+			await runSyncWithUpstreamWorkflow(h.deps);
+
+			assert.deepStrictEqual(h.errorMessages, [syncMessages.internalBranchNotFound]);
+			assert.ok(h.outputLines.includes(syncMessages.outputFailed), 'log should end with a terminal marker');
+			assert.ok(!h.commands.some((c) => c.startsWith('rebase')));
+		});
+
 		test('success path with local branch: fetch, checkout, pull, rebase, force-push', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',

@@ -85,10 +85,12 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 			if (isRebaseInProgress(gitDir, deps)) {
 				deps.ui.showErrorMessage(syncMessages.remainingConflicts);
 				deps.output.appendLine(`[error] ${msg}`);
+				deps.output.appendLine(syncMessages.outputRebasePaused);
 				return;
 			}
 			deps.ui.showErrorMessage(syncMessages.errorGeneric(msg));
 			deps.output.appendLine(`[error] ${msg}`);
+			deps.output.appendLine(syncMessages.outputFailed);
 			return;
 		}
 	} else {
@@ -105,6 +107,7 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 			const msg = checkoutError instanceof Error ? checkoutError.message : String(checkoutError);
 			deps.ui.showErrorMessage(syncMessages.errorGeneric(msg));
 			deps.output.appendLine(`[error] ${msg}`);
+			deps.output.appendLine(syncMessages.outputFailed);
 			return;
 		}
 	}

@@ -245,6 +245,7 @@ suite('sync-with-upstream resume workflow', () => {
 
 			assert.deepStrictEqual(h.errorMessages, [syncMessages.remainingConflicts]);
 			assert.ok(!h.commands.includes('push --force-with-lease'));
+			assert.ok(h.outputLines.includes(syncMessages.outputRebasePaused), 'log should end with a terminal marker');
 		});
 
 		test('resume with rebase in progress: rebase --continue succeeds but push fails, memento not cleared', async () => {
@@ -350,6 +351,7 @@ suite('sync-with-upstream resume workflow', () => {
 
 			assert.ok(h.errorMessages.some((m) => m.includes('pathspec did not match')));
 			assert.ok(!h.commands.includes('push --force-with-lease'));
+			assert.ok(h.outputLines.includes(syncMessages.outputFailed), 'log should end with a terminal marker');
 			assert.ok(!h.mementoUpdates.some((u) => u.key === MEMENTO_KEY && u.value === undefined));
 		});
 
