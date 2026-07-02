@@ -35,7 +35,7 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 
 	const runGit = (args: string[]) => deps.runGitCommand(args, workspaceRoot);
 
-	const rebaseActive = isRebaseInProgress(gitDir, deps);
+	let rebaseActive = isRebaseInProgress(gitDir, deps);
 	const memento = getMemento(deps);
 
 	if (!memento) {
@@ -88,16 +88,15 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 				deps.output.appendLine(syncMessages.outputRebasePaused);
 				return;
 			}
-			deps.ui.showErrorMessage(syncMessages.errorGeneric(msg));
-			deps.output.appendLine(`[error] ${msg}`);
-			deps.output.appendLine(syncMessages.outputFailed);
-			return;
+			// The rebase ended between the initial check and the continue attempt
+			// (e.g. finished manually): fall back to the non-rebase resume path.
+			deps.output.appendLine(`[info] ${msg}`);
+			rebaseActive = false;
 		}
-	} else {
-		deps.output.appendLine(syncMessages.infoNoRebaseInProgress);
 	}
 
 	if (!rebaseActive) {
+		deps.output.appendLine(syncMessages.infoNoRebaseInProgress);
 		try {
 			await deps.ui.withProgress(
 				{ title: syncMessages.returningTo(featureBranch) },

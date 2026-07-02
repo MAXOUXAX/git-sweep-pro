@@ -280,6 +280,40 @@ suite('sync-with-upstream resume workflow', () => {
 			assert.ok(!h.mementoUpdates.some((u) => u.key === MEMENTO_KEY && u.value === undefined));
 		});
 
+		test('falls back to the non-rebase path when continue fails because the rebase already ended', async () => {
+			const rebaseContinueRanRef = { current: false };
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				rebaseContinueRanRef,
+				fileExists: (p) =>
+					!rebaseContinueRanRef.current &&
+					(p.includes('rebase-merge') || p.includes('rebase-apply')),
+				readFileUtf8: (p) => (p.includes('head-name') ? 'refs/heads/feature/my-branch' : ''),
+				memento: {
+					workspaceRoot: '/repo',
+					featureBranch: 'feature/my-branch',
+					hasStash: false,
+					upstreamRef: 'main',
+					upstreamIsRemote: false,
+				},
+				git: {
+					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
+					'rebase --continue': new Error('fatal: No rebase in progress?'),
+					'checkout feature/my-branch': { stdout: '' },
+					'push --force-with-lease': { stdout: '' },
+				},
+			});
+			await runSyncWithUpstreamResumeWorkflow(h.deps);
+
+			assert.deepStrictEqual(h.errorMessages, []);
+			assert.ok(h.outputLines.includes(syncMessages.infoNoRebaseInProgress));
+			assert.ok(h.commands.includes('checkout feature/my-branch'));
+			assert.ok(h.commands.includes('push --force-with-lease'));
+			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedSuccess('feature/my-branch')]);
+			const clearUpdate = h.mementoUpdates.find((u) => u.key === MEMENTO_KEY && u.value === undefined);
+			assert.ok(clearUpdate, 'Memento should be cleared after the fallback completes');
+		});
+
 		test('resume errors when memento exists but featureBranch missing and no rebase head', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
