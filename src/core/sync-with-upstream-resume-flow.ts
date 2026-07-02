@@ -34,6 +34,11 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	deps.output.appendLine(syncMessages.outputResumeHeader);
 	try {
 		await doResume(deps, workspaceRoot, gitDir);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		showSyncGitCommandError(deps, message);
+		deps.output.appendLine(`[error] ${message}`);
+		deps.output.appendLine(syncMessages.outputFailed);
 	} finally {
 		deps.output.appendLine(syncMessages.outputSessionEnded);
 	}

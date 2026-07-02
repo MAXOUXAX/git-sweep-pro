@@ -33,6 +33,7 @@ export const syncMessages = {
 		`${PREFIX} "${branch}" is the current branch. Choose a different branch to sync with.`,
 	stashNotRestored: (ref: string) =>
 		`${PREFIX} Your stashed changes were NOT restored. Recover them with: git stash apply ${ref}`,
+	stashNotRestoredUnknownRef: `${PREFIX} Your stashed changes were NOT restored. Run "git stash list" and apply the "gsp-sync-with-upstream" entry.`,
 	stashPopFailed: `${PREFIX} Stash could not be recovered. Use "git stash pop" manually.`,
 	syncedWith: (branch: string, upstream: string) => `${PREFIX} ${branch} synced with ${upstream}.`,
 	syncedSuccess: (branch: string) => `${PREFIX} ${branch} synced successfully.`,
@@ -70,6 +71,8 @@ export const syncMessages = {
 	infoNoRebaseInProgress:
 		'[info] No rebase in progress (already completed manually?). Proceeding to push and cleanup.',
 	infoStateSavedForResume: '[info] State saved. Run "Sync With Upstream (Resume)" to retry push.',
+	infoStashUnknownRef:
+		'[info] Stash not restored and its ref could not be identified. Check "git stash list" for the "gsp-sync-with-upstream" entry.',
 	infoStashRefOnFailure: (ref: string) =>
 		`[info] Stash not restored. Recover manually: git stash list, then git stash apply ${ref} or git stash pop ${ref}`,
 	infoCleanupAttempted: '[info] Attempting cleanup after error...',

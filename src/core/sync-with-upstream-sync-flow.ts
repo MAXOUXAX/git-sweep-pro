@@ -128,10 +128,15 @@ async function cleanupAfterSyncError(
 		} catch {
 			const listResult = await runGit(['stash', 'list']).catch(() => ({ stdout: '', stderr: '' }));
 			const line = listResult.stdout.split('\n').find((l) => l.includes('gsp-sync-with-upstream'));
-			const match = line?.match(/^(stash@\{\d+\})/);
-			const ref = match?.[1] ?? 'stash@{0}';
-			deps.output.appendLine(syncMessages.infoStashRefOnFailure(ref));
-			deps.ui.showErrorMessage(syncMessages.stashNotRestored(ref));
+			const ref = line?.match(/^(stash@\{\d+\})/)?.[1];
+			if (ref) {
+				deps.output.appendLine(syncMessages.infoStashRefOnFailure(ref));
+				deps.ui.showErrorMessage(syncMessages.stashNotRestored(ref));
+			} else {
+				// Never point at stash@{0} blindly: it may be an unrelated stash.
+				deps.output.appendLine(syncMessages.infoStashUnknownRef);
+				deps.ui.showErrorMessage(syncMessages.stashNotRestoredUnknownRef);
+			}
 		}
 	}
 }

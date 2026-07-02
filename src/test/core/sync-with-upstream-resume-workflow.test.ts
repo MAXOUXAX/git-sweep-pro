@@ -314,6 +314,32 @@ suite('sync-with-upstream resume workflow', () => {
 			assert.ok(clearUpdate, 'Memento should be cleared after the fallback completes');
 		});
 
+		test('unexpected errors are reported instead of bubbling as unhandled rejections', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: (p) => p.includes('rebase-merge') || p.includes('rebase-apply'),
+				readFileUtf8: () => {
+					throw new Error('EACCES: permission denied');
+				},
+				memento: {
+					workspaceRoot: '/repo',
+					featureBranch: 'feature/my-branch',
+					hasStash: false,
+					upstreamRef: 'main',
+					upstreamIsRemote: false,
+				},
+				git: {
+					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
+				},
+			});
+
+			await assert.doesNotReject(async () => runSyncWithUpstreamResumeWorkflow(h.deps));
+
+			assert.ok(h.errorMessages.some((m) => m.includes('permission denied')));
+			assert.ok(h.outputLines.includes(syncMessages.outputFailed));
+			assert.ok(h.outputLines.includes(syncMessages.outputSessionEnded));
+		});
+
 		test('resume errors when memento exists but featureBranch missing and no rebase head', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
