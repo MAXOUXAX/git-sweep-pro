@@ -32,7 +32,7 @@ Safely identify and prune local branches that are gone on the remote.
 	- On rebase conflicts, the flow pauses; resolve them and run `Sync With Upstream (Resume)` to continue.
 
 - `Git Sweep Pro: Sync With Upstream (Resume)` (`git-sweep-pro.syncWithUpstreamResume`)
-	- Resumes a paused sync after you resolved the rebase conflicts: continues the rebase, force-pushes, and restores the stash.
+	- Resumes a paused sync: after you resolved rebase conflicts (continues the rebase, force-pushes, restores the stash), or after a failed force-push (retries the push and finishes the cleanup).
 
 ## UX and logging
 
