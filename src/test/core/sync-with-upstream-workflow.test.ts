@@ -130,6 +130,35 @@ suite('sync-with-upstream workflow', () => {
 			assert.ok(h.outputLines.includes(syncMessages.outputComplete));
 		});
 
+		test('successful sync clears a stale memento from a previous failure', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				fileExists: fileExistsNoRebase,
+				quickPickSelection: { label: 'main' },
+				memento: {
+					workspaceRoot: '/repo',
+					featureBranch: 'old-branch',
+					hasStash: false,
+					upstreamRef: 'main',
+					upstreamIsRemote: false,
+				},
+				git: {
+					...baseGitForSync,
+					'status --porcelain -u': { stdout: '' },
+					'checkout main': { stdout: '' },
+					'pull': { stdout: '' },
+					'checkout feature/my-branch': { stdout: '' },
+					'rebase main': { stdout: '' },
+					'push --force-with-lease': { stdout: '' },
+				},
+			});
+			await runSyncWithUpstreamWorkflow(h.deps);
+
+			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedWith('feature/my-branch', 'main')]);
+			const clearUpdate = h.mementoUpdates.find((u) => u.key === MEMENTO_KEY && u.value === undefined);
+			assert.ok(clearUpdate, 'Stale memento should be cleared after a successful sync');
+		});
+
 		test('success path with stash: stashes local changes, then pops after rebase', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',

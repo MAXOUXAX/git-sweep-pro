@@ -2,6 +2,7 @@ import type { BranchItem } from './branch-list';
 import { parseBranches } from './branch-list';
 import { syncMessages } from './sync-with-upstream-messages';
 import {
+	clearMemento,
 	isRebaseInProgress,
 	resolveGitDir,
 	saveMemento,
@@ -343,6 +344,11 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 				deps.output.appendLine(`[stash-pop-error] ${popError}`);
 			}
 		}
+
+		// A stale memento from a previous conflict/push failure (resolved outside
+		// the Resume command) must not survive a successful sync: Resume trusts
+		// the memento and would otherwise act on the outdated state.
+		await clearMemento(deps);
 
 		deps.output.appendLine(syncMessages.outputComplete);
 		deps.ui.showInformationMessage(syncMessages.syncedWith(featureBranch, upstreamRef));
