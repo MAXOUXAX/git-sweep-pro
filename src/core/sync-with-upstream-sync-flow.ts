@@ -324,8 +324,11 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 					await runGit(['stash', 'pop']);
 					memento = { ...memento, hasStash: false };
 					await saveMemento(deps, memento);
-				} catch {
-					/* noop */
+				} catch (popError) {
+					// The memento keeps hasStash: true, so Resume will retry the pop.
+					const popMsg = popError instanceof Error ? popError.message : String(popError);
+					deps.output.appendLine(`[stash-pop-error] ${popMsg}`);
+					deps.output.appendLine(syncMessages.infoStashKeptForResume);
 				}
 			}
 			if (isRemote && branchToRebaseOnto) {
@@ -334,7 +337,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 					memento = { ...memento, tempBranchToCleanup: undefined };
 					await saveMemento(deps, memento);
 				} catch {
-					/* noop */
+					deps.output.appendLine(syncMessages.infoTempBranchNotDeleted(branchToRebaseOnto));
 				}
 			}
 

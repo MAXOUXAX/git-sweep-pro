@@ -207,6 +207,17 @@ suite('sync-with-upstream-state', () => {
 			assert.strictEqual(readRebaseHeadName(gitDir, deps), undefined);
 		});
 
+		test('returns undefined when head-name is empty or whitespace-only', () => {
+			const gitDir = '/repo/.git';
+			const headPath = path.join(gitDir, 'rebase-merge', 'head-name');
+			const deps = createDeps({
+				fileExists: (p) => p === headPath,
+				readFileUtf8: () => '   \n',
+			});
+
+			assert.strictEqual(readRebaseHeadName(gitDir, deps), undefined);
+		});
+
 		test('returns branch name when head-name contains refs/heads/branch', () => {
 			const gitDir = '/repo/.git';
 			const headPath = path.join(gitDir, 'rebase-merge', 'head-name');

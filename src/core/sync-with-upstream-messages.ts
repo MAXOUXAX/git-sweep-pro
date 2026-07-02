@@ -71,6 +71,8 @@ export const syncMessages = {
 	infoNoRebaseInProgress:
 		'[info] No rebase in progress (already completed manually?). Proceeding to push and cleanup.',
 	infoStateSavedForResume: '[info] State saved. Run "Sync With Upstream (Resume)" to retry push.',
+	infoStashKeptForResume:
+		'[info] Stash not restored yet; "Sync With Upstream (Resume)" will restore it.',
 	infoStashUnknownRef:
 		'[info] Stash not restored and its ref could not be identified. Check "git stash list" for the "gsp-sync-with-upstream" entry.',
 	infoStashRefOnFailure: (ref: string) =>

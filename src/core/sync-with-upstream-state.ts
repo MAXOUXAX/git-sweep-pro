@@ -87,6 +87,9 @@ export function readRebaseHeadName(gitDir: string, deps: SyncWithUpstreamDeps): 
 		if (deps.fileExists(p)) {
 			try {
 				const content = deps.readFileUtf8(p).trim();
+				if (!content) {
+					continue;
+				}
 				return content.startsWith('refs/heads/') ? content.replace(/^refs\/heads\//, '') : content;
 			} catch (err) {
 				const code = (err as NodeJS.ErrnoException).code;
