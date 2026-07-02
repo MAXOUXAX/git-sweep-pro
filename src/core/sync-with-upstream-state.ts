@@ -94,7 +94,9 @@ export function readRebaseHeadName(gitDir: string, deps: SyncWithUpstreamDeps): 
 			} catch (err) {
 				const code = (err as NodeJS.ErrnoException).code;
 				if (code === 'ENOENT' || code === 'ENOTDIR') {
-					return undefined;
+					// File vanished between the exists check and the read: try the
+					// other head-name location instead of giving up.
+					continue;
 				}
 				throw err;
 			}

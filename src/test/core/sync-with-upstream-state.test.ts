@@ -207,6 +207,23 @@ suite('sync-with-upstream-state', () => {
 			assert.strictEqual(readRebaseHeadName(gitDir, deps), undefined);
 		});
 
+		test('falls back to the other head-name location when the first read hits ENOENT', () => {
+			const gitDir = '/repo/.git';
+			const mergePath = path.join(gitDir, 'rebase-merge', 'head-name');
+			const applyPath = path.join(gitDir, 'rebase-apply', 'head-name');
+			const deps = createDeps({
+				fileExists: (p) => p === mergePath || p === applyPath,
+				readFileUtf8: (p) => {
+					if (p === mergePath) {
+						throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' });
+					}
+					return 'refs/heads/from-apply\n';
+				},
+			});
+
+			assert.strictEqual(readRebaseHeadName(gitDir, deps), 'from-apply');
+		});
+
 		test('returns undefined when head-name is empty or whitespace-only', () => {
 			const gitDir = '/repo/.git';
 			const headPath = path.join(gitDir, 'rebase-merge', 'head-name');
