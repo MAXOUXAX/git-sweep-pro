@@ -4,6 +4,13 @@ All notable changes to the "git-sweep-pro" extension are documented in this file
 
 This project adheres to [Semantic Versioning](https://semver.org) and the changelog is generated automatically from [Conventional Commits](https://www.conventionalcommits.org).
 
+## [1.0.1](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.0.0...v1.0.1) (2026-07-03)
+
+
+### Bug Fixes
+
+* **ci:** compile before coverage and reject empty coverage data ([83fd405](https://github.com/MAXOUXAX/git-sweep-pro/commit/83fd4059695f102c1267d76b5c7f5622474d7e79))
+
 # 1.0.0 (2026-07-03)
 
 
