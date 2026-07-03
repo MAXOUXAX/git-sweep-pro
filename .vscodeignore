@@ -1,11 +1,15 @@
-.vscode/**
-.vscode-test/**
-src/**
-.gitignore
-.yarnrc
-vsc-extension-quickstart.md
-**/tsconfig.json
-**/eslint.config.mjs
-**/*.map
-**/*.ts
-**/.vscode-test.*
+# Allowlist model: ignore EVERYTHING, then re-include only what the
+# published extension needs. Any new file is excluded by default.
+#
+# The production build (npm run build / tsconfig.build.json) emits ONLY
+# runtime code to dist/ — tests (src/test) are excluded and source maps
+# are off — so shipping "!dist/**" is safe and needs no maintenance when
+# new source files or folders are added.
+**/*
+
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENCE
+!assets/**
+!dist/**
