@@ -14,8 +14,14 @@ const raw = fs.readFileSync(summaryPath, 'utf8');
 const summary = JSON.parse(raw);
 const total = summary.total;
 
-if (!total?.lines?.pct) {
-	console.error('Invalid coverage summary format: missing total.lines.pct');
+if (typeof total?.lines?.pct !== 'number' || !Number.isFinite(total.lines.pct)) {
+	console.error('Invalid coverage summary: total.lines.pct is not a number.');
+	console.error('This usually means no tests ran and no coverage was collected.');
+	process.exit(1);
+}
+
+if ((total.lines.total ?? 0) === 0) {
+	console.error('Coverage gate failed: no lines were instrumented (0 tests likely ran).');
 	process.exit(1);
 }
 

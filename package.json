@@ -48,7 +48,7 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
     "test": "vscode-test",
-    "test:coverage": "vscode-test --coverage --coverage-output=coverage --coverage-reporter=text-summary --coverage-reporter=json-summary --coverage-reporter=lcov",
+    "test:coverage": "npm run compile && vscode-test --coverage --coverage-output=coverage --coverage-reporter=text-summary --coverage-reporter=json-summary --coverage-reporter=lcov",
     "coverage:check": "node ./scripts/check-coverage.mjs",
     "test:ci": "npm run test:coverage && npm run coverage:check",
     "package": "vsce package --no-dependencies",
