@@ -1,0 +1,45 @@
+{
+  "branches": ["main"],
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    [
+      "@semantic-release/changelog",
+      {
+        "changelogFile": "CHANGELOG.md",
+        "changelogTitle": "# Change Log\n\nAll notable changes to the \"git-sweep-pro\" extension are documented in this file.\n\nThis project adheres to [Semantic Versioning](https://semver.org) and the changelog is generated automatically from [Conventional Commits](https://www.conventionalcommits.org)."
+      }
+    ],
+    [
+      "@semantic-release/npm",
+      {
+        "npmPublish": false
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "vsce package --no-dependencies --out git-sweep-pro-${nextRelease.version}.vsix",
+        "publishCmd": "vsce publish --no-dependencies --packagePath git-sweep-pro-${nextRelease.version}.vsix && ovsx publish git-sweep-pro-${nextRelease.version}.vsix --no-dependencies"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          {
+            "path": "git-sweep-pro-*.vsix",
+            "label": "Git Sweep Pro VSIX (${nextRelease.gitTag})"
+          }
+        ]
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": ["package.json", "package-lock.json", "CHANGELOG.md"],
+        "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+      }
+    ]
+  ]
+}
