@@ -116,26 +116,6 @@ Better metadata improves findability and trust in marketplaces.
 
 ---
 
-## 6) Release and publishing hygiene
-
-### Why
-Reliable release flow prevents publish friction and reduces risk.
-
-### Proposed work
-- Add a release checklist:
-  - bump version
-  - update changelog
-  - package verification
-  - publish verification
-- Add scripts for repeatable release steps.
-- Ensure token hygiene in local workflow (never expose PAT in terminal logs/screenshots).
-
-### Success criteria
-- Releases are repeatable and low-friction.
-- Fewer manual mistakes in publishing.
-
----
-
 ## Suggested implementation order
 
 1. Robust stale-branch detection
@@ -143,8 +123,7 @@ Reliable release flow prevents publish friction and reduces risk.
 3. Multi-root repository selection
 4. UX summary + selection helpers
 5. Marketplace metadata and docs polish
-6. Release automation/checklist
 
 ---
 
-If helpful, this roadmap can be converted into GitHub issues and milestones (`v0.3`, `v0.4`, `v1.0`) with rough estimates and acceptance criteria.
+If helpful, this roadmap can be converted into GitHub issues with acceptance criteria.
