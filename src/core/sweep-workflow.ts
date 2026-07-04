@@ -1,4 +1,4 @@
-import { isProtectedBranch, parseGoneBranchRefs, type SweepMode, type SweepSettings } from './sweep-logic';
+import { isNotFullyMergedError, isProtectedBranch, parseGoneBranchRefs, type SweepMode, type SweepSettings } from './sweep-logic';
 
 export type QuickPickItemLike = {
 	readonly label: string;
@@ -156,6 +156,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 		let deletedCount = 0;
 		const deleteFlag = mode.forceDelete ? '-D' : '-d';
+		const notFullyMerged: string[] = [];
 
 		for (const branch of branchNames) {
 			try {
@@ -163,7 +164,43 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 				deletedCount += 1;
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				deps.output.appendLine(`[delete-failed] ${branch}: ${message}`);
+				if (!mode.forceDelete && isNotFullyMergedError(message)) {
+					notFullyMerged.push(branch);
+					deps.output.appendLine(
+						`[not-fully-merged] ${branch}: commits are not reachable from the current branch (likely squash/rebase merged).`
+					);
+				} else {
+					deps.output.appendLine(`[delete-failed] ${branch}: ${message}`);
+				}
+			}
+		}
+
+		// Branches whose remote is gone but that a safe delete (-d) refuses because
+		// they are "not fully merged" were almost certainly merged via squash or
+		// rebase. Their commits live under a new SHA on the base branch, so the
+		// local branch is genuinely stale. Offer a targeted force-delete.
+		if (notFullyMerged.length > 0) {
+			deps.output.appendLine(
+				`${notFullyMerged.length} branch(es) were not deleted because they are not fully merged into the current branch. ` +
+					'This is expected when a pull request was merged with a squash or rebase strategy.'
+			);
+			const confirmed = await deps.ui.confirm(
+				`${notFullyMerged.length} branch(es) look squash/rebase merged (remote gone, but not a fast-forward merge locally). ` +
+					'Force-delete them with git branch -D? This cannot be undone.',
+				`Force-delete ${notFullyMerged.length}`
+			);
+			if (confirmed) {
+				for (const branch of notFullyMerged) {
+					try {
+						await deps.runGitCommand(['branch', '-D', branch], workspaceRoot);
+						deletedCount += 1;
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						deps.output.appendLine(`[delete-failed] ${branch}: ${message}`);
+					}
+				}
+			} else {
+				deps.output.appendLine('Force-delete of not-fully-merged branches declined.');
 			}
 		}
 

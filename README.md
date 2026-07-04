@@ -7,6 +7,7 @@ Safely identify and prune local branches that are gone on the remote.
 - Runs `git fetch -p` to prune stale remote refs.
 - Detects local tracked branches whose upstream is missing, using structured `git for-each-ref` output (stable across Git versions and locales).
 - Protects local-only work by only targeting branches with gone upstream tracking.
+- Handles **squash and rebase merges**: because detection is based on the remote branch being gone (not commit reachability), such branches are still found. When a safe `git branch -d` refuses them (their commits were rewritten), Git Sweep Pro offers a one-click force-delete for exactly those branches.
 - Lets you choose safe deletion (`git branch -d`) or force deletion (`git branch -D`).
 - Supports dry-run mode (logs what would be deleted, without deleting).
 

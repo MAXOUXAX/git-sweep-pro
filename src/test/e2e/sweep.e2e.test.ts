@@ -39,6 +39,27 @@ function makeGoneBranch(repo: string, name: string): void {
 	git(['push', 'origin', '--delete', name], repo);
 }
 
+/**
+ * Simulates a squash/rebase merge: the branch gains its own commit (a different
+ * SHA from anything on main), main advances separately, then the remote branch
+ * is deleted. The local branch's commits are therefore NOT reachable from main,
+ * so a safe delete (-d) refuses it — exactly the squash/rebase scenario.
+ */
+function makeSquashMergedGoneBranch(repo: string, name: string, file: string): void {
+	git(['checkout', '-b', name], repo);
+	fs.writeFileSync(path.join(repo, file), `work on ${name}\n`);
+	git(['add', file], repo);
+	git(['-c', 'commit.gpgsign=false', 'commit', '-m', `work on ${name}`], repo);
+	git(['push', '-u', 'origin', name], repo);
+	git(['checkout', 'main'], repo);
+	// The "squashed" result lands on main as an unrelated commit.
+	fs.writeFileSync(path.join(repo, file), `squashed ${name}\n`);
+	git(['add', file], repo);
+	git(['-c', 'commit.gpgsign=false', 'commit', '-m', `squash-merge ${name}`], repo);
+	git(['push', 'origin', 'main'], repo);
+	git(['push', 'origin', '--delete', name], repo);
+}
+
 suite('E2E: sweep against a real git repository', () => {
 	let repoDir: string;
 	let remoteDir: string;
@@ -213,5 +234,25 @@ suite('E2E: sweep against a real git repository', () => {
 			await config.update('protectedBranches', undefined, vscode.ConfigurationTarget.Workspace);
 			git(['branch', '-D', 'release/1.0'], repoDir);
 		}
+	});
+
+	test('force-deletes a squash/rebase-merged branch that safe delete refuses', async function () {
+		this.timeout(120000);
+
+		makeSquashMergedGoneBranch(repoDir, 'feature/squashed', 'squashed.txt');
+		assert.ok(branchExists(repoDir, 'feature/squashed'), 'branch should exist before the sweep');
+
+		// The setup() stub auto-confirms the force-delete escalation modal.
+		await vscode.commands.executeCommand('git-sweep-pro.run');
+
+		assert.ok(
+			!branchExists(repoDir, 'feature/squashed'),
+			'a squash-merged branch should be force-deleted after confirmation'
+		);
+		assert.ok(
+			infoMessages.some((m) => m.includes('Deleted 1 branch')),
+			`expected a deletion confirmation; got ${JSON.stringify(infoMessages)}`
+		);
+		assert.deepStrictEqual(errorMessages, [], 'no error messages expected');
 	});
 });

@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import {
 	branchMatchesPattern,
+	isNotFullyMergedError,
 	isProtectedBranch,
 	orderModeActions,
 	parseGoneBranchRefs,
@@ -161,6 +162,19 @@ suite('Extension Test Suite', () => {
 		assert.strictEqual(isProtectedBranch('feature/x', ['main', 'release/*']), false);
 		assert.strictEqual(isProtectedBranch('feature/x', []), false);
 		assert.strictEqual(isProtectedBranch('feature/x', ['   ', '']), false);
+	});
+
+	test('isNotFullyMergedError detects the squash/rebase safe-delete failure', () => {
+		assert.strictEqual(
+			isNotFullyMergedError("error: the branch 'feat/x' is not fully merged."),
+			true
+		);
+		assert.strictEqual(
+			isNotFullyMergedError("Command failed: git branch -d feat/x\nerror: The branch 'feat/x' is not fully merged"),
+			true
+		);
+		assert.strictEqual(isNotFullyMergedError('fatal: not a git repository'), false);
+		assert.strictEqual(isNotFullyMergedError('spawn git ENOENT'), false);
 	});
 
 });

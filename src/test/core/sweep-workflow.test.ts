@@ -213,6 +213,70 @@ suite('sweep workflow', () => {
 		assert.ok(h.outputLines.some((line) => line.includes('[delete-failed] stale/two: not fully merged')));
 	});
 
+	test('offers force-delete for squash/rebase-merged branches that fail safe delete', async () => {
+		const h = createHarness({
+			workspaceRoot: '/repo',
+			quickPickSelection: [{ label: 'squashed/one' }, { label: 'clean/two' }],
+			confirmResult: true,
+			git: {
+				'fetch -p': { stdout: '' },
+				[GONE_REFS_CMD]: {
+					stdout: ['squashed/one\t[gone]', 'clean/two\t[gone]'].join('\n'),
+				},
+				'branch -d squashed/one': new Error("error: the branch 'squashed/one' is not fully merged."),
+				'branch -d clean/two': { stdout: '' },
+				'branch -D squashed/one': { stdout: '' },
+			},
+		});
+
+		await runSweepWorkflow(safeMode, h.deps);
+
+		assert.ok(h.outputLines.some((line) => line.includes('[not-fully-merged] squashed/one')));
+		assert.strictEqual(h.confirmRequests.length, 1);
+		assert.match(h.confirmRequests[0].message, /squash\/rebase merged/);
+		assert.ok(h.commands.includes('branch -D squashed/one'));
+		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deleted 2 branch(es).']);
+	});
+
+	test('leaves not-fully-merged branches when force-delete is declined', async () => {
+		const h = createHarness({
+			workspaceRoot: '/repo',
+			quickPickSelection: [{ label: 'squashed/one' }],
+			confirmResult: false,
+			git: {
+				'fetch -p': { stdout: '' },
+				[GONE_REFS_CMD]: { stdout: 'squashed/one\t[gone]' },
+				'branch -d squashed/one': new Error("error: the branch 'squashed/one' is not fully merged."),
+			},
+		});
+
+		await runSweepWorkflow(safeMode, h.deps);
+
+		assert.strictEqual(h.confirmRequests.length, 1);
+		assert.ok(!h.commands.includes('branch -D squashed/one'));
+		assert.ok(h.outputLines.some((line) => line === 'Force-delete of not-fully-merged branches declined.'));
+		assert.deepStrictEqual(h.errorMessages, [
+			'Git Sweep Pro: Deleted 0/1 branch(es). See "Git Sweep" output for details.',
+		]);
+	});
+
+	test('does not offer force-delete escalation when already in force mode', async () => {
+		const h = createHarness({
+			workspaceRoot: '/repo',
+			quickPickSelection: [{ label: 'stale/one' }],
+			git: {
+				'fetch -p': { stdout: '' },
+				[GONE_REFS_CMD]: { stdout: 'stale/one\t[gone]' },
+				'branch -D stale/one': new Error("error: the branch 'stale/one' is not fully merged."),
+			},
+		});
+
+		await runSweepWorkflow(forceMode, h.deps);
+
+		assert.strictEqual(h.confirmRequests.length, 0);
+		assert.ok(h.outputLines.some((line) => line.includes('[delete-failed] stale/one')));
+	});
+
 	test('maps not-a-repository errors to friendly message', async () => {
 		const h = createHarness({
 			workspaceRoot: '/repo',

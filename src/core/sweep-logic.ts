@@ -118,3 +118,15 @@ export function isProtectedBranch(branch: string, patterns: readonly string[]): 
 		return trimmed.length > 0 && branchMatchesPattern(branch, trimmed);
 	});
 }
+
+/**
+ * Detects the `git branch -d` failure that means "this branch's commits are not
+ * reachable from HEAD" (Git: `error: the branch 'X' is not fully merged`).
+ *
+ * This is the signature of a branch whose pull request was merged with a
+ * **squash** or **rebase** strategy: the remote branch is gone, but the local
+ * branch's commits were rewritten, so a safe delete refuses to remove it.
+ */
+export function isNotFullyMergedError(message: string): boolean {
+	return /not fully merged/i.test(message);
+}
