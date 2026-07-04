@@ -27,6 +27,56 @@ function git(args: string[], cwd: string): string {
 	return execFileSync('git', args, { cwd, encoding: 'utf8', env: gitEnv }).toString();
 }
 
+/**
+ * Minimal stand-in for vscode.window.createQuickPick that auto-accepts the
+ * branch multi-select with its pre-selected items, so the headless run can
+ * proceed without user interaction.
+ */
+function makeFakeQuickPick() {
+	const acceptListeners: Array<() => void> = [];
+	const hideListeners: Array<() => void> = [];
+	const noopDisposable = { dispose: () => undefined };
+
+	const quickPick = {
+		canSelectMany: false,
+		ignoreFocusOut: false,
+		matchOnDescription: false,
+		title: '',
+		placeholder: '',
+		value: '',
+		buttons: [] as unknown[],
+		items: [] as unknown[],
+		selectedItems: [] as unknown[],
+		activeItems: [] as unknown[],
+		busy: false,
+		enabled: true,
+		step: undefined as number | undefined,
+		totalSteps: undefined as number | undefined,
+		onDidAccept: (cb: () => void) => {
+			acceptListeners.push(cb);
+			return noopDisposable;
+		},
+		onDidHide: (cb: () => void) => {
+			hideListeners.push(cb);
+			return noopDisposable;
+		},
+		onDidTriggerButton: () => noopDisposable,
+		onDidChangeSelection: () => noopDisposable,
+		onDidChangeActive: () => noopDisposable,
+		onDidTriggerItemButton: () => noopDisposable,
+		onDidChangeValue: () => noopDisposable,
+		show() {
+			setTimeout(() => acceptListeners.forEach((cb) => cb()), 0);
+		},
+		hide() {
+			hideListeners.forEach((cb) => cb());
+		},
+		dispose: () => undefined,
+	};
+
+	return quickPick;
+}
+
 function branchExists(repo: string, name: string): boolean {
 	return git(['branch', '--list', name], repo).trim().length > 0;
 }
@@ -66,6 +116,7 @@ suite('E2E (multi-root): sweep targets the selected repository', () => {
 	let originalShowErrorMessage: typeof vscode.window.showErrorMessage;
 	let originalShowWarningMessage: typeof vscode.window.showWarningMessage;
 	let originalShowQuickPick: typeof vscode.window.showQuickPick;
+	let originalCreateQuickPick: typeof vscode.window.createQuickPick;
 
 	suiteSetup(async function () {
 		this.timeout(120000);
@@ -86,6 +137,7 @@ suite('E2E (multi-root): sweep targets the selected repository', () => {
 		originalShowErrorMessage = vscode.window.showErrorMessage;
 		originalShowWarningMessage = vscode.window.showWarningMessage;
 		originalShowQuickPick = vscode.window.showQuickPick;
+		originalCreateQuickPick = vscode.window.createQuickPick;
 	});
 
 	suiteTeardown(() => {
@@ -94,6 +146,7 @@ suite('E2E (multi-root): sweep targets the selected repository', () => {
 		(vscode.window as { showErrorMessage: unknown }).showErrorMessage = originalShowErrorMessage;
 		(vscode.window as { showWarningMessage: unknown }).showWarningMessage = originalShowWarningMessage;
 		(vscode.window as { showQuickPick: unknown }).showQuickPick = originalShowQuickPick;
+		(vscode.window as { createQuickPick: unknown }).createQuickPick = originalCreateQuickPick;
 	});
 
 	setup(() => {
@@ -125,10 +178,9 @@ suite('E2E (multi-root): sweep targets the selected repository', () => {
 			const items = rest.filter((r): r is string => typeof r === 'string');
 			return Promise.resolve(items[0]);
 		};
-		// Two distinct quick-picks are shown: the repository picker (items carry a
-		// `candidate` with a `description` fsPath) and the branch multi-select
-		// (items carry `label`/`picked`). Pick the requested repository, and
-		// accept all branches for the branch picker.
+		// The repository picker uses showQuickPick (items carry a `candidate`
+		// with a `description` fsPath); pick the requested repository. The branch
+		// multi-select now uses createQuickPick and is driven by the fake below.
 		(vscode.window as { showQuickPick: unknown }).showQuickPick = (items: unknown) => {
 			const arr = items as Array<{ description?: string; candidate?: unknown }>;
 			if (arr.length > 0 && arr[0]?.candidate !== undefined) {
@@ -137,6 +189,7 @@ suite('E2E (multi-root): sweep targets the selected repository', () => {
 			}
 			return Promise.resolve(arr);
 		};
+		(vscode.window as { createQuickPick: unknown }).createQuickPick = () => makeFakeQuickPick();
 	});
 
 	test('deletes the stale branch only in the selected repository', async function () {

@@ -7,7 +7,8 @@ After a pull request is merged and its remote branch is deleted, the matching lo
 ## Why Git Sweep Pro
 
 - **Precise, not aggressive** — it only targets branches whose upstream tracking is *gone*. Local-only branches you never pushed are never listed.
-- **You stay in control** — every candidate appears in a multi-select list; uncheck anything you want to keep, and confirm before anything is deleted.
+- **You stay in control** — every candidate appears in a multi-select list with quick actions to select all, clear all, or invert your selection; before anything is deleted you get a summary (detected, selected, mode) and a confirmation.
+- **Clear outcomes** — after a run you see exactly how many branches were deleted, skipped, and failed.
 - **Handles squash & rebase merges** — detection is based on the remote branch being gone, not on commit reachability, so branches merged via squash or rebase are still found. When a safe delete refuses them (their commits were rewritten), Git Sweep Pro offers a one-click force-delete for exactly those branches.
 - **Multi-root aware** — when several open folders are Git repositories, it asks which one to operate on and remembers your choice for the session.
 - **Transparent** — every git command it runs and its output is written to the `Git Sweep` output channel, so there are no surprises.
@@ -17,7 +18,7 @@ After a pull request is merged and its remote branch is deleted, the matching lo
 1. Install the extension.
 2. Open a folder that is a Git repository.
 3. Open the Command Palette (`Ctrl/Cmd+Shift+P`) and run **Git Sweep Pro: Sweep Stale Branches**.
-4. Pick a mode, review the detected branches, uncheck any you want to keep, and confirm.
+4. Pick a mode, review the detected branches (use the title-bar actions to select all, clear, or invert), review the summary, and confirm.
 
 Prefer to look before you leap? Run **Git Sweep Pro: Preview Stale Branches (Dry Run)** first — it reports what *would* be deleted without changing anything.
 
@@ -27,7 +28,7 @@ All commands are available from the Command Palette under the **Git Sweep Pro** 
 
 | Command | ID | What it does |
 | --- | --- | --- |
-| **Sweep Stale Branches** | `git-sweep-pro.run` | Prompts for a mode (safe delete `-d`, force delete `-D`, or dry run), then shows stale branches in a multi-select list with everything pre-selected. |
+| **Sweep Stale Branches** | `git-sweep-pro.run` | Prompts for a mode (safe delete `-d`, force delete `-D`, or dry run), then shows stale branches in a multi-select list (everything pre-selected) with quick actions to select all, clear all, or invert. Shows a summary before deleting and a deleted/skipped/failed breakdown after. |
 | **Preview Stale Branches (Dry Run)** | `git-sweep-pro.dryRun` | Runs the dry-run flow directly: logs what would be deleted without deleting anything. |
 | **Post Pull Request Cleanup** | `git-sweep-pro.postPullRequest` | Checkout a local or remote branch, then delete the previous branch, prune, run the sweep, and pull. |
 | **Sync Branch With Upstream** | `git-sweep-pro.syncWithUpstream` | Keeps your feature branch up to date with a base branch (`main`, `develop`, …): stashes local changes, pulls the base, rebases the current branch onto it, force-pushes with `--force-with-lease`, then restores the stash. Pauses on rebase conflicts. |

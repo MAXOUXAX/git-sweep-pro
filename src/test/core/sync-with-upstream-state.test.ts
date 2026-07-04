@@ -30,6 +30,7 @@ function createDeps(overrides: {
 		ui: {
 			withProgress: async (_, task) => task(),
 			showQuickPick: async () => undefined,
+			pickBranches: async () => undefined,
 			showInformationMessage: () => undefined,
 			showErrorMessage: () => undefined,
 			confirm: async () => true,

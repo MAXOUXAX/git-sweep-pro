@@ -23,6 +23,80 @@ const gitEnv: NodeJS.ProcessEnv = {
 	GIT_CONFIG_NOSYSTEM: '1',
 };
 
+/**
+ * How the fake branch quick-pick behaves when the extension shows it:
+ * accept the pre-selected branches, drive a quick-action button first, or
+ * dismiss without accepting.
+ */
+type QuickPickAction = 'acceptAll' | 'clearThenAccept' | 'dismiss';
+
+/**
+ * Builds a minimal stand-in for vscode.window.createQuickPick that a headless
+ * run can drive. It exercises the real button/accept wiring in the extension:
+ * `clearThenAccept` clicks the "clear all" title button before accepting, so
+ * the extension's own selection logic runs.
+ */
+function makeFakeQuickPick(getAction: () => QuickPickAction) {
+	const acceptListeners: Array<() => void> = [];
+	const hideListeners: Array<() => void> = [];
+	const buttonListeners: Array<(button: unknown) => void> = [];
+	const noopDisposable = { dispose: () => undefined };
+
+	const quickPick = {
+		canSelectMany: false,
+		ignoreFocusOut: false,
+		matchOnDescription: false,
+		title: '',
+		placeholder: '',
+		value: '',
+		buttons: [] as unknown[],
+		items: [] as unknown[],
+		selectedItems: [] as unknown[],
+		activeItems: [] as unknown[],
+		busy: false,
+		enabled: true,
+		step: undefined as number | undefined,
+		totalSteps: undefined as number | undefined,
+		onDidAccept: (cb: () => void) => {
+			acceptListeners.push(cb);
+			return noopDisposable;
+		},
+		onDidHide: (cb: () => void) => {
+			hideListeners.push(cb);
+			return noopDisposable;
+		},
+		onDidTriggerButton: (cb: (button: unknown) => void) => {
+			buttonListeners.push(cb);
+			return noopDisposable;
+		},
+		onDidChangeSelection: () => noopDisposable,
+		onDidChangeActive: () => noopDisposable,
+		onDidTriggerItemButton: () => noopDisposable,
+		onDidChangeValue: () => noopDisposable,
+		show() {
+			// Defer so the extension finishes registering its listeners first.
+			setTimeout(() => {
+				const action = getAction();
+				if (action === 'dismiss') {
+					hideListeners.forEach((cb) => cb());
+					return;
+				}
+				if (action === 'clearThenAccept') {
+					// buttons[1] is the "Clear all" title-bar action.
+					buttonListeners.forEach((cb) => cb(quickPick.buttons[1]));
+				}
+				acceptListeners.forEach((cb) => cb());
+			}, 0);
+		},
+		hide() {
+			hideListeners.forEach((cb) => cb());
+		},
+		dispose: () => undefined,
+	};
+
+	return quickPick;
+}
+
 function git(args: string[], cwd: string): string {
 	return execFileSync('git', args, { cwd, encoding: 'utf8', env: gitEnv }).toString();
 }
@@ -65,11 +139,13 @@ suite('E2E: sweep against a real git repository', () => {
 	let remoteDir: string;
 	const infoMessages: string[] = [];
 	const errorMessages: string[] = [];
+	let quickPickAction: QuickPickAction = 'acceptAll';
 
 	let originalShowInformationMessage: typeof vscode.window.showInformationMessage;
 	let originalShowErrorMessage: typeof vscode.window.showErrorMessage;
 	let originalShowWarningMessage: typeof vscode.window.showWarningMessage;
 	let originalShowQuickPick: typeof vscode.window.showQuickPick;
+	let originalCreateQuickPick: typeof vscode.window.createQuickPick;
 
 	suiteSetup(async function () {
 		this.timeout(120000);
@@ -107,6 +183,7 @@ suite('E2E: sweep against a real git repository', () => {
 		originalShowErrorMessage = vscode.window.showErrorMessage;
 		originalShowWarningMessage = vscode.window.showWarningMessage;
 		originalShowQuickPick = vscode.window.showQuickPick;
+		originalCreateQuickPick = vscode.window.createQuickPick;
 	});
 
 	suiteTeardown(() => {
@@ -123,11 +200,15 @@ suite('E2E: sweep against a real git repository', () => {
 		if (originalShowQuickPick) {
 			(vscode.window as { showQuickPick: unknown }).showQuickPick = originalShowQuickPick;
 		}
+		if (originalCreateQuickPick) {
+			(vscode.window as { createQuickPick: unknown }).createQuickPick = originalCreateQuickPick;
+		}
 	});
 
 	setup(() => {
 		infoMessages.length = 0;
 		errorMessages.length = 0;
+		quickPickAction = 'acceptAll';
 
 		// Auto-confirm the modal mode picker with the safe-delete option, record
 		// every other informational message, and auto-select all quick-pick items.
@@ -156,6 +237,10 @@ suite('E2E: sweep against a real git repository', () => {
 		};
 		(vscode.window as { showQuickPick: unknown }).showQuickPick = (items: unknown) =>
 			Promise.resolve(items);
+		// The branch multi-select now uses createQuickPick with quick-action
+		// buttons; drive a fake so the real accept/button wiring runs headless.
+		(vscode.window as { createQuickPick: unknown }).createQuickPick = () =>
+			makeFakeQuickPick(() => quickPickAction);
 	});
 
 	test('detects and safe-deletes a branch whose upstream is gone', async function () {
@@ -193,6 +278,27 @@ suite('E2E: sweep against a real git repository', () => {
 		);
 
 		git(['branch', '-D', 'feature/stale2'], repoDir);
+	});
+
+	test('clearing the selection via the picker action deletes nothing', async function () {
+		this.timeout(120000);
+
+		makeGoneBranch(repoDir, 'feature/keep-me');
+		quickPickAction = 'clearThenAccept';
+
+		await vscode.commands.executeCommand('git-sweep-pro.run');
+
+		assert.ok(
+			branchExists(repoDir, 'feature/keep-me'),
+			'clearing the selection must leave the branch in place'
+		);
+		assert.ok(
+			infoMessages.some((m) => m.includes('No branches selected')),
+			`expected a no-selection message; got ${JSON.stringify(infoMessages)}`
+		);
+		assert.deepStrictEqual(errorMessages, []);
+
+		git(['branch', '-D', 'feature/keep-me'], repoDir);
 	});
 
 	test('reports no stale branches when the repo is clean', async function () {

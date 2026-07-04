@@ -90,6 +90,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
 				quickPickRequests.push({ items, title: config.title });
 				return options.quickPickSelection;
 			},
+			pickBranches: async () => undefined,
 			showInformationMessage: (message) => infoMessages.push(message),
 			showErrorMessage: (message) => errorMessages.push(message),
 			confirm: async () => true,

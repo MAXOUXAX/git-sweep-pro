@@ -84,6 +84,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 				}
 				return options.quickPickSelection;
 			},
+			pickBranches: async ({ items }) => items.map((item) => item.label),
 			showInformationMessage: (message) => {
 				infoMessages.push(message);
 			},

@@ -1,4 +1,5 @@
 import { isNotFullyMergedError, isProtectedBranch, parseGoneBranchRefs, type SweepMode, type SweepSettings } from './sweep-logic';
+import { formatSweepOutcome, formatSweepSummary, type SelectableBranch } from './sweep-selection';
 
 export type QuickPickItemLike = {
 	readonly label: string;
@@ -30,25 +31,21 @@ export type SweepWorkflowDeps = {
 				readonly placeHolder: string;
 			}
 		) => PromiseLike<readonly QuickPickItemLike[] | QuickPickItemLike | undefined>;
+		/**
+		 * Shows a multi-select branch picker with quick-action buttons (select all,
+		 * clear all, invert selection). Resolves to the labels of the selected
+		 * branches, or `undefined` when the picker was dismissed.
+		 */
+		pickBranches: (options: {
+			readonly items: readonly SelectableBranch[];
+			readonly title: string;
+			readonly placeHolder: string;
+		}) => PromiseLike<readonly string[] | undefined>;
 		showInformationMessage: (message: string) => void;
 		showErrorMessage: (message: string) => void;
 		confirm: (message: string, confirmLabel: string) => PromiseLike<boolean>;
 	};
 };
-
-function normalizeQuickPickSelection(
-	selection: readonly QuickPickItemLike[] | QuickPickItemLike | undefined
-): readonly QuickPickItemLike[] {
-	if (!selection) {
-		return [];
-	}
-
-	if (Array.isArray(selection)) {
-		return selection;
-	}
-
-	return [selection as QuickPickItemLike];
-}
 
 export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps): Promise<void> {
 	const workspaceRoot = deps.getWorkspaceRoot();
@@ -107,31 +104,45 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			return;
 		}
 
-		const quickPickItems: QuickPickItemLike[] = candidateBranches.map((branch) => ({
+		const quickPickItems: SelectableBranch[] = candidateBranches.map((branch) => ({
 			label: branch,
 			picked: true,
 		}));
 
-		const selected = await deps.ui.showQuickPick(quickPickItems, {
-			canPickMany: true,
-			ignoreFocusOut: true,
-			matchOnDescription: true,
+		const selected = await deps.ui.pickBranches({
+			items: quickPickItems,
 			title: mode.dryRun ? 'Git Sweep Pro: Select branches to include in dry run' : 'Git Sweep Pro: Select branches to delete',
-			placeHolder: 'All stale tracked branches are pre-selected. Uncheck any you want to keep.',
+			placeHolder: 'All stale tracked branches are pre-selected. Use the title-bar actions to select all, clear, or invert.',
 		});
 
-		const selectedItems = normalizeQuickPickSelection(selected);
-
-		if (selectedItems.length === 0) {
+		if (selected === undefined) {
 			deps.output.appendLine('Operation cancelled or no branches selected.');
 			deps.ui.showInformationMessage('Git Sweep Pro: No branches selected.');
 			return;
 		}
 
-		const branchNames = selectedItems.map((item) => item.label);
+		const branchNames = [...selected];
+
+		if (branchNames.length === 0) {
+			deps.output.appendLine('Operation cancelled or no branches selected.');
+			deps.ui.showInformationMessage('Git Sweep Pro: No branches selected.');
+			return;
+		}
+
 		deps.output.appendLine(`${mode.dryRun ? '[DRY RUN]' : '[DELETE]'} Selected branches:`);
 		for (const branch of branchNames) {
 			deps.output.appendLine(`- ${branch}`);
+		}
+
+		const summary = formatSweepSummary({
+			totalDetected: goneBranches.length,
+			protectedCount: protectedBranches.length,
+			selectedCount: branchNames.length,
+			mode,
+		});
+		deps.output.appendLine('Summary:');
+		for (const line of summary.split('\n')) {
+			deps.output.appendLine(`  ${line}`);
 		}
 
 		if (mode.dryRun) {
@@ -144,7 +155,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		if (settings.confirmBeforeDelete) {
 			const deleteFlagLabel = mode.forceDelete ? '-D' : '-d';
 			const confirmed = await deps.ui.confirm(
-				`Delete ${branchNames.length} branch(es) with git branch ${deleteFlagLabel}? This cannot be undone.`,
+				`${summary}\n\nDelete ${branchNames.length} branch(es) with git branch ${deleteFlagLabel}? This cannot be undone.`,
 				`Delete ${branchNames.length}`
 			);
 			if (!confirmed) {
@@ -157,6 +168,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		let deletedCount = 0;
 		const deleteFlag = mode.forceDelete ? '-D' : '-d';
 		const notFullyMerged: string[] = [];
+		const failedBranches: string[] = [];
 
 		for (const branch of branchNames) {
 			try {
@@ -170,10 +182,13 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 						`[not-fully-merged] ${branch}: commits are not reachable from the current branch (likely squash/rebase merged).`
 					);
 				} else {
+					failedBranches.push(branch);
 					deps.output.appendLine(`[delete-failed] ${branch}: ${message}`);
 				}
 			}
 		}
+
+		let skippedCount = 0;
 
 		// Branches whose remote is gone but that a safe delete (-d) refuses because
 		// they are "not fully merged" were almost certainly merged via squash or
@@ -196,20 +211,26 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 						deletedCount += 1;
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);
+						failedBranches.push(branch);
 						deps.output.appendLine(`[delete-failed] ${branch}: ${message}`);
 					}
 				}
 			} else {
+				skippedCount = notFullyMerged.length;
 				deps.output.appendLine('Force-delete of not-fully-merged branches declined.');
 			}
 		}
 
-		if (deletedCount === branchNames.length) {
-			deps.ui.showInformationMessage(`Git Sweep Pro: Deleted ${deletedCount} branch(es).`);
+		const outcome = formatSweepOutcome({
+			deleted: deletedCount,
+			skipped: skippedCount,
+			failed: failedBranches.length,
+		});
+
+		if (failedBranches.length > 0) {
+			deps.ui.showErrorMessage(`Git Sweep Pro: ${outcome} See "Git Sweep" output for details.`);
 		} else {
-			deps.ui.showErrorMessage(
-				`Git Sweep Pro: Deleted ${deletedCount}/${branchNames.length} branch(es). See "Git Sweep" output for details.`
-			);
+			deps.ui.showInformationMessage(`Git Sweep Pro: ${outcome}`);
 		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

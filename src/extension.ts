@@ -4,6 +4,7 @@ import { runGitCommand } from './core/git-command';
 import { runPostPullRequestWorkflow } from './core/post-pull-request-workflow';
 import { runSyncWithUpstreamResumeWorkflow, runSyncWithUpstreamWorkflow, type SyncWithUpstreamDeps } from './core/sync-with-upstream-workflow';
 import { resolveSweepModeAction, orderModeActions, type SweepModeSetting, type SweepSettings } from './core/sweep-logic';
+import { clearAll, invertSelection, selectAll, type SelectableBranch } from './core/sweep-selection';
 import { runSweepWorkflow, type SweepWorkflowDeps } from './core/sweep-workflow';
 import { resolveTargetRepository, resolveWorkspaceRoot, type RepoFolder, type RepositoryResolution } from './core/workspace';
 
@@ -27,6 +28,82 @@ function getSweepSettings(): SweepSettings {
 		confirmBeforeDelete: config.get<boolean>('confirmBeforeDelete', true),
 	};
 }
+
+/**
+ * Presents a multi-select branch picker with title-bar quick actions (select
+ * all, clear all, invert selection). Resolves to the labels of the selected
+ * branches, or `undefined` when the picker is dismissed without accepting.
+ */
+function pickBranchesWithActions(options: {
+	readonly items: readonly SelectableBranch[];
+	readonly title: string;
+	readonly placeHolder: string;
+}): Promise<readonly string[] | undefined> {
+	return new Promise((resolve) => {
+		const quickPick = vscode.window.createQuickPick<vscode.QuickPickItem>();
+		quickPick.canSelectMany = true;
+		quickPick.ignoreFocusOut = true;
+		quickPick.matchOnDescription = true;
+		quickPick.title = options.title;
+		quickPick.placeholder = options.placeHolder;
+
+		const selectAllButton: vscode.QuickInputButton = {
+			iconPath: new vscode.ThemeIcon('check-all'),
+			tooltip: 'Select all',
+		};
+		const clearAllButton: vscode.QuickInputButton = {
+			iconPath: new vscode.ThemeIcon('clear-all'),
+			tooltip: 'Clear all',
+		};
+		const invertButton: vscode.QuickInputButton = {
+			iconPath: new vscode.ThemeIcon('arrow-swap'),
+			tooltip: 'Invert selection',
+		};
+		quickPick.buttons = [selectAllButton, clearAllButton, invertButton];
+
+		const pickItems: vscode.QuickPickItem[] = options.items.map((item) => ({ label: item.label }));
+		quickPick.items = pickItems;
+		quickPick.selectedItems = options.items.filter((item) => item.picked).map((item) => {
+			return pickItems.find((pick) => pick.label === item.label) as vscode.QuickPickItem;
+		});
+
+		const applySelection = (next: readonly SelectableBranch[]): void => {
+			const pickedLabels = new Set(next.filter((entry) => entry.picked).map((entry) => entry.label));
+			quickPick.selectedItems = quickPick.items.filter((item) => pickedLabels.has(item.label));
+		};
+
+		const currentSelection = (): SelectableBranch[] => {
+			const selectedLabels = new Set(quickPick.selectedItems.map((item) => item.label));
+			return quickPick.items.map((item) => ({ label: item.label, picked: selectedLabels.has(item.label) }));
+		};
+
+		quickPick.onDidTriggerButton((button) => {
+			if (button === selectAllButton) {
+				applySelection(selectAll(currentSelection()));
+			} else if (button === clearAllButton) {
+				applySelection(clearAll(currentSelection()));
+			} else if (button === invertButton) {
+				applySelection(invertSelection(currentSelection()));
+			}
+		});
+
+		let accepted = false;
+		quickPick.onDidAccept(() => {
+			accepted = true;
+			resolve(quickPick.selectedItems.map((item) => item.label));
+			quickPick.hide();
+		});
+		quickPick.onDidHide(() => {
+			if (!accepted) {
+				resolve(undefined);
+			}
+			quickPick.dispose();
+		});
+
+		quickPick.show();
+	});
+}
+
 
 export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
@@ -97,6 +174,7 @@ export function activate(context: vscode.ExtensionContext) {
 						task
 					),
 				showQuickPick: (items, options) => vscode.window.showQuickPick(items, options),
+				pickBranches: (options) => pickBranchesWithActions(options),
 				showInformationMessage: (message) => {
 					void vscode.window.showInformationMessage(message);
 				},
