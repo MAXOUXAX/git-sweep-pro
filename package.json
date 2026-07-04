@@ -8,7 +8,7 @@
   },
   "publisher": "MAXOUXAX",
   "icon": "assets/icon.png",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "engines": {
     "vscode": "^1.85.0"
   },

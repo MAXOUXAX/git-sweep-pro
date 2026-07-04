@@ -4,6 +4,18 @@ All notable changes to the "git-sweep-pro" extension are documented in this file
 
 This project adheres to [Semantic Versioning](https://semver.org) and the changelog is generated automatically from [Conventional Commits](https://www.conventionalcommits.org).
 
+# [1.1.0](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.0.1...v1.1.0) (2026-07-04)
+
+
+### Bug Fixes
+
+* force C locale for git so parsed tokens are locale-stable ([c90c337](https://github.com/MAXOUXAX/git-sweep-pro/commit/c90c337a65827784794f2190e0c723d0629f29e6))
+
+
+### Features
+
+* detect stale branches via structured git refs ([1d95f2e](https://github.com/MAXOUXAX/git-sweep-pro/commit/1d95f2ebb58e60222bb9a78400a61f08cede750e))
+
 ## [1.0.1](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.0.0...v1.0.1) (2026-07-03)
 
 
