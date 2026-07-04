@@ -1,6 +1,6 @@
 import { parseBranches } from './branch-list';
 import { escapeForShell } from './git-command';
-import { parseGoneBranchRefs } from './sweep-logic';
+import { isProtectedBranch, parseGoneBranchRefs } from './sweep-logic';
 import { runSweepWorkflow, type QuickPickItemLike, type SweepWorkflowDeps } from './sweep-workflow';
 
 export type PostPullRequestDeps = SweepWorkflowDeps;
@@ -183,16 +183,20 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 
 		deps.output.appendLine(`Checked out: ${localTarget}`);
 
-		try {
-			await deps.ui.withProgress(
-				{ title: `Git Sweep Pro: Deleting branch ${currentBranch}...` },
-				() => runGit(['branch', '-D', currentBranch])
-			);
-			deps.output.appendLine(`Deleted branch: ${currentBranch}`);
-		} catch {
-			deps.ui.showErrorMessage(
-				`Git Sweep Pro: Could not delete branch "${currentBranch}". You can delete it manually with: git branch -D ${escapeForShell(currentBranch)}`
-			);
+		if (isProtectedBranch(currentBranch, deps.getSettings().protectedBranches)) {
+			deps.output.appendLine(`Branch "${currentBranch}" is protected; skipping deletion.`);
+		} else {
+			try {
+				await deps.ui.withProgress(
+					{ title: `Git Sweep Pro: Deleting branch ${currentBranch}...` },
+					() => runGit(['branch', '-D', currentBranch])
+				);
+				deps.output.appendLine(`Deleted branch: ${currentBranch}`);
+			} catch {
+				deps.ui.showErrorMessage(
+					`Git Sweep Pro: Could not delete branch "${currentBranch}". You can delete it manually with: git branch -D ${escapeForShell(currentBranch)}`
+				);
+			}
 		}
 
 		// Sweep here intentionally uses safe delete (-d only): dryRun=false, forceDelete=false.

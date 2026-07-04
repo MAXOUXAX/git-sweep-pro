@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { runSweepWorkflow, type QuickPickItemLike, type SweepWorkflowDeps } from '../../core/sweep-workflow';
-import type { SweepMode } from '../../core/sweep-logic';
+import { DEFAULT_SWEEP_SETTINGS, type SweepMode, type SweepSettings } from '../../core/sweep-logic';
 
 const GONE_REFS_CMD = 'for-each-ref --format=%(refname:short)%09%(upstream:track) refs/heads';
 
@@ -8,6 +8,8 @@ type HarnessOptions = {
 	workspaceRoot?: string;
 	quickPickSelection?: readonly QuickPickItemLike[] | undefined;
 	git?: Record<string, { stdout?: string; stderr?: string } | Error>;
+	settings?: Partial<SweepSettings>;
+	confirmResult?: boolean;
 };
 
 type Harness = {
@@ -18,6 +20,7 @@ type Harness = {
 	commands: string[];
 	progressTitles: string[];
 	quickPickRequests: Array<{ items: QuickPickItemLike[]; title: string }>;
+	confirmRequests: Array<{ message: string; confirmLabel: string }>;
 };
 
 function createHarness(options: HarnessOptions = {}): Harness {
@@ -27,9 +30,17 @@ function createHarness(options: HarnessOptions = {}): Harness {
 	const commands: string[] = [];
 	const progressTitles: string[] = [];
 	const quickPickRequests: Array<{ items: QuickPickItemLike[]; title: string }> = [];
+	const confirmRequests: Array<{ message: string; confirmLabel: string }> = [];
+
+	const settings: SweepSettings = {
+		...DEFAULT_SWEEP_SETTINGS,
+		confirmBeforeDelete: false,
+		...options.settings,
+	};
 
 	const deps: SweepWorkflowDeps = {
 		getWorkspaceRoot: () => options.workspaceRoot,
+		getSettings: () => settings,
 		output: {
 			show: () => undefined,
 			appendLine: (line) => outputLines.push(line),
@@ -61,10 +72,14 @@ function createHarness(options: HarnessOptions = {}): Harness {
 			showErrorMessage: (message) => {
 				errorMessages.push(message);
 			},
+			confirm: async (message, confirmLabel) => {
+				confirmRequests.push({ message, confirmLabel });
+				return options.confirmResult ?? true;
+			},
 		},
 	};
 
-	return { deps, outputLines, infoMessages, errorMessages, commands, progressTitles, quickPickRequests };
+	return { deps, outputLines, infoMessages, errorMessages, commands, progressTitles, quickPickRequests, confirmRequests };
 }
 
 suite('sweep workflow', () => {
@@ -260,5 +275,120 @@ suite('sweep workflow', () => {
 			{ label: 'stale/one', picked: true },
 			{ label: 'stale/two', picked: true },
 		]);
+	});
+
+	test('skips protected branches and offers only the rest', async () => {
+		const h = createHarness({
+			workspaceRoot: '/repo',
+			settings: { protectedBranches: ['main', 'release/*'] },
+			quickPickSelection: [{ label: 'stale/one' }],
+			git: {
+				'fetch -p': { stdout: '' },
+				[GONE_REFS_CMD]: {
+					stdout: ['stale/one\t[gone]', 'release/2.0\t[gone]', 'main\t[gone]'].join('\n'),
+				},
+				'branch -d stale/one': { stdout: '' },
+			},
+		});
+
+		await runSweepWorkflow(safeMode, h.deps);
+
+		const quickPick = h.quickPickRequests[0];
+		assert.deepStrictEqual(quickPick?.items, [{ label: 'stale/one', picked: true }]);
+		assert.ok(h.outputLines.some((line) => line.includes('Protected branches skipped')));
+		assert.ok(h.outputLines.some((line) => line === '- release/2.0'));
+		assert.ok(h.outputLines.some((line) => line === '- main'));
+		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deleted 1 branch(es).']);
+	});
+
+	test('reports when all stale branches are protected', async () => {
+		const h = createHarness({
+			workspaceRoot: '/repo',
+			settings: { protectedBranches: ['*'] },
+			git: {
+				'fetch -p': { stdout: '' },
+				[GONE_REFS_CMD]: {
+					stdout: ['stale/one\t[gone]', 'stale/two\t[gone]'].join('\n'),
+				},
+			},
+		});
+
+		await runSweepWorkflow(safeMode, h.deps);
+
+		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: All 2 stale branch(es) are protected.']);
+		assert.strictEqual(h.quickPickRequests.length, 0);
+	});
+
+	test('skips fetch/prune when autoFetchPrune is disabled', async () => {
+		const h = createHarness({
+			workspaceRoot: '/repo',
+			settings: { autoFetchPrune: false },
+			git: {
+				[GONE_REFS_CMD]: { stdout: 'stale/one\t[gone]' },
+			},
+		});
+
+		await runSweepWorkflow(dryMode, h.deps);
+
+		assert.ok(!h.commands.includes('fetch -p'));
+		assert.strictEqual(h.commands[0], GONE_REFS_CMD);
+		assert.ok(h.outputLines.some((line) => line.includes('Auto fetch/prune disabled')));
+	});
+
+	test('asks for confirmation before deleting when confirmBeforeDelete is enabled', async () => {
+		const h = createHarness({
+			workspaceRoot: '/repo',
+			settings: { confirmBeforeDelete: true },
+			confirmResult: true,
+			quickPickSelection: [{ label: 'stale/one' }],
+			git: {
+				'fetch -p': { stdout: '' },
+				[GONE_REFS_CMD]: { stdout: 'stale/one\t[gone]' },
+				'branch -d stale/one': { stdout: '' },
+			},
+		});
+
+		await runSweepWorkflow(safeMode, h.deps);
+
+		assert.strictEqual(h.confirmRequests.length, 1);
+		assert.ok(h.confirmRequests[0].message.includes('git branch -d'));
+		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deleted 1 branch(es).']);
+	});
+
+	test('aborts deletion when confirmation is declined', async () => {
+		const h = createHarness({
+			workspaceRoot: '/repo',
+			settings: { confirmBeforeDelete: true },
+			confirmResult: false,
+			quickPickSelection: [{ label: 'stale/one' }],
+			git: {
+				'fetch -p': { stdout: '' },
+				[GONE_REFS_CMD]: { stdout: 'stale/one\t[gone]' },
+				'branch -d stale/one': { stdout: '' },
+			},
+		});
+
+		await runSweepWorkflow(safeMode, h.deps);
+
+		assert.strictEqual(h.confirmRequests.length, 1);
+		assert.ok(!h.commands.includes('branch -d stale/one'));
+		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deletion cancelled.']);
+	});
+
+	test('does not confirm on dry run even when confirmBeforeDelete is enabled', async () => {
+		const h = createHarness({
+			workspaceRoot: '/repo',
+			settings: { confirmBeforeDelete: true },
+			quickPickSelection: [{ label: 'stale/one' }],
+			git: {
+				'fetch -p': { stdout: '' },
+				[GONE_REFS_CMD]: { stdout: 'stale/one\t[gone]' },
+			},
+		});
+
+		await runSweepWorkflow(dryMode, h.deps);
+
+		assert.strictEqual(h.confirmRequests.length, 0);
+		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro (dry run): 1 branch(es) would be deleted.']);
 	});
 });

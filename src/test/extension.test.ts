@@ -1,5 +1,12 @@
 import * as assert from 'assert';
-import { parseGoneBranchRefs, resolveSweepModeAction } from '../core/sweep-logic';
+import {
+	branchMatchesPattern,
+	isProtectedBranch,
+	orderModeActions,
+	parseGoneBranchRefs,
+	resolveModeFromSetting,
+	resolveSweepModeAction,
+} from '../core/sweep-logic';
 
 suite('Extension Test Suite', () => {
 	test('parseGoneBranchRefs returns empty list for empty output', () => {
@@ -99,6 +106,61 @@ suite('Extension Test Suite', () => {
 	test('resolveSweepModeAction is strict about exact labels', () => {
 		assert.strictEqual(resolveSweepModeAction('dry run'), undefined);
 		assert.strictEqual(resolveSweepModeAction(' Delete (safe -d) '), undefined);
+	});
+
+	test('resolveModeFromSetting maps every setting value', () => {
+		assert.deepStrictEqual(resolveModeFromSetting('dryRun'), { dryRun: true, forceDelete: false });
+		assert.deepStrictEqual(resolveModeFromSetting('safeDelete'), { dryRun: false, forceDelete: false });
+		assert.deepStrictEqual(resolveModeFromSetting('forceDelete'), { dryRun: false, forceDelete: true });
+	});
+
+	test('orderModeActions puts the configured default first', () => {
+		assert.deepStrictEqual(orderModeActions('safeDelete'), [
+			'Delete (safe -d)',
+			'Delete (force -D)',
+			'Dry Run',
+		]);
+		assert.deepStrictEqual(orderModeActions('forceDelete'), [
+			'Delete (force -D)',
+			'Delete (safe -d)',
+			'Dry Run',
+		]);
+		assert.deepStrictEqual(orderModeActions('dryRun'), [
+			'Dry Run',
+			'Delete (safe -d)',
+			'Delete (force -D)',
+		]);
+	});
+
+	test('branchMatchesPattern matches literals exactly', () => {
+		assert.strictEqual(branchMatchesPattern('main', 'main'), true);
+		assert.strictEqual(branchMatchesPattern('maintenance', 'main'), false);
+		assert.strictEqual(branchMatchesPattern('main', 'develop'), false);
+	});
+
+	test('branchMatchesPattern supports * across slashes', () => {
+		assert.strictEqual(branchMatchesPattern('release/1.2', 'release/*'), true);
+		assert.strictEqual(branchMatchesPattern('release/deep/nested', 'release/*'), true);
+		assert.strictEqual(branchMatchesPattern('feature/x', 'release/*'), false);
+	});
+
+	test('branchMatchesPattern supports ? single-char wildcard', () => {
+		assert.strictEqual(branchMatchesPattern('v1', 'v?'), true);
+		assert.strictEqual(branchMatchesPattern('v12', 'v?'), false);
+	});
+
+	test('branchMatchesPattern treats regex metacharacters literally', () => {
+		assert.strictEqual(branchMatchesPattern('feature.x', 'feature.x'), true);
+		assert.strictEqual(branchMatchesPattern('featureax', 'feature.x'), false);
+		assert.strictEqual(branchMatchesPattern('a+b', 'a+b'), true);
+	});
+
+	test('isProtectedBranch matches any non-empty pattern and ignores blanks', () => {
+		assert.strictEqual(isProtectedBranch('main', ['main', 'release/*']), true);
+		assert.strictEqual(isProtectedBranch('release/2.0', ['main', 'release/*']), true);
+		assert.strictEqual(isProtectedBranch('feature/x', ['main', 'release/*']), false);
+		assert.strictEqual(isProtectedBranch('feature/x', []), false);
+		assert.strictEqual(isProtectedBranch('feature/x', ['   ', '']), false);
 	});
 
 });

@@ -39,9 +39,46 @@
         "command": "git-sweep-pro.syncWithUpstreamResume",
         "title": "Git Sweep Pro: Sync With Upstream (Resume)"
       }
-    ]
-  },
-  "scripts": {
+    ],
+    "configuration": {
+      "title": "Git Sweep Pro",
+      "properties": {
+        "gitSweepPro.defaultMode": {
+          "type": "string",
+          "enum": [
+            "dryRun",
+            "safeDelete",
+            "forceDelete"
+          ],
+          "enumDescriptions": [
+            "Only report the branches that would be deleted.",
+            "Delete branches with git branch -d (refuses unmerged branches).",
+            "Delete branches with git branch -D (force, even if unmerged)."
+          ],
+          "default": "safeDelete",
+          "description": "Default execution mode presented first in the Run command's mode picker."
+        },
+        "gitSweepPro.protectedBranches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Glob patterns for branches that must never be deleted (e.g. `main`, `develop`, `release/*`). `*` matches any characters and `?` matches a single character."
+        },
+        "gitSweepPro.autoFetchPrune": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run 'git fetch -p' before detecting stale branches. Disable to operate on the local ref state only."
+        },
+        "gitSweepPro.confirmBeforeDelete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a confirmation dialog before deleting the selected branches."
+        }
+      }
+    }
+  },  "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "tsc -p ./tsconfig.build.json",
     "compile": "tsc -p ./",

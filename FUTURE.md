@@ -52,20 +52,19 @@ In a multi-folder workspace, users should explicitly choose the repository to cl
 
 ## 3) Safety controls via settings
 
-### Why
-Users may want permanent safeguards and preferred defaults.
+### Status
+✅ Completed.
 
-### Proposed work
-Add extension settings:
+### Delivered
+Added extension settings:
 - `gitSweepPro.defaultMode`: `dryRun | safeDelete | forceDelete`
-- `gitSweepPro.protectedBranches`: string patterns (e.g. `main`, `develop`, `release/*`)
+- `gitSweepPro.protectedBranches`: glob patterns (e.g. `main`, `develop`, `release/*`)
 - `gitSweepPro.autoFetchPrune`: boolean
 - `gitSweepPro.confirmBeforeDelete`: boolean
 
-### Success criteria
-- Protected branches are never deleted.
-- Default behavior matches user/team policy.
-- Deletion actions are explicit and predictable.
+Protected branches are filtered out of deletion candidates in the sweep and
+post-pull-request flows, glob matching lives in a pure, unit-tested helper, and
+the behaviour is covered by unit tests plus a real E2E protected-branch case.
 
 ---
 
@@ -118,8 +117,8 @@ Better metadata improves findability and trust in marketplaces.
 
 ## Suggested implementation order
 
-1. Robust stale-branch detection
-2. Safety settings (`protectedBranches`, confirmation options)
+1. ~~Robust stale-branch detection~~ ✅
+2. ~~Safety settings (`protectedBranches`, confirmation options)~~ ✅
 3. Multi-root repository selection
 4. UX summary + selection helpers
 5. Marketplace metadata and docs polish

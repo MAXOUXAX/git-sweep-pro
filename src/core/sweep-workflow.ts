@@ -1,4 +1,4 @@
-import { parseGoneBranchRefs, type SweepMode } from './sweep-logic';
+import { isProtectedBranch, parseGoneBranchRefs, type SweepMode, type SweepSettings } from './sweep-logic';
 
 export type QuickPickItemLike = {
 	readonly label: string;
@@ -12,6 +12,7 @@ type ProgressOptions = {
 
 export type SweepWorkflowDeps = {
 	readonly getWorkspaceRoot: () => string | undefined;
+	readonly getSettings: () => SweepSettings;
 	readonly output: {
 		show: (preserveFocus: boolean) => void;
 		appendLine: (line: string) => void;
@@ -31,6 +32,7 @@ export type SweepWorkflowDeps = {
 		) => PromiseLike<readonly QuickPickItemLike[] | QuickPickItemLike | undefined>;
 		showInformationMessage: (message: string) => void;
 		showErrorMessage: (message: string) => void;
+		confirm: (message: string, confirmLabel: string) => PromiseLike<boolean>;
 	};
 };
 
@@ -60,13 +62,19 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 	deps.output.appendLine(`Workspace: ${workspaceRoot}`);
 	deps.output.appendLine(`Mode: ${mode.dryRun ? 'dry-run' : 'delete'}, delete flag: ${mode.forceDelete ? '-D' : '-d'}`);
 
+	const settings = deps.getSettings();
+
 	try {
-		await deps.ui.withProgress(
-			{
-				title: 'Git Sweep Pro: Fetching and pruning remote references...',
-			},
-			() => deps.runGitCommand(['fetch', '-p'], workspaceRoot)
-		);
+		if (settings.autoFetchPrune) {
+			await deps.ui.withProgress(
+				{
+					title: 'Git Sweep Pro: Fetching and pruning remote references...',
+				},
+				() => deps.runGitCommand(['fetch', '-p'], workspaceRoot)
+			);
+		} else {
+			deps.output.appendLine('Auto fetch/prune disabled; using local ref state.');
+		}
 
 		const branchResult = await deps.runGitCommand(
 			['for-each-ref', '--format=%(refname:short)%09%(upstream:track)', 'refs/heads'],
@@ -80,7 +88,26 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			return;
 		}
 
-		const quickPickItems: QuickPickItemLike[] = goneBranches.map((branch) => ({
+		const protectedPatterns = settings.protectedBranches;
+		const candidateBranches = goneBranches.filter((branch) => !isProtectedBranch(branch, protectedPatterns));
+		const protectedBranches = goneBranches.filter((branch) => isProtectedBranch(branch, protectedPatterns));
+
+		if (protectedBranches.length > 0) {
+			deps.output.appendLine('Protected branches skipped (matched gitSweepPro.protectedBranches):');
+			for (const branch of protectedBranches) {
+				deps.output.appendLine(`- ${branch}`);
+			}
+		}
+
+		if (candidateBranches.length === 0) {
+			deps.output.appendLine('All stale branches are protected; nothing to do.');
+			deps.ui.showInformationMessage(
+				`Git Sweep Pro: All ${protectedBranches.length} stale branch(es) are protected.`
+			);
+			return;
+		}
+
+		const quickPickItems: QuickPickItemLike[] = candidateBranches.map((branch) => ({
 			label: branch,
 			picked: true,
 		}));
@@ -112,6 +139,19 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 				`Git Sweep Pro (dry run): ${branchNames.length} branch(es) would be deleted.`
 			);
 			return;
+		}
+
+		if (settings.confirmBeforeDelete) {
+			const deleteFlagLabel = mode.forceDelete ? '-D' : '-d';
+			const confirmed = await deps.ui.confirm(
+				`Delete ${branchNames.length} branch(es) with git branch ${deleteFlagLabel}? This cannot be undone.`,
+				`Delete ${branchNames.length}`
+			);
+			if (!confirmed) {
+				deps.output.appendLine('Deletion cancelled at confirmation prompt.');
+				deps.ui.showInformationMessage('Git Sweep Pro: Deletion cancelled.');
+				return;
+			}
 		}
 
 		let deletedCount = 0;

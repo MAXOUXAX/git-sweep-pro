@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { runPostPullRequestWorkflow } from '../../core/post-pull-request-workflow';
 import type { QuickPickItemLike, SweepWorkflowDeps } from '../../core/sweep-workflow';
+import { DEFAULT_SWEEP_SETTINGS, type SweepSettings } from '../../core/sweep-logic';
 
 const GONE_REFS_CMD = 'for-each-ref --format=%(refname:short)%09%(upstream:track) refs/heads';
 
@@ -13,6 +14,7 @@ type HarnessOptions = {
 	quickPickSelections?: Array<QuickPickItemLike | QuickPickItemLike[] | undefined>;
 	/** Git commands: value or array (for repeated calls, e.g. git branch -vv) */
 	git?: Record<string, GitEntry | GitEntry[]>;
+	settings?: Partial<SweepSettings>;
 };
 
 type Harness = {
@@ -49,6 +51,11 @@ function createHarness(options: HarnessOptions = {}): Harness {
 
 	const deps: SweepWorkflowDeps = {
 		getWorkspaceRoot: () => options.workspaceRoot,
+		getSettings: () => ({
+			...DEFAULT_SWEEP_SETTINGS,
+			confirmBeforeDelete: false,
+			...options.settings,
+		}),
 		output: {
 			show: () => undefined,
 			appendLine: (line) => outputLines.push(line),
@@ -83,6 +90,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 			showErrorMessage: (message) => {
 				errorMessages.push(message);
 			},
+			confirm: async () => true,
 		},
 	};
 

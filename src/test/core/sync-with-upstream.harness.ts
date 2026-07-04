@@ -1,4 +1,5 @@
 import type { QuickPickItemLike } from '../../core/sweep-workflow';
+import { DEFAULT_SWEEP_SETTINGS } from '../../core/sweep-logic';
 import type { SyncMemento, SyncWithUpstreamDeps } from '../../core/sync-with-upstream-state';
 import { MEMENTO_KEY } from '../../core/sync-with-upstream-state';
 
@@ -60,6 +61,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
 
 	const deps: SyncWithUpstreamDeps = {
 		getWorkspaceRoot: () => options.workspaceRoot,
+		getSettings: () => ({ ...DEFAULT_SWEEP_SETTINGS, confirmBeforeDelete: false }),
 		output: {
 			show: () => undefined,
 			appendLine: (line) => outputLines.push(line),
@@ -90,6 +92,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
 			},
 			showInformationMessage: (message) => infoMessages.push(message),
 			showErrorMessage: (message) => errorMessages.push(message),
+			confirm: async () => true,
 		},
 		workspaceState: {
 			get: <T>(key: string) => {

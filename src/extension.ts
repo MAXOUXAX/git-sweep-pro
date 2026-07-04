@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { runGitCommand } from './core/git-command';
 import { runPostPullRequestWorkflow } from './core/post-pull-request-workflow';
 import { runSyncWithUpstreamResumeWorkflow, runSyncWithUpstreamWorkflow, type SyncWithUpstreamDeps } from './core/sync-with-upstream-workflow';
-import { resolveSweepModeAction } from './core/sweep-logic';
+import { resolveSweepModeAction, orderModeActions, type SweepModeSetting, type SweepSettings } from './core/sweep-logic';
 import { runSweepWorkflow, type SweepWorkflowDeps } from './core/sweep-workflow';
 import { resolveWorkspaceRoot } from './core/workspace';
 
@@ -17,6 +17,16 @@ function getWorkspaceRoot(): string | undefined {
 	});
 }
 
+function getSweepSettings(): SweepSettings {
+	const config = vscode.workspace.getConfiguration('gitSweepPro');
+	return {
+		defaultMode: config.get<SweepModeSetting>('defaultMode', 'safeDelete'),
+		protectedBranches: config.get<string[]>('protectedBranches', []),
+		autoFetchPrune: config.get<boolean>('autoFetchPrune', true),
+		confirmBeforeDelete: config.get<boolean>('confirmBeforeDelete', true),
+	};
+}
+
 export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
 
@@ -26,6 +36,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 		return {
 			getWorkspaceRoot,
+			getSettings: getSweepSettings,
 			output: {
 				show: (preserveFocus) => outputChannel.show(preserveFocus),
 				appendLine: (line) => outputChannel.appendLine(line),
@@ -48,17 +59,26 @@ export function activate(context: vscode.ExtensionContext) {
 				showErrorMessage: (message) => {
 					void vscode.window.showErrorMessage(message);
 				},
+				confirm: async (message, confirmLabel) => {
+					const choice = await vscode.window.showWarningMessage(
+						message,
+						{ modal: true },
+						confirmLabel
+					);
+					return choice === confirmLabel;
+				},
 			},
 		};
 	};
 
 	const runCommand = vscode.commands.registerCommand('git-sweep-pro.run', async () => {
+		const [primary, second, third] = orderModeActions(getSweepSettings().defaultMode);
 		const action = await vscode.window.showInformationMessage(
 			'Git Sweep Pro: Choose execution mode',
 			{ modal: true },
-			'Delete (safe -d)',
-			'Delete (force -D)',
-			'Dry Run'
+			primary,
+			second,
+			third
 		);
 
 		const mode = resolveSweepModeAction(action);

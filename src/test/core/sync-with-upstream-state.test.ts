@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as path from 'node:path';
+import { DEFAULT_SWEEP_SETTINGS } from '../../core/sweep-logic';
 import {
 	clearMemento,
 	getMemento,
@@ -23,6 +24,7 @@ function createDeps(overrides: {
 
 	return {
 		getWorkspaceRoot: () => '/repo',
+		getSettings: () => ({ ...DEFAULT_SWEEP_SETTINGS, confirmBeforeDelete: false }),
 		output: { show: () => undefined, appendLine: () => undefined },
 		runGitCommand: overrides.runGitCommand ?? (async () => ({ stdout: '', stderr: '' })),
 		ui: {
@@ -30,6 +32,7 @@ function createDeps(overrides: {
 			showQuickPick: async () => undefined,
 			showInformationMessage: () => undefined,
 			showErrorMessage: () => undefined,
+			confirm: async () => true,
 		},
 		workspaceState: {
 			get: <T>(key: string) => state.get(key) as T | undefined,

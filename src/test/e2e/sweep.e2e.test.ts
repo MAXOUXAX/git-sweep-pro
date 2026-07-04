@@ -47,6 +47,7 @@ suite('E2E: sweep against a real git repository', () => {
 
 	let originalShowInformationMessage: typeof vscode.window.showInformationMessage;
 	let originalShowErrorMessage: typeof vscode.window.showErrorMessage;
+	let originalShowWarningMessage: typeof vscode.window.showWarningMessage;
 	let originalShowQuickPick: typeof vscode.window.showQuickPick;
 
 	suiteSetup(async function () {
@@ -83,6 +84,7 @@ suite('E2E: sweep against a real git repository', () => {
 
 		originalShowInformationMessage = vscode.window.showInformationMessage;
 		originalShowErrorMessage = vscode.window.showErrorMessage;
+		originalShowWarningMessage = vscode.window.showWarningMessage;
 		originalShowQuickPick = vscode.window.showQuickPick;
 	});
 
@@ -93,6 +95,9 @@ suite('E2E: sweep against a real git repository', () => {
 		}
 		if (originalShowErrorMessage) {
 			(vscode.window as { showErrorMessage: unknown }).showErrorMessage = originalShowErrorMessage;
+		}
+		if (originalShowWarningMessage) {
+			(vscode.window as { showWarningMessage: unknown }).showWarningMessage = originalShowWarningMessage;
 		}
 		if (originalShowQuickPick) {
 			(vscode.window as { showQuickPick: unknown }).showQuickPick = originalShowQuickPick;
@@ -119,6 +124,14 @@ suite('E2E: sweep against a real git repository', () => {
 		(vscode.window as { showErrorMessage: unknown }).showErrorMessage = (message: string) => {
 			errorMessages.push(message);
 			return Promise.resolve(undefined);
+		};
+		// Auto-confirm the delete confirmation modal by returning its confirm button.
+		(vscode.window as { showWarningMessage: unknown }).showWarningMessage = (
+			_message: string,
+			...rest: unknown[]
+		) => {
+			const items = rest.filter((r): r is string => typeof r === 'string');
+			return Promise.resolve(items[0]);
 		};
 		(vscode.window as { showQuickPick: unknown }).showQuickPick = (items: unknown) =>
 			Promise.resolve(items);
@@ -175,5 +188,30 @@ suite('E2E: sweep against a real git repository', () => {
 			`expected a no-stale-branches message; got ${JSON.stringify(infoMessages)}`
 		);
 		assert.deepStrictEqual(errorMessages, []);
+	});
+
+	test('never deletes a branch protected by gitSweepPro.protectedBranches', async function () {
+		this.timeout(120000);
+
+		makeGoneBranch(repoDir, 'release/1.0');
+
+		const config = vscode.workspace.getConfiguration('gitSweepPro');
+		await config.update('protectedBranches', ['release/*'], vscode.ConfigurationTarget.Workspace);
+		try {
+			await vscode.commands.executeCommand('git-sweep-pro.run');
+
+			assert.ok(
+				branchExists(repoDir, 'release/1.0'),
+				'a protected branch must never be deleted'
+			);
+			assert.ok(
+				infoMessages.some((m) => m.includes('protected')),
+				`expected a protected-branch notice; got ${JSON.stringify(infoMessages)}`
+			);
+			assert.deepStrictEqual(errorMessages, []);
+		} finally {
+			await config.update('protectedBranches', undefined, vscode.ConfigurationTarget.Workspace);
+			git(['branch', '-D', 'release/1.0'], repoDir);
+		}
 	});
 });

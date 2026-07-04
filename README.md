@@ -41,6 +41,17 @@ Safely identify and prune local branches that are gone on the remote.
 - Writes all executed git commands and results to the `Git Sweep` output channel.
 - Shows clear success and error notifications when finished.
 
+## Settings
+
+- `gitSweepPro.defaultMode` (`safeDelete` | `forceDelete` | `dryRun`, default `safeDelete`)
+	- Execution mode presented first in the `Run` command's mode picker.
+- `gitSweepPro.protectedBranches` (string[], default `[]`)
+	- Glob patterns for branches that must never be deleted (e.g. `main`, `develop`, `release/*`). `*` matches any characters and `?` matches a single character.
+- `gitSweepPro.autoFetchPrune` (boolean, default `true`)
+	- Run `git fetch -p` before detecting stale branches. Disable to operate on the local ref state only.
+- `gitSweepPro.confirmBeforeDelete` (boolean, default `true`)
+	- Show a confirmation dialog before deleting the selected branches.
+
 ## Requirements
 
 - Git must be installed and available in `PATH`.
