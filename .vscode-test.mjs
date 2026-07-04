@@ -17,6 +17,23 @@ const e2eBase = path.join(os.tmpdir(), 'gsp-e2e');
 const e2eRepo = path.join(e2eBase, 'repo');
 fs.mkdirSync(e2eRepo, { recursive: true });
 
+/*
+ * Multi-root end-to-end config: open a real .code-workspace referencing two
+ * folders so the extension has to resolve which repository to operate on. The
+ * folders and workspace file must exist before VS Code launches; the suite
+ * populates them with real git repositories in its setup hook.
+ */
+const mrBase = path.join(os.tmpdir(), 'gsp-e2e-mr');
+const mrRepoA = path.join(mrBase, 'repoA');
+const mrRepoB = path.join(mrBase, 'repoB');
+const mrWorkspaceFile = path.join(mrBase, 'multi.code-workspace');
+fs.mkdirSync(mrRepoA, { recursive: true });
+fs.mkdirSync(mrRepoB, { recursive: true });
+fs.writeFileSync(
+	mrWorkspaceFile,
+	JSON.stringify({ folders: [{ path: mrRepoA }, { path: mrRepoB }], settings: {} }, null, 2)
+);
+
 export default defineConfig([
 	{
 		label: 'unit',
@@ -35,6 +52,17 @@ export default defineConfig([
 			`--extensions-dir=${path.join(e2eBase, 'ext')}`,
 		],
 		env: { GSP_E2E_REPO: e2eRepo },
+		mocha: { timeout: 120000 },
+	},
+	{
+		label: 'e2e-mr',
+		files: 'out/test/e2e-mr/**/*.test.js',
+		workspaceFolder: mrWorkspaceFile,
+		launchArgs: [
+			`--user-data-dir=${path.join(mrBase, 'ud')}`,
+			`--extensions-dir=${path.join(mrBase, 'ext')}`,
+		],
+		env: { GSP_E2E_MR_A: mrRepoA, GSP_E2E_MR_B: mrRepoB },
 		mocha: { timeout: 120000 },
 	},
 ]);
