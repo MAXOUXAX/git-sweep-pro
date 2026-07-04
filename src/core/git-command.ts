@@ -57,11 +57,16 @@ export async function runGitCommand(
 		// The extension host has no terminal: any git command that tries to open
 		// an editor (e.g. `rebase --continue`) or prompt for credentials would
 		// fail or hang, so force git into non-interactive mode.
+		//
+		// LC_ALL=C forces English, C-locale output so machine-readable tokens we
+		// parse (e.g. `[gone]` from `for-each-ref`'s upstream:track) are stable
+		// regardless of the user's system locale or a localized git build.
 		const env: NodeJS.ProcessEnv = {
 			...process.env,
 			GIT_EDITOR: 'true',
 			GIT_SEQUENCE_EDITOR: 'true',
 			GIT_TERMINAL_PROMPT: '0',
+			LC_ALL: 'C',
 		};
 		const result = await execFn('git', args, { cwd, env });
 		if (result.stdout.trim()) {

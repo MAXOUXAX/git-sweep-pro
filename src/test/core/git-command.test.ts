@@ -114,5 +114,6 @@ suite('git-command', () => {
 		assert.strictEqual(receivedEnv?.GIT_EDITOR, 'true');
 		assert.strictEqual(receivedEnv?.GIT_SEQUENCE_EDITOR, 'true');
 		assert.strictEqual(receivedEnv?.GIT_TERMINAL_PROMPT, '0');
+		assert.strictEqual(receivedEnv?.LC_ALL, 'C');
 	});
 });
