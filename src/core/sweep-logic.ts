@@ -23,15 +23,29 @@ export function resolveSweepModeAction(action: string | undefined): SweepMode | 
 	return undefined;
 }
 
-export function parseGoneBranches(branchVvOutput: string): string[] {
-	return branchVvOutput
+/**
+ * Parses `git for-each-ref --format="%(refname:short)%09%(upstream:track)" refs/heads`
+ * output into the list of local branch names whose upstream is gone.
+ *
+ * Each line has the form `<branch-name>\t<track>`, where `<track>` is `[gone]`
+ * when the upstream has been deleted and empty or another state (e.g. `[ahead 1]`)
+ * otherwise. This structured output is stable across Git versions and locales,
+ * unlike the human-readable `git branch -vv`.
+ */
+export function parseGoneBranchRefs(forEachRefOutput: string): string[] {
+	return forEachRefOutput
 		.split('\n')
-		.map((line) => line.trim())
-		.filter((line) => line.includes(': gone]'))
 		.map((line) => {
-			const sanitized = line.replace(/^\*\s+/, '');
-			return sanitized.split(/\s+/)[0];
+			const tabIndex = line.indexOf('\t');
+			if (tabIndex < 0) {
+				return undefined;
+			}
+			const name = line.slice(0, tabIndex).trim();
+			const track = line.slice(tabIndex + 1).trim();
+			if (name.length === 0 || track !== '[gone]') {
+				return undefined;
+			}
+			return name;
 		})
-		.filter((name) => !name.startsWith('['))
-		.filter((name) => name.length > 0);
+		.filter((name): name is string => name !== undefined);
 }

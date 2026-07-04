@@ -1,78 +1,73 @@
 import * as assert from 'assert';
-import { parseGoneBranches, resolveSweepModeAction } from '../core/sweep-logic';
+import { parseGoneBranchRefs, resolveSweepModeAction } from '../core/sweep-logic';
 
 suite('Extension Test Suite', () => {
-	test('parseGoneBranches returns empty list for empty output', () => {
-		assert.deepStrictEqual(parseGoneBranches(''), []);
+	test('parseGoneBranchRefs returns empty list for empty output', () => {
+		assert.deepStrictEqual(parseGoneBranchRefs(''), []);
 	});
 
-	test('parseGoneBranches finds branches with gone upstream', () => {
+	test('parseGoneBranchRefs finds branches with gone upstream', () => {
 		const output = [
-			'  feature/one 1234567 [origin/feature/one: gone] feat one',
-			'  feature/two 1234567 [origin/feature/two: ahead 1] feat two',
-			'  hotfix/three 1234567 [origin/hotfix/three: gone] fix three',
+			'feature/one\t[gone]',
+			'feature/two\t[ahead 1]',
+			'hotfix/three\t[gone]',
 		].join('\n');
 
-		assert.deepStrictEqual(parseGoneBranches(output), ['feature/one', 'hotfix/three']);
+		assert.deepStrictEqual(parseGoneBranchRefs(output), ['feature/one', 'hotfix/three']);
 	});
 
-	test('parseGoneBranches supports current branch marker', () => {
-		const output = '* my/current 1234567 [origin/my/current: gone] active branch';
-		assert.deepStrictEqual(parseGoneBranches(output), ['my/current']);
-	});
-
-	test('parseGoneBranches ignores local-only branches without upstream', () => {
+	test('parseGoneBranchRefs ignores local-only branches without upstream', () => {
 		const output = [
-			'  local-only abcdef0 local branch with no tracking',
-			'  feature/tracked abcdef0 [origin/feature/tracked: ahead 2] tracked branch',
+			'local-only\t',
+			'feature/tracked\t[ahead 2]',
 		].join('\n');
 
-		assert.deepStrictEqual(parseGoneBranches(output), []);
+		assert.deepStrictEqual(parseGoneBranchRefs(output), []);
 	});
 
-	test('parseGoneBranches keeps parsing robust with mixed whitespace', () => {
+	test('parseGoneBranchRefs keeps parsing robust with surrounding whitespace', () => {
 		const output = [
-			'\tfeature/tabbed\t1234567\t[origin/feature/tabbed: gone]\tmsg',
-			'   feature/spaces    1234567   [origin/feature/spaces: gone]   msg',
+			'  feature/spaced  \t  [gone]  ',
+			'feature/tabbed\t[gone]',
 		].join('\n');
 
-		assert.deepStrictEqual(parseGoneBranches(output), ['feature/tabbed', 'feature/spaces']);
+		assert.deepStrictEqual(parseGoneBranchRefs(output), ['feature/spaced', 'feature/tabbed']);
 	});
 
-	test('parseGoneBranches handles unicode branch names', () => {
-		const output = '  feat/éxample 1234567 [origin/feat/éxample: gone] unicode';
-		assert.deepStrictEqual(parseGoneBranches(output), ['feat/éxample']);
+	test('parseGoneBranchRefs handles unicode branch names', () => {
+		const output = 'feat/éxample\t[gone]';
+		assert.deepStrictEqual(parseGoneBranchRefs(output), ['feat/éxample']);
 	});
 
-	test('parseGoneBranches supports branch names containing dots and dashes', () => {
-		const output = '  release/2026.02-rc1 123 [origin/release/2026.02-rc1: gone] release';
-		assert.deepStrictEqual(parseGoneBranches(output), ['release/2026.02-rc1']);
+	test('parseGoneBranchRefs supports branch names containing dots and dashes', () => {
+		const output = 'release/2026.02-rc1\t[gone]';
+		assert.deepStrictEqual(parseGoneBranchRefs(output), ['release/2026.02-rc1']);
 	});
 
-	test('parseGoneBranches does not falsely match lines without branch names', () => {
-		const output = '   [origin/no-branch: gone] malformed';
-		assert.deepStrictEqual(parseGoneBranches(output), []);
+	test('parseGoneBranchRefs does not match lines without a branch name', () => {
+		const output = '\t[gone]';
+		assert.deepStrictEqual(parseGoneBranchRefs(output), []);
 	});
 
-	test('parseGoneBranches ignores non-gone tracking states', () => {
+	test('parseGoneBranchRefs ignores non-gone tracking states', () => {
 		const output = [
-			'  feature/a 1234567 [origin/feature/a: behind 1] msg',
-			'  feature/b 1234567 [origin/feature/b: ahead 3, behind 2] msg',
-			'  feature/c 1234567 [origin/feature/c] msg',
+			'feature/a\t[behind 1]',
+			'feature/b\t[ahead 3, behind 2]',
+			'feature/c\t',
 		].join('\n');
 
-		assert.deepStrictEqual(parseGoneBranches(output), []);
+		assert.deepStrictEqual(parseGoneBranchRefs(output), []);
 	});
 
-	test('parseGoneBranches ignores empty lines and malformed entries', () => {
+	test('parseGoneBranchRefs ignores empty lines and malformed entries', () => {
 		const output = [
 			'',
 			'   ',
 			'not a branch line',
-			'  valid/branch abcdef0 [origin/valid/branch: gone] valid',
+			'valid/branch\t[gone]',
 		].join('\n');
 
-		assert.deepStrictEqual(parseGoneBranches(output), ['valid/branch']);
+		assert.deepStrictEqual(parseGoneBranchRefs(output), ['valid/branch']);
 	});
 
 	test('resolveSweepModeAction maps Dry Run action', () => {

@@ -1,6 +1,6 @@
 import { parseBranches } from './branch-list';
 import { escapeForShell } from './git-command';
-import { parseGoneBranches } from './sweep-logic';
+import { parseGoneBranchRefs } from './sweep-logic';
 import { runSweepWorkflow, type QuickPickItemLike, type SweepWorkflowDeps } from './sweep-workflow';
 
 export type PostPullRequestDeps = SweepWorkflowDeps;
@@ -27,18 +27,6 @@ async function getDefaultBranchName(runGit: (args: string[]) => Promise<{ stdout
 		return out.startsWith(prefix) ? out.slice(prefix.length) : undefined;
 	} catch {
 		return undefined;
-	}
-}
-
-/**
- * Returns true if the current branch tracks a gone remote.
- * Uses pre-fetched `git branch -avv` output; no internal git calls.
- */
-function isCurrentBranchGone(branchOutput: string, currentBranch: string): boolean {
-	try {
-		return parseGoneBranches(branchOutput).includes(currentBranch);
-	} catch {
-		return false;
 	}
 }
 
@@ -104,9 +92,10 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			() => runGit(['fetch', '-p'])
 		);
 
-		const [currentBranchResult, branchListResult] = await Promise.all([
+		const [currentBranchResult, branchListResult, goneRefsResult] = await Promise.all([
 			runGit(['rev-parse', '--abbrev-ref', 'HEAD']),
 			runGit(['branch', '-avv']),
+			runGit(['for-each-ref', '--format=%(refname:short)%09%(upstream:track)', 'refs/heads']),
 		]);
 
 		const currentBranch = currentBranchResult.stdout.trim();
@@ -122,7 +111,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		}
 
 		const defaultBranch = await getDefaultBranchName(runGit);
-		const isGone = isCurrentBranchGone(branchListResult.stdout, currentBranch);
+		const isGone = parseGoneBranchRefs(goneRefsResult.stdout).includes(currentBranch);
 
 		const quickPickItems = branchItems.map((b) => {
 			const isDefault = Boolean(defaultBranch && toLocalBranchRef(b.ref, b.isRemote) === defaultBranch);

@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import { runSweepWorkflow, type QuickPickItemLike, type SweepWorkflowDeps } from '../../core/sweep-workflow';
 import type { SweepMode } from '../../core/sweep-logic';
 
+const GONE_REFS_CMD = 'for-each-ref --format=%(refname:short)%09%(upstream:track) refs/heads';
+
 type HarnessOptions = {
 	workspaceRoot?: string;
 	quickPickSelection?: readonly QuickPickItemLike[] | undefined;
@@ -84,14 +86,14 @@ suite('sweep workflow', () => {
 			workspaceRoot: '/repo',
 			git: {
 				'fetch -p': { stdout: '' },
-				'branch -vv': { stdout: '  main 123 [origin/main] main' },
+				[GONE_REFS_CMD]: { stdout: 'main\t' },
 			},
 		});
 
 		await runSweepWorkflow(safeMode, h.deps);
 
 		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: No stale branches found.']);
-		assert.deepStrictEqual(h.commands, ['fetch -p', 'branch -vv']);
+		assert.deepStrictEqual(h.commands, ['fetch -p', GONE_REFS_CMD]);
 		assert.ok(h.outputLines.includes('No stale tracked branches found.'));
 		assert.strictEqual(h.quickPickRequests.length, 0);
 		assert.strictEqual(h.progressTitles[0], 'Git Sweep Pro: Fetching and pruning remote references...');
@@ -104,7 +106,7 @@ suite('sweep workflow', () => {
 			quickPickSelection: undefined,
 			git: {
 				'fetch -p': { stdout: '' },
-				'branch -vv': { stdout: '  stale/one 123 [origin/stale/one: gone] msg' },
+				[GONE_REFS_CMD]: { stdout: 'stale/one\t[gone]' },
 			},
 		});
 
@@ -121,7 +123,7 @@ suite('sweep workflow', () => {
 			quickPickSelection: [],
 			git: {
 				'fetch -p': { stdout: '' },
-				'branch -vv': { stdout: '  stale/one 123 [origin/stale/one: gone] msg' },
+				[GONE_REFS_CMD]: { stdout: 'stale/one\t[gone]' },
 			},
 		});
 
@@ -136,11 +138,8 @@ suite('sweep workflow', () => {
 			quickPickSelection: [{ label: 'stale/one' }, { label: 'stale/two' }],
 			git: {
 				'fetch -p': { stdout: '' },
-				'branch -vv': {
-					stdout: [
-						'  stale/one 123 [origin/stale/one: gone] msg',
-						'  stale/two 456 [origin/stale/two: gone] msg',
-					].join('\n'),
+				[GONE_REFS_CMD]: {
+					stdout: ['stale/one\t[gone]', 'stale/two\t[gone]'].join('\n'),
 				},
 			},
 		});
@@ -148,7 +147,7 @@ suite('sweep workflow', () => {
 		await runSweepWorkflow(dryMode, h.deps);
 
 		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro (dry run): 2 branch(es) would be deleted.']);
-		assert.deepStrictEqual(h.commands, ['fetch -p', 'branch -vv']);
+		assert.deepStrictEqual(h.commands, ['fetch -p', GONE_REFS_CMD]);
 		assert.ok(h.outputLines.includes('[DRY RUN] Selected branches:'));
 		assert.ok(h.outputLines.includes('- stale/one'));
 		assert.ok(h.outputLines.includes('- stale/two'));
@@ -161,11 +160,8 @@ suite('sweep workflow', () => {
 			quickPickSelection: [{ label: 'stale/one' }, { label: 'stale/two' }],
 			git: {
 				'fetch -p': { stdout: '' },
-				'branch -vv': {
-					stdout: [
-						'  stale/one 123 [origin/stale/one: gone] msg',
-						'  stale/two 456 [origin/stale/two: gone] msg',
-					].join('\n'),
+				[GONE_REFS_CMD]: {
+					stdout: ['stale/one\t[gone]', 'stale/two\t[gone]'].join('\n'),
 				},
 				'branch -d stale/one': { stdout: '' },
 				'branch -d stale/two': { stdout: '' },
@@ -186,11 +182,8 @@ suite('sweep workflow', () => {
 			quickPickSelection: [{ label: 'stale/one' }, { label: 'stale/two' }],
 			git: {
 				'fetch -p': { stdout: '' },
-				'branch -vv': {
-					stdout: [
-						'  stale/one 123 [origin/stale/one: gone] msg',
-						'  stale/two 456 [origin/stale/two: gone] msg',
-					].join('\n'),
+				[GONE_REFS_CMD]: {
+					stdout: ['stale/one\t[gone]', 'stale/two\t[gone]'].join('\n'),
 				},
 				'branch -D stale/one': { stdout: '' },
 				'branch -D stale/two': new Error('not fully merged'),
@@ -253,11 +246,8 @@ suite('sweep workflow', () => {
 			quickPickSelection: [{ label: 'stale/one' }],
 			git: {
 				'fetch -p': { stdout: '' },
-				'branch -vv': {
-					stdout: [
-						'  stale/one 123 [origin/stale/one: gone] msg',
-						'  stale/two 123 [origin/stale/two: gone] msg',
-					].join('\n'),
+				[GONE_REFS_CMD]: {
+					stdout: ['stale/one\t[gone]', 'stale/two\t[gone]'].join('\n'),
 				},
 			},
 		});

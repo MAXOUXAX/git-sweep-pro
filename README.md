@@ -5,7 +5,7 @@ Safely identify and prune local branches that are gone on the remote.
 ## What it does
 
 - Runs `git fetch -p` to prune stale remote refs.
-- Detects local tracked branches whose upstream is missing (`: gone]` in `git branch -vv`).
+- Detects local tracked branches whose upstream is missing, using structured `git for-each-ref` output (stable across Git versions and locales).
 - Protects local-only work by only targeting branches with gone upstream tracking.
 - Lets you choose safe deletion (`git branch -d`) or force deletion (`git branch -D`).
 - Supports dry-run mode (logs what would be deleted, without deleting).

@@ -1,4 +1,4 @@
-import { parseGoneBranches, type SweepMode } from './sweep-logic';
+import { parseGoneBranchRefs, type SweepMode } from './sweep-logic';
 
 export type QuickPickItemLike = {
 	readonly label: string;
@@ -68,8 +68,11 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			() => deps.runGitCommand(['fetch', '-p'], workspaceRoot)
 		);
 
-		const branchResult = await deps.runGitCommand(['branch', '-vv'], workspaceRoot);
-		const goneBranches = parseGoneBranches(branchResult.stdout);
+		const branchResult = await deps.runGitCommand(
+			['for-each-ref', '--format=%(refname:short)%09%(upstream:track)', 'refs/heads'],
+			workspaceRoot
+		);
+		const goneBranches = parseGoneBranchRefs(branchResult.stdout);
 
 		if (goneBranches.length === 0) {
 			deps.output.appendLine('No stale tracked branches found.');
