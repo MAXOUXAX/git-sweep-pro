@@ -1,40 +1,8 @@
 # FUTURE — Git Sweep Pro roadmap
 
-This roadmap now follows a **tests-first** strategy.
+This roadmap follows a **tests-first** strategy.
 
-## 0) Baseline quality gate (completed)
-
-### Status
-✅ Completed in this iteration.
-
-### Delivered
-- Comprehensive unit test suite for:
-  - stale-branch parsing logic
-  - execution mode resolution logic (`Dry Run`, safe delete, force delete)
-  - malformed input and whitespace/unicode edge cases
-
-### Why this matters
-Future refactors (hardening command execution, parsing upgrades, UX changes) can now be implemented with confidence and protected against regressions.
-
----
-
-## 1) Robust stale-branch detection
-
-### Why
-`git branch -vv` is human-readable output and can vary by Git/version/localization. Structured refs are more stable to parse.
-
-### Proposed work
-- Migrate branch discovery to structured Git ref output.
-- Keep behavior: only tracked branches with upstream marked as gone are candidates.
-- Add/extend tests for structured parsing edge cases.
-
-### Success criteria
-- Detection is format-stable and deterministic.
-- Existing expected behavior remains unchanged for users.
-
----
-
-## 2) Multi-root workspace support
+## 1) Multi-root workspace support
 
 ### Why
 In a multi-folder workspace, users should explicitly choose the repository to clean.
@@ -50,25 +18,7 @@ In a multi-folder workspace, users should explicitly choose the repository to cl
 
 ---
 
-## 3) Safety controls via settings
-
-### Status
-✅ Completed.
-
-### Delivered
-Added extension settings:
-- `gitSweepPro.defaultMode`: `dryRun | safeDelete | forceDelete`
-- `gitSweepPro.protectedBranches`: glob patterns (e.g. `main`, `develop`, `release/*`)
-- `gitSweepPro.autoFetchPrune`: boolean
-- `gitSweepPro.confirmBeforeDelete`: boolean
-
-Protected branches are filtered out of deletion candidates in the sweep and
-post-pull-request flows, glob matching lives in a pure, unit-tested helper, and
-the behaviour is covered by unit tests plus a real E2E protected-branch case.
-
----
-
-## 4) UX refinements
+## 2) UX refinements
 
 ### Why
 Small UX upgrades make destructive operations feel more trustworthy.
@@ -93,7 +43,7 @@ Small UX upgrades make destructive operations feel more trustworthy.
 
 ---
 
-## 5) Manifest and marketplace discoverability
+## 3) Manifest and marketplace discoverability
 
 ### Why
 Better metadata improves findability and trust in marketplaces.
@@ -117,11 +67,9 @@ Better metadata improves findability and trust in marketplaces.
 
 ## Suggested implementation order
 
-1. ~~Robust stale-branch detection~~ ✅
-2. ~~Safety settings (`protectedBranches`, confirmation options)~~ ✅
-3. Multi-root repository selection
-4. UX summary + selection helpers
-5. Marketplace metadata and docs polish
+1. Multi-root repository selection
+2. UX summary + selection helpers
+3. Marketplace metadata and docs polish
 
 ---
 
