@@ -1,12 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const summaryPath = path.resolve('coverage', 'coverage-summary.json');
-const threshold = 85;
+const coverageDir = process.argv[2] ?? 'coverage';
+const threshold = Number(process.argv[3] ?? 85);
+
+const summaryPath = path.resolve(coverageDir, 'coverage-summary.json');
 
 if (!fs.existsSync(summaryPath)) {
 	console.error(`Coverage summary not found at: ${summaryPath}`);
-	console.error('Run `npm run test:coverage` before checking coverage.');
+	console.error('Run the matching coverage script before checking coverage.');
 	process.exit(1);
 }
 
@@ -33,6 +35,7 @@ const metrics = {
 };
 
 console.log('Coverage summary:');
+console.log(`- Directory: ${coverageDir}`);
 console.log(`- Lines: ${metrics.lines}%`);
 console.log(`- Statements: ${metrics.statements}%`);
 console.log(`- Functions: ${metrics.functions}%`);
