@@ -4,6 +4,16 @@ All notable changes to the "git-sweep-pro" extension are documented in this file
 
 This project adheres to [Semantic Versioning](https://semver.org) and the changelog is generated automatically from [Conventional Commits](https://www.conventionalcommits.org).
 
+# [1.2.0](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.1.0...v1.2.0) (2026-07-04)
+
+
+### Features
+
+* add safety settings (protected branches, confirm, default mode, auto fetch/prune) ([9547129](https://github.com/MAXOUXAX/git-sweep-pro/commit/95471292b4a91db087fe1502e126b4d91b013507))
+* force-delete squash/rebase-merged branches that safe delete refuses ([6135465](https://github.com/MAXOUXAX/git-sweep-pro/commit/6135465d0a3c5c56de22f4a0b7b6257c12688449))
+* multi-root workspace support with repository selection ([8bd80e6](https://github.com/MAXOUXAX/git-sweep-pro/commit/8bd80e66eb05dba420a166d3a69906cd2d6951d4))
+* **sweep:** add summary preview, picker quick actions, and detailed outcome ([adebe5a](https://github.com/MAXOUXAX/git-sweep-pro/commit/adebe5a7fed679d260a4048894caa6cfda09d56c))
+
 # [1.1.0](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.0.1...v1.1.0) (2026-07-04)
 
 
