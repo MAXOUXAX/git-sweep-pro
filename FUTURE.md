@@ -27,32 +27,9 @@ Small UX upgrades make destructive operations feel more trustworthy.
 
 ---
 
-## 2) Manifest and marketplace discoverability
-
-### Why
-Better metadata improves findability and trust in marketplaces.
-
-### Proposed work
-- Improve `package.json` metadata:
-  - `keywords` (git, branch, cleanup, prune, scm)
-  - richer command titles/descriptions
-  - category review
-- Expand `README.md` with:
-  - examples/screenshots
-  - safety model explanation
-  - troubleshooting section
-- Keep `CHANGELOG.md` strictly versioned and meaningful.
-
-### Success criteria
-- Clear value proposition in first glance.
-- Easier discovery by relevant search terms.
-
----
-
 ## Suggested implementation order
 
 1. UX summary + selection helpers
-2. Marketplace metadata and docs polish
 
 ---
 

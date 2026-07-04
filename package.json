@@ -1,19 +1,45 @@
 {
   "name": "git-sweep-pro",
   "displayName": "Git Sweep Pro",
-  "description": "Safely identify and prune local branches that are gone on the remote.",
+  "description": "Safely detect and prune local Git branches whose remote upstream is gone — with dry-run previews, protected branches, and upstream sync.",
   "repository": {
     "url": "git+https://github.com/MAXOUXAX/git-sweep-pro",
     "type": "git"
   },
+  "homepage": "https://github.com/MAXOUXAX/git-sweep-pro#readme",
+  "bugs": {
+    "url": "https://github.com/MAXOUXAX/git-sweep-pro/issues"
+  },
+  "license": "GPL-3.0-or-later",
   "publisher": "MAXOUXAX",
   "icon": "assets/icon.png",
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
   "version": "1.1.0",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
+    "SCM Providers",
     "Other"
+  ],
+  "keywords": [
+    "git",
+    "branch",
+    "branches",
+    "prune",
+    "cleanup",
+    "stale branches",
+    "gone upstream",
+    "remote tracking",
+    "delete branch",
+    "scm",
+    "rebase",
+    "sync upstream",
+    "force-with-lease",
+    "housekeeping"
   ],
   "activationEvents": [],
   "main": "./dist/extension.js",
@@ -21,23 +47,33 @@
     "commands": [
       {
         "command": "git-sweep-pro.run",
-        "title": "Git Sweep Pro: Run"
+        "category": "Git Sweep Pro",
+        "title": "Sweep Stale Branches",
+        "shortTitle": "Sweep Branches"
       },
       {
         "command": "git-sweep-pro.dryRun",
-        "title": "Git Sweep Pro: Dry Run"
+        "category": "Git Sweep Pro",
+        "title": "Preview Stale Branches (Dry Run)",
+        "shortTitle": "Preview Sweep"
       },
       {
         "command": "git-sweep-pro.postPullRequest",
-        "title": "Git Sweep Pro: Post Pull Request"
+        "category": "Git Sweep Pro",
+        "title": "Post Pull Request Cleanup",
+        "shortTitle": "Post-PR Cleanup"
       },
       {
         "command": "git-sweep-pro.syncWithUpstream",
-        "title": "Git Sweep Pro: Sync With Upstream"
+        "category": "Git Sweep Pro",
+        "title": "Sync Branch With Upstream",
+        "shortTitle": "Sync Upstream"
       },
       {
         "command": "git-sweep-pro.syncWithUpstreamResume",
-        "title": "Git Sweep Pro: Sync With Upstream (Resume)"
+        "category": "Git Sweep Pro",
+        "title": "Resume Sync With Upstream",
+        "shortTitle": "Resume Sync"
       }
     ],
     "configuration": {
