@@ -19,7 +19,7 @@ export type SyncMemento = {
 export type SyncWithUpstreamDeps = SweepWorkflowDeps & {
 	readonly workspaceState: {
 		get: <T>(key: string) => T | undefined;
-		update: (key: string, value: unknown) => Thenable<void>;
+		update: (key: string, value: unknown) => PromiseLike<void>;
 	};
 	readonly fileExists: (filePath: string) => boolean;
 	readonly readFileUtf8: (filePath: string) => string;

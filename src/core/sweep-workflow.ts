@@ -12,6 +12,39 @@ type ProgressOptions = {
 	readonly title: string;
 };
 
+export type QuickPickOptionsLike = {
+	readonly canPickMany: boolean;
+	readonly ignoreFocusOut: boolean;
+	readonly matchOnDescription: boolean;
+	readonly title: string;
+	readonly placeHolder: string;
+};
+
+/**
+ * Everything a workflow needs from its front end. Implemented by the VS Code
+ * extension, the CLI's terminal prompts, and the CLI's RPC bridge.
+ */
+export type WorkflowUi = {
+	withProgress: <T>(options: ProgressOptions, task: () => Promise<T>) => PromiseLike<T>;
+	showQuickPick: (
+		items: QuickPickItemLike[],
+		options: QuickPickOptionsLike
+	) => PromiseLike<readonly QuickPickItemLike[] | QuickPickItemLike | undefined>;
+	/**
+	 * Shows a multi-select branch picker with quick-action buttons (select all,
+	 * clear all, invert selection). Resolves to the labels of the selected
+	 * branches, or `undefined` when the picker was dismissed.
+	 */
+	pickBranches: (options: {
+		readonly items: readonly SelectableBranch[];
+		readonly title: string;
+		readonly placeHolder: string;
+	}) => PromiseLike<readonly string[] | undefined>;
+	showInformationMessage: (message: string) => void;
+	showErrorMessage: (message: string) => void;
+	confirm: (message: string, confirmLabel: string) => PromiseLike<boolean>;
+};
+
 export type SweepWorkflowDeps = {
 	readonly getWorkspaceRoot: () => string | undefined;
 	readonly getSettings: () => SweepSettings;
@@ -20,32 +53,7 @@ export type SweepWorkflowDeps = {
 		appendLine: (line: string) => void;
 	};
 	readonly runGitCommand: (args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
-	readonly ui: {
-		withProgress: <T>(options: ProgressOptions, task: () => Promise<T>) => PromiseLike<T>;
-		showQuickPick: (
-			items: QuickPickItemLike[],
-			options: {
-				readonly canPickMany: boolean;
-				readonly ignoreFocusOut: boolean;
-				readonly matchOnDescription: boolean;
-				readonly title: string;
-				readonly placeHolder: string;
-			}
-		) => PromiseLike<readonly QuickPickItemLike[] | QuickPickItemLike | undefined>;
-		/**
-		 * Shows a multi-select branch picker with quick-action buttons (select all,
-		 * clear all, invert selection). Resolves to the labels of the selected
-		 * branches, or `undefined` when the picker was dismissed.
-		 */
-		pickBranches: (options: {
-			readonly items: readonly SelectableBranch[];
-			readonly title: string;
-			readonly placeHolder: string;
-		}) => PromiseLike<readonly string[] | undefined>;
-		showInformationMessage: (message: string) => void;
-		showErrorMessage: (message: string) => void;
-		confirm: (message: string, confirmLabel: string) => PromiseLike<boolean>;
-	};
+	readonly ui: WorkflowUi;
 };
 
 /** Narrows a single-select quick pick result to the picked item (or undefined when dismissed). */
