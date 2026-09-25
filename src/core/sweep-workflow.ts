@@ -1,5 +1,13 @@
 import { describeGitFailure, toErrorMessage } from './errors';
-import { GONE_REFS_ARGS, isNotFullyMergedError, isProtectedBranch, parseGoneBranchRefs, type SweepMode, type SweepSettings } from './sweep-logic';
+import {
+	GONE_REFS_ARGS,
+	isNotFullyMergedError,
+	isProtectedBranch,
+	parseLocalBranchRefs,
+	type LocalBranchRef,
+	type SweepMode,
+	type SweepSettings,
+} from './sweep-logic';
 import { formatSweepOutcome, formatSweepSummary, type SelectableBranch } from './sweep-selection';
 
 export type QuickPickItemLike = {
@@ -85,11 +93,16 @@ export type StaleBranches = {
 	readonly stale: string[];
 	/** Branches whose upstream is gone but that match a protected pattern. */
 	readonly protected: string[];
+	/** The current branch, when its upstream is gone: it cannot be deleted from here. */
+	readonly current: string | undefined;
+	/** Worktree path of each stale branch checked out in another worktree. */
+	readonly worktrees: ReadonlyMap<string, string>;
 };
 
 /**
- * Fetches and prunes (unless disabled in the settings), then finds the local
- * branches whose upstream is gone, split by the protected-branch patterns.
+ * Fetches, prunes remote references and missing worktrees (unless disabled in
+ * the settings), then finds the local branches whose upstream is gone, split
+ * by the protected-branch patterns. The current branch is set apart.
  */
 export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkflowDeps): Promise<StaleBranches> {
 	const settings = deps.getSettings();
@@ -100,13 +113,25 @@ export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkfl
 			},
 			() => deps.runGitCommand(['fetch', '-p'], workspaceRoot)
 		);
+		// Forget worktrees whose directory no longer exists: until then Git
+		// treats their branches as checked out and refuses to delete them.
+		await deps.runGitCommand(['worktree', 'prune'], workspaceRoot);
 	} else {
 		deps.output.appendLine('Auto fetch/prune disabled; using local ref state.');
 	}
 
-	const gone = parseGoneBranchRefs((await deps.runGitCommand([...GONE_REFS_ARGS], workspaceRoot)).stdout);
-	const isProtected = (branch: string) => isProtectedBranch(branch, settings.protectedBranches);
-	return { stale: gone.filter((branch) => !isProtected(branch)), protected: gone.filter(isProtected) };
+	const gone = parseLocalBranchRefs((await deps.runGitCommand([...GONE_REFS_ARGS], workspaceRoot)).stdout).filter(
+		(ref) => ref.gone
+	);
+	const isProtected = (ref: LocalBranchRef) => isProtectedBranch(ref.name, settings.protectedBranches);
+	const deletable = gone.filter((ref) => !isProtected(ref));
+	const others = deletable.filter((ref) => !ref.isCurrent);
+	return {
+		stale: others.map((ref) => ref.name),
+		protected: gone.filter(isProtected).map((ref) => ref.name),
+		current: deletable.find((ref) => ref.isCurrent)?.name,
+		worktrees: new Map(others.flatMap((ref) => (ref.worktreePath ? [[ref.name, ref.worktreePath] as const] : []))),
+	};
 }
 
 function describeDeleteFlag(mode: SweepMode): '-d' | '-D' {
@@ -128,9 +153,14 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 	const settings = deps.getSettings();
 
 	try {
-		const { stale: candidateBranches, protected: protectedBranches } = await findStaleBranches(workspaceRoot, deps);
+		const {
+			stale: candidateBranches,
+			protected: protectedBranches,
+			current,
+			worktrees: worktreeOf,
+		} = await findStaleBranches(workspaceRoot, deps);
 
-		if (candidateBranches.length === 0 && protectedBranches.length === 0) {
+		if (candidateBranches.length === 0 && protectedBranches.length === 0 && current === undefined) {
 			deps.output.appendLine('No stale tracked branches found.');
 			deps.ui.showInformationMessage('No stale branches found.');
 			return 'ok';
@@ -143,16 +173,29 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			}
 		}
 
+		const currentSkipped = current === undefined ? undefined : `"${current}" is stale, but it is the current branch, so it was skipped. Switch to another branch to delete it.`;
+		if (currentSkipped) {
+			deps.output.appendLine(currentSkipped);
+		}
+
 		if (candidateBranches.length === 0) {
+			if (currentSkipped) {
+				deps.ui.showInformationMessage(currentSkipped);
+				return 'ok';
+			}
 			deps.output.appendLine('All stale branches are protected; nothing to do.');
 			deps.ui.showInformationMessage(`All ${protectedBranches.length} stale branch(es) are protected.`);
 			return 'ok';
 		}
 
-		const quickPickItems: SelectableBranch[] = candidateBranches.map((branch) => ({
-			label: branch,
-			picked: true,
-		}));
+		// Branches living in another worktree are offered but not pre-selected:
+		// deleting them also removes that worktree's directory.
+		const quickPickItems: SelectableBranch[] = candidateBranches.map((branch) => {
+			const worktree = worktreeOf.get(branch);
+			return worktree
+				? { label: branch, picked: false, description: `checked out in worktree ${worktree}` }
+				: { label: branch, picked: true };
+		});
 
 		const selected = await deps.ui.pickBranches({
 			items: quickPickItems,
@@ -168,13 +211,15 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 		deps.output.appendLine(`${mode.dryRun ? '[DRY RUN]' : '[DELETE]'} Selected branches:`);
 		for (const branch of branchNames) {
-			deps.output.appendLine(`- ${branch}`);
+			const worktree = worktreeOf.get(branch);
+			deps.output.appendLine(worktree ? `- ${branch} (removes worktree ${worktree})` : `- ${branch}`);
 		}
 
 		const summary = formatSweepSummary({
 			totalDetected: candidateBranches.length + protectedBranches.length,
 			protectedCount: protectedBranches.length,
 			selectedCount: branchNames.length,
+			worktreeCount: branchNames.filter((branch) => worktreeOf.has(branch)).length,
 			mode,
 		});
 		deps.output.appendLine('Summary:');
@@ -205,6 +250,18 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		const failedBranches: string[] = [];
 
 		for (const branch of branchNames) {
+			const worktree = worktreeOf.get(branch);
+			if (worktree) {
+				try {
+					// Without --force, Git refuses when the worktree has changes or is locked.
+					await deps.runGitCommand(['worktree', 'remove', worktree], workspaceRoot);
+					deps.output.appendLine(`Removed worktree ${worktree}`);
+				} catch (error) {
+					failedBranches.push(branch);
+					deps.output.appendLine(`[worktree-not-removed] ${branch}: could not remove worktree ${worktree}: ${toErrorMessage(error)}`);
+					continue;
+				}
+			}
 			try {
 				await deps.runGitCommand(['branch', deleteFlag, branch], workspaceRoot);
 				deletedCount += 1;

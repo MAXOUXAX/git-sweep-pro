@@ -2,11 +2,14 @@ export type BranchItem = {
 	readonly label: string;
 	readonly ref: string;
 	readonly isRemote: boolean;
+	/** Local branch checked out in another worktree (it cannot be checked out here). */
+	readonly inOtherWorktree?: boolean;
 };
 
 /**
  * Parses `git branch -a` output into local and remote branch items.
- * Local branches: "  feature/foo" or "* main"
+ * Local branches: "  feature/foo", "* main" (current, excluded) or
+ * "+ feature/bar" (checked out in another worktree).
  * Remote branches: "  remotes/origin/feature/bar"
  */
 export function parseBranches(branchOutput: string): BranchItem[] {
@@ -19,8 +22,9 @@ export function parseBranches(branchOutput: string): BranchItem[] {
 
 	for (const line of lines) {
 		const isCurrent = line.startsWith('*');
-		const name = line.replace(/^\*\s+/, '').trim();
-		if (!name || name === 'HEAD') {
+		const inOtherWorktree = line.startsWith('+');
+		const name = line.replace(/^[*+]\s+/, '').trim();
+		if (!name || name === 'HEAD' || name.startsWith('(')) {
 			continue;
 		}
 
@@ -40,6 +44,7 @@ export function parseBranches(branchOutput: string): BranchItem[] {
 				label: name,
 				ref: name,
 				isRemote: false,
+				...(inOtherWorktree && { inOtherWorktree: true }),
 			});
 		}
 	}
@@ -72,4 +77,14 @@ export function branchPickLabel(item: BranchItem): string {
 /** Finds the branch whose {@link branchPickLabel} matches a picked label. */
 export function findBranchByPickLabel(items: readonly BranchItem[], label: string): BranchItem | undefined {
 	return items.find((item) => branchPickLabel(item) === label);
+}
+
+/**
+ * The local branch in another worktree that `item` resolves to, if any: the
+ * item itself, or for a remote ref ("origin/main") the local branch of the
+ * same name. Such a branch cannot be checked out here.
+ */
+export function findOtherWorktreeBranch(items: readonly BranchItem[], item: BranchItem): BranchItem | undefined {
+	const local = localBranchName(item);
+	return items.find((candidate) => !candidate.isRemote && candidate.inOtherWorktree && candidate.ref === local);
 }

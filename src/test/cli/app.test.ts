@@ -57,7 +57,12 @@ suite('cli app (real git)', function () {
 
 		const json = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['list', '--json', '--no-fetch'], json), EXIT.ok);
-		assert.deepStrictEqual(JSON.parse(json.out.join('')), { stale: ['feature/a', 'release/1'], protected: [] });
+		assert.deepStrictEqual(JSON.parse(json.out.join('')), {
+			stale: ['feature/a', 'release/1'],
+			protected: [],
+			current: null,
+			worktrees: {},
+		});
 
 		const clean = createFakeIo(fx.repo);
 		git(['branch', '-D', 'feature/a', 'release/1'], fx.repo);
@@ -175,5 +180,134 @@ suite('cli app (real git)', function () {
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['list', '--rpc', '--json'], io), EXIT.ok);
 		assert.ok(io.out.some((line) => line.startsWith('{"type":"log","line":"$ git')));
+	});
+
+	suite('worktrees', () => {
+		const addWorktree = (branch: string): string => {
+			const dir = path.join(fx.dir, branch.replace(/\//g, '-'));
+			git(['worktree', 'add', '-q', dir, branch], fx.repo);
+			return dir;
+		};
+
+		test('sweep removes a clean worktree before deleting its stale branch', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+
+			// Not pre-selected: the user explicitly picks it (index 0).
+			const { prompter } = createFakePrompter({ multiselect: [0], confirm: true });
+			const io = { ...createFakeIo(fx.repo, { interactive: true }), loadPrompter: async () => prompter };
+			assert.strictEqual(await runCli([], io), EXIT.ok);
+
+			assert.ok(!fs.existsSync(wt), 'worktree directory removed');
+			assert.ok(!branchExists(fx.repo, 'feature/wt'));
+		});
+
+		test('list shows the worktree of a stale branch and the stale current branch', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			makeGoneBranch(fx.repo, 'feature/here');
+			const wt = addWorktree('feature/wt');
+			git(['checkout', '-q', 'feature/here'], fx.repo);
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['list', '--no-fetch'], io), EXIT.ok);
+			const realWt = fs.realpathSync(wt);
+			assert.deepStrictEqual(io.out.join('').split('\n').filter(Boolean), [
+				`feature/wt (worktree ${realWt})`,
+				'feature/here (current branch)',
+			]);
+
+			const json = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['list', '--json', '--no-fetch'], json), EXIT.ok);
+			assert.deepStrictEqual(JSON.parse(json.out.join('')), {
+				stale: ['feature/wt'],
+				protected: [],
+				current: 'feature/here',
+				worktrees: { 'feature/wt': realWt },
+			});
+		});
+
+		test('--yes never removes a worktree on its own', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+
+			assert.strictEqual(await runCli(['--yes'], createFakeIo(fx.repo)), EXIT.ok);
+			assert.ok(fs.existsSync(wt));
+			assert.ok(branchExists(fx.repo, 'feature/wt'));
+		});
+
+		test('a worktree with uncommitted changes is kept, and so is its branch', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+			fs.writeFileSync(path.join(wt, 'wip.txt'), 'work in progress\n');
+
+			const { prompter } = createFakePrompter({ multiselect: [0], confirm: true });
+			const io = { ...createFakeIo(fx.repo, { interactive: true }), loadPrompter: async () => prompter };
+			assert.strictEqual(await runCli([], io), EXIT.failed);
+			assert.ok(fs.existsSync(path.join(wt, 'wip.txt')));
+			assert.ok(branchExists(fx.repo, 'feature/wt'));
+		});
+
+		test('branches of worktrees whose directory was deleted are swept', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			fs.rmSync(addWorktree('feature/wt'), { recursive: true, force: true });
+
+			assert.strictEqual(await runCli(['--yes'], createFakeIo(fx.repo)), EXIT.ok);
+			assert.ok(!branchExists(fx.repo, 'feature/wt'));
+			assert.strictEqual(git(['worktree', 'list', '--porcelain'], fx.repo).match(/^worktree /gm)?.length, 1);
+		});
+
+		test('sweep run from a linked worktree skips the branch checked out there', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			makeGoneBranch(fx.repo, 'feature/other');
+			const wt = addWorktree('feature/wt');
+
+			assert.strictEqual(await runCli(['--yes'], createFakeIo(wt)), EXIT.ok);
+			assert.ok(branchExists(fx.repo, 'feature/wt'));
+			assert.ok(!branchExists(fx.repo, 'feature/other'));
+		});
+
+		test('post-pr in a linked worktree detaches at the default branch and deletes the merged one', async () => {
+			makeGoneBranch(fx.repo, 'feature/done');
+			const wt = addWorktree('feature/done');
+
+			const io = createFakeIo(wt);
+			assert.strictEqual(await runCli(['post-pr', '--yes'], io), EXIT.ok, io.err.join(''));
+			assert.strictEqual(git(['rev-parse', '--abbrev-ref', 'HEAD'], wt).trim(), 'HEAD', 'detached');
+			assert.strictEqual(git(['rev-parse', 'HEAD'], wt).trim(), git(['rev-parse', 'origin/main'], fx.repo).trim());
+			assert.ok(!branchExists(fx.repo, 'feature/done'));
+			assert.strictEqual(git(['rev-parse', '--abbrev-ref', 'HEAD'], fx.repo).trim(), 'main', 'main worktree untouched');
+		});
+
+		test('sync in a linked worktree rebases onto main checked out in the main worktree', async () => {
+			git(['branch', 'feature/sync'], fx.repo);
+			git(['push', '-q', '-u', 'origin', 'feature/sync'], fx.repo);
+			commitFile(fx.repo, 'main.txt', 'main\n', 'main moves on');
+			const wt = addWorktree('feature/sync');
+			commitFile(wt, 'feature.txt', 'feature\n', 'feature work');
+
+			const io = createFakeIo(wt);
+			assert.strictEqual(await runCli(['sync', 'main'], io), EXIT.ok, io.err.join(''));
+			assert.strictEqual(git(['merge-base', 'main', 'feature/sync'], wt).trim(), git(['rev-parse', 'main'], wt).trim());
+			assert.strictEqual(git(['rev-parse', '--abbrev-ref', 'HEAD'], fx.repo).trim(), 'main');
+		});
+
+		test('a paused sync is tracked per worktree', async () => {
+			git(['branch', 'feature/sync'], fx.repo);
+			commitFile(fx.repo, 'shared.txt', 'main\n', 'main change');
+			const wt = addWorktree('feature/sync');
+			commitFile(wt, 'shared.txt', 'feature\n', 'feature change');
+			git(['push', '-q', '-u', 'origin', 'feature/sync'], wt);
+
+			assert.strictEqual(await runCli(['sync', 'main'], createFakeIo(wt)), EXIT.paused);
+			const wtGitDir = git(['rev-parse', '--absolute-git-dir'], wt).trim();
+			assert.ok(fs.existsSync(stateFilePath(wtGitDir)));
+			const mainGitDir = git(['rev-parse', '--absolute-git-dir'], fx.repo).trim();
+			assert.ok(!fs.existsSync(stateFilePath(mainGitDir)), 'the main worktree has nothing to resume');
+
+			fs.writeFileSync(path.join(wt, 'shared.txt'), 'resolved\n');
+			git(['add', 'shared.txt'], wt);
+			assert.strictEqual(await runCli(['resume'], createFakeIo(wt)), EXIT.ok);
+			assert.ok(!fs.existsSync(stateFilePath(wtGitDir)));
+		});
 	});
 });

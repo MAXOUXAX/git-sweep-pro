@@ -475,4 +475,26 @@ suite('sync-with-upstream workflow', () => {
 			assert.strictEqual(tempBranchNameFor('origin/main'), tempBranchNameFor('origin/main'));
 		});
 	});
+
+	suite('worktrees', () => {
+		test('rebases onto a local upstream checked out in another worktree without checking it out', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo/wt',
+				fileExists: fileExistsNoRebase,
+				quickPickSelection: { label: 'main' },
+				git: {
+					...baseGitForSync,
+					'branch --no-column -a': { stdout: ['* feature/my-branch', '+ main', '  remotes/origin/main'].join('\n') },
+				},
+			});
+
+			await runSyncWithUpstreamWorkflow(h.deps);
+
+			assert.ok(!h.commands.includes('checkout main'), 'main cannot be checked out in this worktree');
+			assert.ok(!h.commands.some((cmd) => cmd.startsWith('pull')));
+			assert.ok(h.commands.includes('rebase main'));
+			assert.ok(h.outputLines.includes(syncMessages.infoUpstreamInOtherWorktree('main')));
+			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedWith('feature/my-branch', 'main')]);
+		});
+	});
 });

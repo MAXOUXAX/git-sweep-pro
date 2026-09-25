@@ -47,6 +47,12 @@ async function prepareUpstreamForRebase(
 		return tempBranch;
 	}
 
+	if (targetItem.inOtherWorktree) {
+		// It cannot be checked out (and so pulled) here: rebase onto it as it is.
+		deps.output.appendLine(syncMessages.infoUpstreamInOtherWorktree(upstreamRef));
+		return upstreamRef;
+	}
+
 	await deps.ui.withProgress(
 		{ title: syncMessages.checkingOut(upstreamRef) },
 		() => runGit(['checkout', upstreamRef])

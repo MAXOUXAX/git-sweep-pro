@@ -56,38 +56,57 @@ export function resolveSweepModeAction(action: string | undefined): SweepMode | 
 	return setting ? resolveModeFromSetting(setting) : undefined;
 }
 
-/** `git for-each-ref` arguments whose output {@link parseGoneBranchRefs} understands. */
+/** `git for-each-ref` arguments whose output {@link parseLocalBranchRefs} understands. */
 export const GONE_REFS_ARGS: readonly string[] = [
 	'for-each-ref',
-	'--format=%(refname:short)%09%(upstream:track)',
+	'--format=%(refname:short)%09%(upstream:track)%09%(HEAD)%09%(worktreepath)',
 	'refs/heads',
 ];
 
+export type LocalBranchRef = {
+	readonly name: string;
+	/** The upstream tracking branch was deleted (`[gone]`). */
+	readonly gone: boolean;
+	/** Checked out in the worktree the command runs in. */
+	readonly isCurrent: boolean;
+	/** Worktree where the branch is checked out (this one or another), if any. */
+	readonly worktreePath: string | undefined;
+};
+
 /**
- * Parses `git for-each-ref --format="%(refname:short)%09%(upstream:track)" refs/heads`
- * output into the list of local branch names whose upstream is gone.
+ * Parses `git for-each-ref` output produced with {@link GONE_REFS_ARGS}.
  *
- * Each line has the form `<branch-name>\t<track>`, where `<track>` is `[gone]`
- * when the upstream has been deleted and empty or another state (e.g. `[ahead 1]`)
- * otherwise. This structured output is stable across Git versions and locales,
- * unlike the human-readable `git branch -vv`.
+ * Each line has the form `<name>\t<track>\t<HEAD>\t<worktreepath>`, where
+ * `<track>` is `[gone]` once the upstream has been deleted, `<HEAD>` is `*`
+ * for the branch checked out here, and `<worktreepath>` is set for branches
+ * checked out in any worktree. This structured output is stable across Git
+ * versions and locales, unlike the human-readable `git branch -vv`. Trailing
+ * fields may be missing.
  */
-export function parseGoneBranchRefs(forEachRefOutput: string): string[] {
+export function parseLocalBranchRefs(forEachRefOutput: string): LocalBranchRef[] {
 	return forEachRefOutput
 		.split('\n')
-		.map((line) => {
-			const tabIndex = line.indexOf('\t');
-			if (tabIndex < 0) {
+		.map((line): LocalBranchRef | undefined => {
+			const [rawName, track = '', head = '', worktreePath = ''] = line.split('\t');
+			const name = rawName.trim();
+			if (name.length === 0 || line.indexOf('\t') < 0) {
 				return undefined;
 			}
-			const name = line.slice(0, tabIndex).trim();
-			const track = line.slice(tabIndex + 1).trim();
-			if (name.length === 0 || track !== '[gone]') {
-				return undefined;
-			}
-			return name;
+			return {
+				name,
+				gone: track.trim() === '[gone]',
+				isCurrent: head.trim() === '*',
+				worktreePath: worktreePath.trim() || undefined,
+			};
 		})
-		.filter((name): name is string => name !== undefined);
+		.filter((ref): ref is LocalBranchRef => ref !== undefined);
+}
+
+/** Names of the local branches whose upstream is gone (see {@link parseLocalBranchRefs}). */
+export function parseGoneBranchRefs(forEachRefOutput: string): string[] {
+	return parseLocalBranchRefs(forEachRefOutput)
+		.filter((ref) => ref.gone)
+		.map((ref) => ref.name);
 }
 
 /**

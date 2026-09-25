@@ -128,14 +128,21 @@ async function runCommand(options: CliOptions, workspaceRoot: string, deps: Swee
 /** `list`: prints stale branches without touching them (`--json` for scripts). */
 async function runList(root: string, deps: SweepWorkflowDeps, options: CliOptions, io: CliIo): Promise<WorkflowOutcome> {
 	try {
-		const { stale, protected: protectedStale } = await findStaleBranches(root, deps);
+		const { stale, protected: protectedStale, current, worktrees } = await findStaleBranches(root, deps);
 
 		if (options.json) {
-			io.stdout(`${JSON.stringify({ stale, protected: protectedStale }, null, 2)}\n`);
-		} else if (stale.length === 0 && protectedStale.length === 0) {
+			const json = { stale, protected: protectedStale, current: current ?? null, worktrees: Object.fromEntries(worktrees) };
+			io.stdout(`${JSON.stringify(json, null, 2)}\n`);
+		} else if (stale.length === 0 && protectedStale.length === 0 && current === undefined) {
 			io.stderr('No stale branches found.\n');
 		} else {
-			stale.forEach((branch) => io.stdout(`${branch}\n`));
+			stale.forEach((branch) => {
+				const worktree = worktrees.get(branch);
+				io.stdout(worktree ? `${branch} (worktree ${worktree})\n` : `${branch}\n`);
+			});
+			if (current !== undefined) {
+				io.stdout(`${current} (current branch)\n`);
+			}
 			protectedStale.forEach((branch) => io.stdout(`${branch} (protected)\n`));
 		}
 		return 'ok';
