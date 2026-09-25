@@ -120,7 +120,7 @@ suite('sweep workflow', () => {
 
 		assert.deepStrictEqual(h.infoMessages, ['No stale branches found.']);
 		assert.deepStrictEqual(h.commands, ['fetch -p', 'worktree prune', GONE_REFS_CMD]);
-		assert.ok(h.outputLines.includes('No stale tracked branches found.'));
+		assert.ok(h.outputLines.includes('No stale branches found.'));
 		assert.strictEqual(h.quickPickRequests.length, 0);
 		assert.strictEqual(h.progressTitles[0], 'Fetching and pruning remote references');
 		assert.strictEqual(h.outputLines.at(-1), '--- Git Sweep session ended ---');
@@ -245,7 +245,7 @@ suite('sweep workflow', () => {
 
 		assert.ok(h.outputLines.some((line) => line.includes('[not-fully-merged] squashed/one')));
 		assert.strictEqual(h.confirmRequests.length, 1);
-		assert.match(h.confirmRequests[0].message, /squash\/rebase merged/);
+		assert.match(h.confirmRequests[0].message, /usual after a squash or rebase merge/);
 		assert.ok(h.commands.includes('branch -D squashed/one'));
 		assert.deepStrictEqual(h.infoMessages, ['Deleted 2 branch(es); 0 skipped, 0 failed.']);
 	});
@@ -545,6 +545,7 @@ suite('sweep workflow', () => {
 			stale: ['feature/a'],
 			protected: ['release/1'],
 			checkedOut: [],
+			merged: [],
 			worktrees: new Map(),
 		});
 		assert.deepStrictEqual(h.commands, ['fetch -p', 'worktree prune', GONE_REFS_CMD]);

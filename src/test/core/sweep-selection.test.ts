@@ -64,6 +64,7 @@ suite('sweep selection helpers', () => {
 
 	test('formatSweepSummary omits the zero-count lines', () => {
 		const summary = formatSweepSummary({
+			mergedCount: 0,
 			totalDetected: 3,
 			protectedCount: 0,
 			checkedOutCount: 0,
@@ -77,8 +78,9 @@ suite('sweep selection helpers', () => {
 		);
 	});
 
-	test('formatSweepSummary includes the protected, checked-out and worktree lines', () => {
+	test('formatSweepSummary includes the merged, protected, checked-out and worktree lines', () => {
 		const summary = formatSweepSummary({
+			mergedCount: 2,
 			totalDetected: 5,
 			protectedCount: 2,
 			checkedOutCount: 1,
@@ -90,6 +92,7 @@ suite('sweep selection helpers', () => {
 			summary,
 			[
 				'Detected: 5 stale branch(es)',
+				'Merged into the default branch: 2',
 				'Protected (skipped): 2',
 				'Checked out (skipped): 1',
 				'Selected: 3',

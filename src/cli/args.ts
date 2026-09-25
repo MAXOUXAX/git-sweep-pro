@@ -15,6 +15,8 @@ export type CliOptions = {
 	readonly yes: boolean;
 	readonly fetch: boolean;
 	readonly confirm: boolean;
+	/** Also offer branches already merged into the default branch whose upstream is not gone. */
+	readonly merged: boolean;
 	readonly protect: readonly string[];
 	readonly json: boolean;
 	readonly verbose: boolean;
@@ -37,6 +39,7 @@ const OPTIONS = {
 	'dry-run': { type: 'boolean', short: 'n', default: false },
 	force: { type: 'boolean', short: 'f', default: false },
 	yes: { type: 'boolean', short: 'y', default: false },
+	merged: { type: 'boolean', short: 'm', default: false },
 	protect: { type: 'string', short: 'p', multiple: true, default: [] },
 	// Declared explicitly: `allowNegative` needs Node 22.4, and VS Code 1.85 runs Node 18.
 	'no-fetch': { type: 'boolean', default: false },
@@ -116,6 +119,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 		yes: values.yes,
 		fetch: !values['no-fetch'],
 		confirm: !values['no-confirm'],
+		merged: values.merged,
 		protect: values.protect,
 		json: values.json,
 		verbose: values.verbose,
@@ -129,6 +133,7 @@ export function settingsToCliArgs(settings: SweepSettings): string[] {
 		...settings.protectedBranches.flatMap((pattern) => ['--protect', pattern]),
 		...(settings.autoFetchPrune ? [] : ['--no-fetch']),
 		...(settings.confirmBeforeDelete ? [] : ['--no-confirm']),
+		...(settings.includeMergedBranches ? ['--merged'] : []),
 	];
 }
 
@@ -139,7 +144,8 @@ Also available as "git sweep-pro" when the executable is on your PATH.
 
 Commands:
   sweep              Detect stale branches, pick, confirm and delete them (default)
-  list               Print stale branches without deleting anything
+  list               Print stale (and, with --merged, merged) branches without
+                     deleting anything
   post-pr [branch]   After a merged PR: switch to [branch], delete the old branch,
                      sweep, then pull
   sync [upstream]    Rebase the current branch onto [upstream] and force-push
@@ -153,6 +159,8 @@ Commands:
 Options:
   -n, --dry-run      Only report what would be deleted
   -f, --force        Delete with "git branch -D" instead of "-d"
+  -m, --merged       Also offer local branches already merged into the default
+                     branch, even squash-merged ones; never pre-selected
   -y, --yes          Accept pre-selected branches and confirm every prompt
   -p, --protect <glob>
                      Never delete branches matching <glob> (repeatable; also read

@@ -2,7 +2,8 @@ import { createBranchDeleter } from './branch-deletion';
 import { canRecordDeletions, createDeletionRecorder, type DeletionLog } from './deletion-log';
 import { describeGitFailure, toErrorMessage } from './errors';
 import { quoteShellArg } from './git-command';
-import { describeCheckedOutBranch, findStaleBranches } from './stale-branches';
+import { describeMergedBranch } from './merged-branches';
+import { describeCheckedOutBranch, findStaleBranches, noBranchesFound } from './stale-branches';
 import type { SweepMode, SweepSettings } from './sweep-logic';
 import { formatSweepOutcome, formatSweepSummary, type SelectableBranch } from './sweep-selection';
 
@@ -111,15 +112,23 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 	try {
 		const {
-			stale: candidateBranches,
+			stale: staleBranches,
 			protected: protectedBranches,
 			checkedOut,
+			merged,
 			worktrees: worktreeOf,
 		} = await findStaleBranches(workspaceRoot, deps);
+		const mergedOf = new Map(merged.map((branch) => [branch.name, describeMergedBranch(branch)]));
+		const candidateBranches = [...staleBranches, ...mergedOf.keys()];
+		/** How a branch was merged and where it is checked out, e.g. "merged into origin/main, checked out in worktree /wt". */
+		const describeBranch = (branch: string, worktreeLabel: string): string =>
+			[mergedOf.get(branch), worktreeOf.has(branch) ? `${worktreeLabel} ${worktreeOf.get(branch)}` : undefined]
+				.filter(Boolean)
+				.join(', ');
 
 		if (candidateBranches.length === 0 && protectedBranches.length === 0 && checkedOut.length === 0) {
-			deps.output.appendLine('No stale tracked branches found.');
-			deps.ui.showInformationMessage('No stale branches found.');
+			deps.output.appendLine(noBranchesFound(settings));
+			deps.ui.showInformationMessage(noBranchesFound(settings));
 			return 'ok';
 		}
 
@@ -146,13 +155,12 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			return 'ok';
 		}
 
-		// Branches living in another worktree are offered but not pre-selected:
-		// deleting them also removes that worktree's directory.
+		// Only stale branches outside other worktrees are pre-selected. Deleting
+		// a branch checked out in another worktree also removes that worktree's
+		// directory, and a merged branch may still be in use: its upstream exists.
 		const quickPickItems: SelectableBranch[] = candidateBranches.map((branch) => {
-			const worktree = worktreeOf.get(branch);
-			return worktree
-				? { label: branch, picked: false, description: `checked out in worktree ${worktree}` }
-				: { label: branch, picked: true };
+			const description = describeBranch(branch, 'checked out in worktree');
+			return description ? { label: branch, picked: false, description } : { label: branch, picked: true };
 		});
 
 		const selected = await deps.ui.pickBranches({
@@ -174,12 +182,13 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 		deps.output.appendLine(`${mode.dryRun ? '[DRY RUN]' : '[DELETE]'} Selected branches:`);
 		for (const branch of branchNames) {
-			const worktree = worktreeOf.get(branch);
-			deps.output.appendLine(worktree ? `- ${branch} (removes worktree ${worktree})` : `- ${branch}`);
+			const description = describeBranch(branch, 'removes worktree');
+			deps.output.appendLine(description ? `- ${branch} (${description})` : `- ${branch}`);
 		}
 
 		const summary = formatSweepSummary({
-			totalDetected: candidateBranches.length + protectedBranches.length + checkedOut.length,
+			totalDetected: staleBranches.length + protectedBranches.length + checkedOut.length,
+			mergedCount: merged.length,
 			protectedCount: protectedBranches.length,
 			checkedOutCount: checkedOut.length,
 			selectedCount: branchNames.length,
@@ -242,7 +251,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 					'This is expected when a pull request was merged with a squash or rebase strategy.'
 			);
 			const confirmed = await deps.ui.confirm(
-				`${notFullyMerged.length} branch(es) look squash/rebase merged (remote gone, but not a fast-forward merge locally). ` +
+				`${notFullyMerged.length} branch(es) are not merged into the current branch, as is usual after a squash or rebase merge. ` +
 					`Force-delete them with git branch -D? ${undoNote(deps)}`,
 				`Force-delete ${notFullyMerged.length}`
 			);
