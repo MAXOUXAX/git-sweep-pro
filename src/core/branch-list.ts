@@ -46,3 +46,30 @@ export function parseBranches(branchOutput: string): BranchItem[] {
 
 	return items;
 }
+
+/**
+ * Splits a remote-tracking ref such as "origin/feature/x" into its remote
+ * ("origin") and branch ("feature/x") parts. Refs without a slash have no
+ * remote part.
+ */
+export function splitRemoteRef(ref: string): { readonly remote: string | undefined; readonly branch: string } {
+	const slashIdx = ref.indexOf('/');
+	return slashIdx > 0
+		? { remote: ref.slice(0, slashIdx), branch: ref.slice(slashIdx + 1) }
+		: { remote: undefined, branch: ref };
+}
+
+/** The local branch name a picker entry corresponds to ("origin/main" -> "main"). */
+export function localBranchName(item: BranchItem): string {
+	return item.isRemote ? splitRemoteRef(item.ref).branch : item.ref;
+}
+
+/** Label shown for a branch in single-select pickers; remote refs get a "(remote)" suffix. */
+export function branchPickLabel(item: BranchItem): string {
+	return item.isRemote ? `${item.label} (remote)` : item.label;
+}
+
+/** Finds the branch whose {@link branchPickLabel} matches a picked label. */
+export function findBranchByPickLabel(items: readonly BranchItem[], label: string): BranchItem | undefined {
+	return items.find((item) => branchPickLabel(item) === label);
+}

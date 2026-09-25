@@ -1,7 +1,8 @@
-import { parseBranches } from './branch-list';
+import { branchPickLabel, findBranchByPickLabel, localBranchName, parseBranches } from './branch-list';
+import { describeGitFailure, isNoUpstreamError, toErrorMessage } from './errors';
 import { escapeForShell } from './git-command';
-import { isProtectedBranch, parseGoneBranchRefs } from './sweep-logic';
-import { runSweepWorkflow, type QuickPickItemLike, type SweepWorkflowDeps } from './sweep-workflow';
+import { GONE_REFS_ARGS, isProtectedBranch, parseGoneBranchRefs } from './sweep-logic';
+import { runSweepWorkflow, singlePick, type SweepWorkflowDeps } from './sweep-workflow';
 
 export type PostPullRequestDeps = SweepWorkflowDeps;
 
@@ -30,49 +31,6 @@ async function getDefaultBranchName(runGit: (args: string[]) => Promise<{ stdout
 	}
 }
 
-/**
- * Normalizes `git branch -avv` output to `git branch -a` format for parseBranches.
- * Strips hash and tracking info from each line, keeping only the branch ref.
- */
-function toBranchAFormat(avvOutput: string): string {
-	return avvOutput
-		.split(/\r?\n/)
-		.map((line) => {
-			const trimmed = line.trim();
-			if (!trimmed) {
-				return '';
-			}
-			const isCurrent = trimmed.startsWith('*');
-			const rest = trimmed.replace(/^\*\s+/, '').trim();
-			if (!rest || rest === 'HEAD') {
-				return '';
-			}
-			if (rest.startsWith('remotes/')) {
-				const firstToken = rest.split(/\s+/)[0];
-				if (firstToken.endsWith('/HEAD') || firstToken.includes('->')) {
-					return '';
-				}
-				return (isCurrent ? '* ' : '  ') + firstToken;
-			}
-			const firstToken = rest.split(/\s+/)[0];
-			return (isCurrent ? '* ' : '  ') + firstToken;
-		})
-		.filter((l) => l.length > 0)
-		.join('\n');
-}
-
-/**
- * For a remote ref like "origin/main", returns the local branch name "main".
- * For a local ref, returns it as-is.
- */
-function toLocalBranchRef(ref: string, isRemote: boolean): string {
-	if (!isRemote) {
-		return ref;
-	}
-	const slashIdx = ref.indexOf('/');
-	return slashIdx > 0 ? ref.slice(slashIdx + 1) : ref;
-}
-
 export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Promise<void> {
 	const workspaceRoot = deps.getWorkspaceRoot();
 	if (!workspaceRoot) {
@@ -94,8 +52,8 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 
 		const [currentBranchResult, branchListResult, goneRefsResult] = await Promise.all([
 			runGit(['rev-parse', '--abbrev-ref', 'HEAD']),
-			runGit(['branch', '-avv']),
-			runGit(['for-each-ref', '--format=%(refname:short)%09%(upstream:track)', 'refs/heads']),
+			runGit(['branch', '-a']),
+			runGit([...GONE_REFS_ARGS]),
 		]);
 
 		const currentBranch = currentBranchResult.stdout.trim();
@@ -104,7 +62,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			return;
 		}
 
-		const branchItems = parseBranches(toBranchAFormat(branchListResult.stdout));
+		const branchItems = parseBranches(branchListResult.stdout);
 		if (branchItems.length === 0) {
 			deps.ui.showInformationMessage('Git Sweep Pro: No other branches available to checkout.');
 			return;
@@ -114,9 +72,9 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		const isGone = parseGoneBranchRefs(goneRefsResult.stdout).includes(currentBranch);
 
 		const quickPickItems = branchItems.map((b) => {
-			const isDefault = Boolean(defaultBranch && toLocalBranchRef(b.ref, b.isRemote) === defaultBranch);
+			const isDefault = Boolean(defaultBranch && localBranchName(b) === defaultBranch);
 			return {
-				label: b.isRemote ? `${b.label} (remote)` : b.label,
+				label: branchPickLabel(b),
 				description: [b.isRemote ? 'remote' : undefined, isDefault ? 'default' : undefined]
 					.filter(Boolean)
 					.join(', ') || undefined,
@@ -134,19 +92,14 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 				: 'Choose a branch (local preferred for pull)',
 		});
 
-		const selectedItem: QuickPickItemLike | undefined =
-			selected === undefined || Array.isArray(selected) ? undefined : (selected as QuickPickItemLike);
+		const selectedItem = singlePick(selected);
 		if (!selectedItem) {
 			deps.output.appendLine('Operation cancelled.');
 			deps.output.appendLine('--- Post Pull Request session ended ---');
 			return;
 		}
 
-		const chosenLabel = selectedItem.label;
-		const targetItem = branchItems.find((b) => {
-			const label = b.isRemote ? `${b.label} (remote)` : b.label;
-			return label === chosenLabel;
-		});
+		const targetItem = findBranchByPickLabel(branchItems, selectedItem.label);
 		if (!targetItem) {
 			deps.output.appendLine('[error] Could not match selected branch to branch list.');
 			deps.ui.showErrorMessage('Git Sweep Pro: Internal error — selected branch not found.');
@@ -154,7 +107,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		}
 
 		const targetRef = targetItem.ref;
-		const localTarget = toLocalBranchRef(targetRef, targetItem.isRemote);
+		const localTarget = localBranchName(targetItem);
 
 		try {
 			await deps.ui.withProgress(
@@ -174,7 +127,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 				}
 			);
 		} catch (checkoutError) {
-			const msg = checkoutError instanceof Error ? checkoutError.message : String(checkoutError);
+			const msg = toErrorMessage(checkoutError);
 			deps.ui.showErrorMessage(`Git Sweep Pro: Checkout failed: ${msg}`);
 			deps.output.appendLine(`[error] Checkout failed: ${msg}`);
 			deps.output.appendLine('--- Post Pull Request session ended ---');
@@ -212,8 +165,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			pulled = true;
 			deps.output.appendLine(`Pulled latest changes for ${localTarget}.`);
 		} catch (pullError) {
-			const msg = pullError instanceof Error ? pullError.message : String(pullError);
-			if (/no upstream|no tracking|please specify.*branch/i.test(msg)) {
+			if (isNoUpstreamError(toErrorMessage(pullError))) {
 				deps.output.appendLine(`No upstream configured for ${localTarget}. Pull skipped.`);
 				deps.ui.showInformationMessage(
 					`Git Sweep Pro: Switched to ${localTarget}. (No upstream—pull skipped.)`
@@ -228,16 +180,8 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			deps.ui.showInformationMessage(`Git Sweep Pro: Switched to ${localTarget} and pulled.`);
 		}
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		const lowerMessage = message.toLowerCase();
-
-		if (lowerMessage.includes('not a git repository')) {
-			deps.ui.showErrorMessage('Git Sweep Pro: The selected workspace folder is not a Git repository.');
-		} else if (lowerMessage.includes('command not found') || lowerMessage.includes('enoent')) {
-			deps.ui.showErrorMessage('Git Sweep Pro: Git is not installed or not available in PATH.');
-		} else {
-			deps.ui.showErrorMessage(`Git Sweep Pro failed: ${message}`);
-		}
+		const message = toErrorMessage(error);
+		deps.ui.showErrorMessage(describeGitFailure(message, 'Git Sweep Pro failed:'));
 		deps.output.appendLine(`[error] ${message}`);
 		deps.output.appendLine('--- Post Pull Request session ended ---');
 	}

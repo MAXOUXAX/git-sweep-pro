@@ -41,6 +41,38 @@ export type OutputWriter = {
 };
 
 /**
+ * Environment for every git invocation.
+ *
+ * The extension host has no terminal: any git command that tries to open an
+ * editor (e.g. `rebase --continue`) or prompt for credentials would fail or
+ * hang, so git is forced into non-interactive mode.
+ *
+ * LC_ALL=C forces English, C-locale output so machine-readable tokens we parse
+ * (e.g. `[gone]` from `for-each-ref`'s upstream:track) are stable regardless of
+ * the user's system locale or a localized git build.
+ */
+function gitEnv(): NodeJS.ProcessEnv {
+	return {
+		...process.env,
+		GIT_EDITOR: 'true',
+		GIT_SEQUENCE_EDITOR: 'true',
+		GIT_TERMINAL_PROMPT: '0',
+		LC_ALL: 'C',
+	};
+}
+
+function logStreams(outputChannel: OutputWriter, streams: { stdout?: string; stderr?: string }): void {
+	const stdout = streams.stdout?.trim();
+	const stderr = streams.stderr?.trim();
+	if (stdout) {
+		outputChannel.appendLine(stdout);
+	}
+	if (stderr) {
+		outputChannel.appendLine(`[stderr] ${stderr}`);
+	}
+}
+
+/**
  * Runs a git command by invoking the git executable with an arguments array.
  * No shell is invoked, so branch names and other user-controlled strings cannot
  * cause command injection regardless of their content.
@@ -51,43 +83,14 @@ export async function runGitCommand(
 	outputChannel: OutputWriter,
 	execFn: ExecFileFn = execFileAsync
 ): Promise<CommandResult> {
-	const displayCmd = buildDisplayCmd(args);
-	outputChannel.appendLine(`$ ${displayCmd}`);
+	outputChannel.appendLine(`$ ${buildDisplayCmd(args)}`);
 	try {
-		// The extension host has no terminal: any git command that tries to open
-		// an editor (e.g. `rebase --continue`) or prompt for credentials would
-		// fail or hang, so force git into non-interactive mode.
-		//
-		// LC_ALL=C forces English, C-locale output so machine-readable tokens we
-		// parse (e.g. `[gone]` from `for-each-ref`'s upstream:track) are stable
-		// regardless of the user's system locale or a localized git build.
-		const env: NodeJS.ProcessEnv = {
-			...process.env,
-			GIT_EDITOR: 'true',
-			GIT_SEQUENCE_EDITOR: 'true',
-			GIT_TERMINAL_PROMPT: '0',
-			LC_ALL: 'C',
-		};
-		const result = await execFn('git', args, { cwd, env });
-		if (result.stdout.trim()) {
-			outputChannel.appendLine(result.stdout.trim());
-		}
-		if (result.stderr.trim()) {
-			outputChannel.appendLine(`[stderr] ${result.stderr.trim()}`);
-		}
-
-		return {
-			stdout: result.stdout,
-			stderr: result.stderr,
-		};
+		const { stdout, stderr } = await execFn('git', args, { cwd, env: gitEnv() });
+		logStreams(outputChannel, { stdout, stderr });
+		return { stdout, stderr };
 	} catch (error) {
 		const execError = error as Error & { stdout?: string; stderr?: string };
-		if (execError.stdout?.trim()) {
-			outputChannel.appendLine(execError.stdout.trim());
-		}
-		if (execError.stderr?.trim()) {
-			outputChannel.appendLine(`[stderr] ${execError.stderr.trim()}`);
-		}
+		logStreams(outputChannel, execError);
 		outputChannel.appendLine(`[error] ${execError.message}`);
 		throw execError;
 	}

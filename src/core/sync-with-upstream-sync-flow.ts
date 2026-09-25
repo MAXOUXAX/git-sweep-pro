@@ -1,5 +1,5 @@
-import type { BranchItem } from './branch-list';
-import { parseBranches } from './branch-list';
+import { toErrorMessage } from './errors';
+import { branchPickLabel, findBranchByPickLabel, localBranchName, parseBranches, splitRemoteRef, type BranchItem } from './branch-list';
 import { syncMessages } from './sync-with-upstream-messages';
 import {
 	clearMemento,
@@ -10,7 +10,7 @@ import {
 	TEMP_BRANCH_PREFIX,
 	type SyncWithUpstreamDeps,
 } from './sync-with-upstream-state';
-import type { QuickPickItemLike } from './sweep-workflow';
+import { singlePick } from './sweep-workflow';
 
 type RunGit = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 
@@ -38,12 +38,10 @@ async function prepareUpstreamForRebase(
 			() => runGit(['checkout', '-B', tempBranch, upstreamRef])
 		);
 
-		const slashIdx = upstreamRef.indexOf('/');
-		const remoteName = upstreamRef.slice(0, slashIdx);
-		const branchName = upstreamRef.slice(slashIdx + 1);
+		const { remote, branch } = splitRemoteRef(upstreamRef);
 		await deps.ui.withProgress(
 			{ title: syncMessages.pulling(upstreamRef) },
-			() => runGit(['pull', '--ff-only', remoteName, branchName])
+			() => runGit(['pull', '--ff-only', remote ?? '', branch])
 		);
 
 		return tempBranch;
@@ -60,7 +58,7 @@ async function prepareUpstreamForRebase(
 			() => runGit(['pull', '--ff-only'])
 		);
 	} catch (pullError) {
-		const msg = pullError instanceof Error ? pullError.message : String(pullError);
+		const msg = toErrorMessage(pullError);
 		if (!/no upstream|no tracking|please specify.*branch/i.test(msg)) {
 			throw pullError;
 		}
@@ -76,8 +74,7 @@ export async function syncLocalBranchFromRemote(
 	upstreamRef: string,
 	featureBranch: string
 ): Promise<void> {
-	const slashIdx = upstreamRef.indexOf('/');
-	const localUpstream = slashIdx > 0 ? upstreamRef.slice(slashIdx + 1) : upstreamRef;
+	const localUpstream = splitRemoteRef(upstreamRef).branch;
 
 	if (localUpstream === featureBranch) {
 		deps.output.appendLine(syncMessages.infoUpdateSkippedSameBranch(localUpstream));
@@ -141,14 +138,6 @@ async function cleanupAfterSyncError(
 	}
 }
 
-function localBranchName(b: BranchItem): string {
-	if (!b.isRemote) {
-		return b.ref;
-	}
-	const slashIdx = b.ref.indexOf('/');
-	return slashIdx > 0 ? b.ref.slice(slashIdx + 1) : b.ref;
-}
-
 export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	const workspaceRoot = deps.getWorkspaceRoot();
 	if (!workspaceRoot) {
@@ -160,7 +149,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	try {
 		gitDir = await resolveGitDir(workspaceRoot, deps);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = toErrorMessage(error);
 		showSyncGitCommandError(deps, message);
 		return;
 	}
@@ -196,13 +185,14 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 			runGit(['branch', '-a']),
 		]);
 
-		featureBranch = currentBranchResult.stdout.trim();
-		if (!featureBranch || featureBranch === 'HEAD') {
+		const currentBranch = currentBranchResult.stdout.trim();
+		if (!currentBranch || currentBranch === 'HEAD') {
 			deps.ui.showErrorMessage(syncMessages.couldNotDetermineBranch);
 			deps.output.appendLine(`[error] ${syncMessages.couldNotDetermineBranch}`);
 			deps.output.appendLine(syncMessages.outputFailed);
 			return;
 		}
+		featureBranch = currentBranch;
 
 		const branchItems = parseBranches(branchListResult.stdout);
 		if (branchItems.length === 0) {
@@ -212,7 +202,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		}
 
 		const quickPickItems = branchItems.map((b) => ({
-			label: b.isRemote ? `${b.label} (remote)` : b.label,
+			label: branchPickLabel(b),
 			description: b.isRemote ? undefined : 'local',
 		}));
 
@@ -224,18 +214,13 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 			placeHolder: syncMessages.pickBranchPlaceholder,
 		});
 
-		const selectedItem: QuickPickItemLike | undefined =
-			selected === undefined || Array.isArray(selected) ? undefined : (selected as QuickPickItemLike);
+		const selectedItem = singlePick(selected);
 		if (!selectedItem) {
 			deps.output.appendLine(syncMessages.operationCancelled);
 			return;
 		}
 
-		const chosenLabel = selectedItem.label;
-		const targetItem = branchItems.find((b) => {
-			const label = b.isRemote ? `${b.label} (remote)` : b.label;
-			return label === chosenLabel;
-		});
+		const targetItem = findBranchByPickLabel(branchItems, selectedItem.label);
 		if (!targetItem) {
 			deps.ui.showErrorMessage(syncMessages.internalBranchNotFound);
 			deps.output.appendLine(`[error] ${syncMessages.internalBranchNotFound}`);
@@ -278,7 +263,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 
 		const makeMemento = () => ({
 			workspaceRoot,
-			featureBranch: featureBranch!,
+			featureBranch: currentBranch,
 			hasStash,
 			upstreamRef,
 			upstreamIsRemote: isRemote,
@@ -287,7 +272,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 
 		await deps.ui.withProgress(
 			{ title: syncMessages.returningTo(featureBranch) },
-			() => runGit(['checkout', featureBranch!])
+			() => runGit(['checkout', currentBranch])
 		);
 
 		try {
@@ -313,7 +298,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 				() => runGit(['push', '--force-with-lease'])
 			);
 		} catch (pushError) {
-			const msg = pushError instanceof Error ? pushError.message : String(pushError);
+			const msg = toErrorMessage(pushError);
 
 			let memento = makeMemento();
 			await saveMemento(deps, memento);
@@ -326,7 +311,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 					await saveMemento(deps, memento);
 				} catch (popError) {
 					// The memento keeps hasStash: true, so Resume will retry the pop.
-					const popMsg = popError instanceof Error ? popError.message : String(popError);
+					const popMsg = toErrorMessage(popError);
 					deps.output.appendLine(`[stash-pop-error] ${popMsg}`);
 					deps.output.appendLine(syncMessages.infoStashKeptForResume);
 				}
@@ -362,7 +347,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 					() => runGit(['stash', 'pop'])
 				);
 			} catch (popError) {
-				const popMsg = popError instanceof Error ? popError.message : String(popError);
+				const popMsg = toErrorMessage(popError);
 				deps.ui.showErrorMessage(syncMessages.rebaseOkStashFailed);
 				deps.output.appendLine(`[stash-pop-error] ${popMsg}`);
 			}
@@ -380,7 +365,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 			await cleanupAfterSyncError(deps, runGit, featureBranch, tempBranchToCleanup, hasStash);
 		}
 
-		const message = error instanceof Error ? error.message : String(error);
+		const message = toErrorMessage(error);
 
 		if (!skipOuterCleanup) {
 			showSyncGitCommandError(deps, message);

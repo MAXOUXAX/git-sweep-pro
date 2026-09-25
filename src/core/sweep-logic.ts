@@ -48,25 +48,20 @@ export function orderModeActions(defaultMode: SweepModeSetting): string[] {
 	return ordered.map((m) => MODE_ACTION_LABELS[m]);
 }
 
+/** Maps a label returned by the mode picker back to its {@link SweepMode}. */
 export function resolveSweepModeAction(action: string | undefined): SweepMode | undefined {
-	if (!action) {
-		return undefined;
-	}
-
-	if (action === 'Dry Run') {
-		return { dryRun: true, forceDelete: false };
-	}
-
-	if (action === 'Delete (safe -d)') {
-		return { dryRun: false, forceDelete: false };
-	}
-
-	if (action === 'Delete (force -D)') {
-		return { dryRun: false, forceDelete: true };
-	}
-
-	return undefined;
+	const setting = (Object.keys(MODE_ACTION_LABELS) as SweepModeSetting[]).find(
+		(key) => MODE_ACTION_LABELS[key] === action
+	);
+	return setting ? resolveModeFromSetting(setting) : undefined;
 }
+
+/** `git for-each-ref` arguments whose output {@link parseGoneBranchRefs} understands. */
+export const GONE_REFS_ARGS: readonly string[] = [
+	'for-each-ref',
+	'--format=%(refname:short)%09%(upstream:track)',
+	'refs/heads',
+];
 
 /**
  * Parses `git for-each-ref --format="%(refname:short)%09%(upstream:track)" refs/heads`
