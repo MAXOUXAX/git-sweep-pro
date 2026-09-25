@@ -5,6 +5,8 @@ export function toErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+export const NOT_A_REPOSITORY = 'The selected workspace folder is not a Git repository.';
+
 /**
  * Maps a failed git invocation to the arguments of an error notification:
  * well-known environment problems (not a repository, git missing) get a
@@ -13,7 +15,7 @@ export function toErrorMessage(error: unknown): string {
 export function describeGitFailure(message: string, options?: NoticeOptions): [message: string, options?: NoticeOptions] {
 	const lowerMessage = message.toLowerCase();
 	if (lowerMessage.includes('not a git repository')) {
-		return ['The selected workspace folder is not a Git repository.'];
+		return [NOT_A_REPOSITORY];
 	}
 	if (lowerMessage.includes('command not found') || lowerMessage.includes('enoent')) {
 		return ['Git is not installed or not available in PATH.'];

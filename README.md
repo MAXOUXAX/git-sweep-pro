@@ -35,6 +35,7 @@ All commands are available from the Command Palette under the **Git Sweep Pro** 
 | **Post Pull Request Cleanup** | `git-sweep-pro.postPullRequest` | Checkout a local or remote branch, then delete the previous branch, prune, run the sweep, and pull. |
 | **Sync Branch With Upstream** | `git-sweep-pro.syncWithUpstream` | Keeps your feature branch up to date with a base branch (`main`, `develop`, …): stashes local changes, pulls the base, rebases the current branch onto it, force-pushes with `--force-with-lease`, then restores the stash. Pauses on rebase conflicts. |
 | **Resume Sync With Upstream** | `git-sweep-pro.syncWithUpstreamResume` | Resumes a paused sync after you resolve rebase conflicts, or retries a failed force-push and finishes the cleanup. |
+| **Restore Deleted Branches** | `git-sweep-pro.restore` | Undo: pick among branches Git Sweep Pro deleted and recreate them at the commit they pointed to. |
 
 ## Command line
 
@@ -50,6 +51,7 @@ git sweep-pro -y -p 'release/*'   # non-interactive, with a protected pattern
 git sweep-pro post-pr main    # after a merged PR: switch to main, clean up, pull
 git sweep-pro sync origin/main    # rebase onto origin/main and force-push (with lease)
 git sweep-pro sync --continue     # resume after resolving rebase conflicts
+git sweep-pro restore feature/x   # undo: recreate a branch deleted by git-sweep-pro
 ```
 
 Outside VS Code, run it with Node.js (`node <extension dir>/dist/cli/main.js`) or install it from a checkout of this repository with `npm install -g`.
@@ -83,6 +85,7 @@ Git Sweep Pro is built to make destructive operations feel trustworthy. It never
 - **Safe delete by default.** The default mode uses `git branch -d`, which Git itself refuses to run on branches with unmerged commits. Force delete (`git branch -D`) is opt-in per run, and is offered as a follow-up only for the specific branches a safe delete rejected.
 - **You confirm before deletion.** A confirmation dialog is shown before branches are removed (configurable via `gitSweepPro.confirmBeforeDelete`).
 - **Protected branches can never be deleted.** Configure glob patterns in `gitSweepPro.protectedBranches` to guarantee branches like `main`, `develop`, or `release/*` are excluded from every sweep.
+- **Deletions can be undone.** Every branch Git Sweep Pro deletes is recorded (name and commit) in the repository's Git directory. **Restore Deleted Branches** (`git sweep-pro restore`) recreates them, as long as Git has not garbage-collected their commits (by default two weeks after they became unreachable).
 - **Nothing is hidden.** Every executed command and its result is written to the `Git Sweep` output channel.
 
 ## Settings

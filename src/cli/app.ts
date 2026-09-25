@@ -1,19 +1,21 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { describeGitFailure, toErrorMessage } from '../core/errors';
+import { createDeletionLog, describeDeletion, type DeletionLog } from '../core/deletion-log';
+import { describeGitFailure, NOT_A_REPOSITORY, toErrorMessage } from '../core/errors';
 import { runGitCommand, type CommandResult } from '../core/git-command';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
+import { findRestorableDeletions, runRestoreWorkflow } from '../core/restore-workflow';
 import { findStaleBranches } from '../core/stale-branches';
 import type { SweepSettings } from '../core/sweep-logic';
 import { runSweepWorkflow, type SweepWorkflowDeps, type WorkflowOutcome } from '../core/sweep-workflow';
-import type { StateStore } from '../core/sync-with-upstream-state';
+import type { StateStore } from '../core/state-store';
 import {
 	runSyncWithUpstreamResumeWorkflow,
 	runSyncWithUpstreamWorkflow,
 	type SyncWithUpstreamDeps,
 } from '../core/sync-with-upstream-workflow';
 import { EXIT, parseArgs, USAGE, UsageError, type CliOptions } from './args';
-import { createFrontend } from './frontend';
+import { createFrontend, type Frontend } from './frontend';
 import type { CliIo } from './io';
 import { createFileStateStore, createMemoryStateStore, stateFilePath } from './state-store';
 
@@ -32,6 +34,18 @@ const EXIT_CODES: Record<WorkflowOutcome, number> = {
 function readVersion(): string {
 	const manifest = path.join(__dirname, '..', '..', 'package.json');
 	return (JSON.parse(fs.readFileSync(manifest, 'utf8')) as { version: string }).version;
+}
+
+/** Commands that delete branches (and record them) or restore them. */
+const DELETION_LOG_COMMANDS: ReadonlySet<CliOptions['command']> = new Set(['sweep', 'post-pr', 'restore']);
+
+/**
+ * The deleted-branch log lives in the state file of the *common* git
+ * directory: branches are shared by all worktrees, so their undo history is too.
+ */
+async function openDeletionLog(runGit: RunGit, workspaceRoot: string): Promise<DeletionLog | undefined> {
+	const commonDir = await tryGit(runGit, ['rev-parse', '--git-common-dir'], workspaceRoot);
+	return commonDir ? createDeletionLog(createFileStateStore(stateFilePath(path.resolve(workspaceRoot, commonDir)))) : undefined;
 }
 
 async function tryGit(runGit: RunGit, args: string[], cwd: string): Promise<string | undefined> {
@@ -92,15 +106,22 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 		output: frontend.output,
 		runGitCommand: runGit,
 		ui: frontend.ui,
+		deletionLog: DELETION_LOG_COMMANDS.has(options.command) ? await openDeletionLog(runGit, workspaceRoot) : undefined,
 	};
 
 	frontend.intro?.(`git sweep-pro ${options.command}`);
-	const outcome = await runCommand(options, workspaceRoot, deps, io);
+	const outcome = await runCommand(options, workspaceRoot, deps, frontend, io);
 	frontend.outro?.(outcome);
 	return EXIT_CODES[outcome];
 }
 
-async function runCommand(options: CliOptions, workspaceRoot: string, deps: SweepWorkflowDeps, io: CliIo): Promise<WorkflowOutcome> {
+async function runCommand(
+	options: CliOptions,
+	workspaceRoot: string,
+	deps: SweepWorkflowDeps,
+	frontend: Frontend,
+	io: CliIo
+): Promise<WorkflowOutcome> {
 	switch (options.command) {
 		case 'sweep':
 			return runSweepWorkflow({ dryRun: options.dryRun, forceDelete: options.force }, deps);
@@ -108,6 +129,8 @@ async function runCommand(options: CliOptions, workspaceRoot: string, deps: Swee
 			return runList(workspaceRoot, deps, options, io);
 		case 'post-pr':
 			return runPostPullRequestWorkflow(deps);
+		case 'restore':
+			return runRestore(workspaceRoot, deps, options, frontend, io);
 		case 'sync':
 		case 'resume': {
 			const gitDir = await tryGit(deps.runGitCommand, ['rev-parse', '--absolute-git-dir'], workspaceRoot);
@@ -145,6 +168,47 @@ async function runList(root: string, deps: SweepWorkflowDeps, options: CliOption
 				io.stdout(branch.where === 'current' ? `${branch.name} (current branch)\n` : `${branch.name} (main worktree ${branch.worktreePath})\n`)
 			);
 			protectedStale.forEach((branch) => io.stdout(`${branch} (protected)\n`));
+		}
+		return 'ok';
+	} catch (error) {
+		deps.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
+		return 'failed';
+	}
+}
+
+/**
+ * `restore`: restores the branches named, or the ones picked. Without names
+ * and without anyone to pick (pipes, `--yes`, `--json`), lists the deletions
+ * that can be restored instead.
+ */
+async function runRestore(
+	root: string,
+	deps: SweepWorkflowDeps,
+	options: CliOptions,
+	frontend: Frontend,
+	io: CliIo
+): Promise<WorkflowOutcome> {
+	const { deletionLog } = deps;
+	if (!deletionLog) {
+		deps.ui.showErrorMessage(NOT_A_REPOSITORY);
+		return 'failed';
+	}
+	const restoreDeps = { ...deps, deletionLog };
+	if (options.positionals.length > 0 || (frontend.canPrompt && !options.yes && !options.json)) {
+		return runRestoreWorkflow(restoreDeps, options.positionals);
+	}
+
+	try {
+		const entries = await findRestorableDeletions(restoreDeps, root);
+		if (options.json) {
+			io.stdout(`${JSON.stringify(entries, null, 2)}\n`);
+		} else if (entries.length === 0) {
+			io.stderr('No deleted branches to restore.\n');
+		} else {
+			const now = new Date();
+			const width = Math.max(...entries.map((entry) => entry.branch.length));
+			entries.forEach((entry) => io.stdout(`${entry.branch.padEnd(width)}  ${describeDeletion(entry, now)}\n`));
+			io.stderr('To restore them, run: git sweep-pro restore <branch>...\n');
 		}
 		return 'ok';
 	} catch (error) {

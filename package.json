@@ -80,6 +80,12 @@
         "category": "Git Sweep Pro",
         "title": "Resume Sync With Upstream",
         "shortTitle": "Resume Sync"
+      },
+      {
+        "command": "git-sweep-pro.restore",
+        "category": "Git Sweep Pro",
+        "title": "Restore Deleted Branches",
+        "shortTitle": "Restore Branches"
       }
     ],
     "configuration": {

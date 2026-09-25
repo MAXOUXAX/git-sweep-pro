@@ -1,3 +1,4 @@
+import type { Deletion } from './deletion-log';
 import { toErrorMessage } from './errors';
 import { isNotFullyMergedError } from './sweep-logic';
 
@@ -8,6 +9,8 @@ type BranchDeleterDeps = {
 	readonly log: (line: string) => void;
 	/** Worktree path of each branch checked out in a linked worktree. */
 	readonly worktrees: ReadonlyMap<string, string>;
+	/** Called after each deletion with the commit the branch pointed to (e.g. to record it for undo). */
+	readonly onDeleted?: (deletion: Deletion) => Promise<unknown>;
 };
 
 /**
@@ -16,7 +19,7 @@ type BranchDeleterDeps = {
  * branch is merged before it removes the worktree, so a refused delete never
  * leaves a branch without its worktree.
  */
-export function createBranchDeleter({ runGit, log, worktrees }: BranchDeleterDeps) {
+export function createBranchDeleter({ runGit, log, worktrees, onDeleted }: BranchDeleterDeps) {
 	const removed = new Set<string>();
 
 	/** `git branch -d` refuses a branch whose upstream is gone unless HEAD contains it. */
@@ -36,6 +39,15 @@ export function createBranchDeleter({ runGit, log, worktrees }: BranchDeleterDep
 		return 'not-fully-merged';
 	};
 
+	/** Tip of the branch, read right before deleting it so the recorded commit is the one deleted. */
+	const readTip = async (branch: string): Promise<string | undefined> => {
+		try {
+			return (await runGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`])).stdout.trim() || undefined;
+		} catch {
+			return undefined;
+		}
+	};
+
 	return async (branch: string, flag: '-d' | '-D'): Promise<DeleteResult> => {
 		const worktree = worktrees.get(branch);
 		if (worktree && !removed.has(branch)) {
@@ -52,9 +64,9 @@ export function createBranchDeleter({ runGit, log, worktrees }: BranchDeleterDep
 				return 'failed';
 			}
 		}
+		const sha = onDeleted ? await readTip(branch) : undefined;
 		try {
 			await runGit(['branch', flag, branch]);
-			return 'deleted';
 		} catch (error) {
 			const message = toErrorMessage(error);
 			if (flag === '-d' && isNotFullyMergedError(message)) {
@@ -63,5 +75,11 @@ export function createBranchDeleter({ runGit, log, worktrees }: BranchDeleterDep
 			log(`[delete-failed] ${branch}: ${message}`);
 			return 'failed';
 		}
+		if (onDeleted && sha) {
+			await onDeleted({ branch, sha, ...(removed.has(branch) ? { worktree } : {}) });
+		} else if (onDeleted) {
+			log(`[warning] Could not read the last commit of ${branch}, so it cannot be restored.`);
+		}
+		return 'deleted';
 	};
 }

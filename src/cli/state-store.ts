@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { StateStore } from '../core/sync-with-upstream-state';
+import type { StateStore } from '../core/state-store';
 
 /**
  * Persists workflow state (e.g. a sync paused on conflicts) as JSON inside the
