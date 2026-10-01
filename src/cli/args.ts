@@ -1,0 +1,161 @@
+import { parseArgs as parseArgv, type ParseArgsOptionsConfig } from 'node:util';
+import type { SweepSettings } from '../core/sweep-logic';
+
+export const COMMANDS = ['sweep', 'list', 'post-pr', 'sync', 'resume', 'help', 'version'] as const;
+export type CommandName = (typeof COMMANDS)[number];
+
+export type CliOptions = {
+	readonly command: CommandName;
+	/** Positional arguments after the command (e.g. the branch for `post-pr`/`sync`). */
+	readonly positionals: readonly string[];
+	/** Repository directory (`-C <path>`); defaults to the current directory. */
+	readonly cwd: string | undefined;
+	readonly dryRun: boolean;
+	readonly force: boolean;
+	readonly yes: boolean;
+	readonly fetch: boolean;
+	readonly confirm: boolean;
+	readonly protect: readonly string[];
+	readonly json: boolean;
+	readonly verbose: boolean;
+	/** Internal: drive the UI over NDJSON on stdio (used by the VS Code extension). */
+	readonly rpc: boolean;
+};
+
+export class UsageError extends Error {}
+
+/** Exit codes, documented in the README. */
+export const EXIT = {
+	ok: 0,
+	failed: 1,
+	usage: 2,
+	/** A sync stopped on rebase conflicts; run `resume` once they are resolved. */
+	paused: 3,
+} as const;
+
+const OPTIONS = {
+	'dry-run': { type: 'boolean', short: 'n', default: false },
+	force: { type: 'boolean', short: 'f', default: false },
+	yes: { type: 'boolean', short: 'y', default: false },
+	protect: { type: 'string', short: 'p', multiple: true, default: [] },
+	// Declared explicitly: `allowNegative` needs Node 22.4, and VS Code 1.85 runs Node 18.
+	'no-fetch': { type: 'boolean', default: false },
+	'no-confirm': { type: 'boolean', default: false },
+	json: { type: 'boolean', default: false },
+	cwd: { type: 'string', short: 'C' },
+	verbose: { type: 'boolean', short: 'v', default: false },
+	help: { type: 'boolean', short: 'h', default: false },
+	version: { type: 'boolean', default: false },
+	/** `sync --continue` is an alias of `resume`. */
+	continue: { type: 'boolean', default: false },
+	rpc: { type: 'boolean', default: false },
+} satisfies ParseArgsOptionsConfig;
+
+/**
+ * Reports unknown options and missing values with the CLI's own wording. The
+ * strict parse would throw too, but with messages written for Node developers.
+ */
+function rejectInvalidOptions(argv: readonly string[]): void {
+	const { tokens } = parseArgv({ args: [...argv], options: OPTIONS, allowPositionals: true, strict: false, tokens: true });
+	for (const token of tokens) {
+		if (token.kind !== 'option') {
+			continue;
+		}
+		const option = Object.entries(OPTIONS).find(([name]) => name === token.name)?.[1];
+		if (!option) {
+			throw new UsageError(`Unknown option: ${token.rawName}`);
+		}
+		if (option.type === 'string' && (token.value === undefined || (!token.inlineValue && token.value.startsWith('-')))) {
+			throw new UsageError(`Option ${token.rawName} requires a value.`);
+		}
+		if (option.type === 'boolean' && token.value !== undefined) {
+			throw new UsageError(`Option ${token.rawName} does not take a value.`);
+		}
+	}
+}
+
+/**
+ * Parses `git-sweep-pro` arguments with `util.parseArgs`: no dependency, as the
+ * CLI ships inside the VS Code extension, which is packaged without
+ * node_modules.
+ */
+export function parseArgs(argv: readonly string[]): CliOptions {
+	rejectInvalidOptions(argv);
+	const { values, positionals } = parseArgv({ args: [...argv], options: OPTIONS, allowPositionals: true });
+
+	if (values['dry-run'] && values.force) {
+		throw new UsageError('--dry-run and --force cannot be combined.');
+	}
+
+	const [first, ...rest] = positionals;
+	const named = COMMANDS.find((name) => name === first);
+	if (first !== undefined && named === undefined && first !== '-') {
+		throw new UsageError(`Unknown command: ${first}`);
+	}
+	const args = named ? rest : positionals;
+
+	let command: CommandName = values.help ? 'help' : values.version ? 'version' : (named ?? 'sweep');
+	if (command === 'sync' && values.continue) {
+		command = 'resume';
+	}
+	const maxPositionals = command === 'post-pr' || command === 'sync' ? 1 : 0;
+	if (args.length > maxPositionals) {
+		throw new UsageError(`Unexpected argument: ${args[maxPositionals]}`);
+	}
+
+	return {
+		command,
+		positionals: args,
+		cwd: values.cwd,
+		dryRun: values['dry-run'],
+		force: values.force,
+		yes: values.yes,
+		fetch: !values['no-fetch'],
+		confirm: !values['no-confirm'],
+		protect: values.protect,
+		json: values.json,
+		verbose: values.verbose,
+		rpc: values.rpc,
+	};
+}
+
+/** Translates sweep settings (e.g. the VS Code configuration) into CLI flags. */
+export function settingsToCliArgs(settings: SweepSettings): string[] {
+	return [
+		...settings.protectedBranches.flatMap((pattern) => ['--protect', pattern]),
+		...(settings.autoFetchPrune ? [] : ['--no-fetch']),
+		...(settings.confirmBeforeDelete ? [] : ['--no-confirm']),
+	];
+}
+
+export const USAGE = `Usage: git-sweep-pro [command] [options]
+
+Safely prune local branches whose remote upstream is gone.
+Also available as "git sweep-pro" when the executable is on your PATH.
+
+Commands:
+  sweep              Detect stale branches, pick, confirm and delete them (default)
+  list               Print stale branches without deleting anything
+  post-pr [branch]   After a merged PR: switch to [branch], delete the old branch,
+                     sweep, then pull
+  sync [upstream]    Rebase the current branch onto [upstream] and force-push
+                     with --force-with-lease (stashes local changes)
+  resume             Continue a sync paused on conflicts (alias: sync --continue)
+  help, version
+
+Options:
+  -n, --dry-run      Only report what would be deleted
+  -f, --force        Delete with "git branch -D" instead of "-d"
+  -y, --yes          Accept pre-selected branches and confirm every prompt
+  -p, --protect <glob>
+                     Never delete branches matching <glob> (repeatable; also read
+                     from "git config --get-all git-sweep-pro.protected")
+      --no-fetch     Skip "git fetch -p" and use local ref state
+      --no-confirm   Do not ask before deleting
+      --json         Machine-readable output (list)
+  -C <path>          Run as if started in <path>
+  -v, --verbose      Echo every git command and its output
+  -h, --help         Show this help
+
+Without a terminal (e.g. in scripts), prompts fall back to their defaults and
+confirmations are refused unless --yes is given.`;

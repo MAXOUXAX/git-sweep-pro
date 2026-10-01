@@ -255,7 +255,7 @@ suite('E2E: sweep against a real git repository', () => {
 			'feature/stale should be deleted from the real repo after the sweep'
 		);
 		assert.ok(
-			infoMessages.some((m) => m.includes('Deleted 1 branch')),
+			infoMessages.includes('Git Sweep Pro: Deleted 1 branch(es); 0 skipped, 0 failed.'),
 			`expected a deletion confirmation; got ${JSON.stringify(infoMessages)}`
 		);
 		assert.deepStrictEqual(errorMessages, [], 'no error messages expected');
@@ -273,7 +273,7 @@ suite('E2E: sweep against a real git repository', () => {
 			'dry run must not delete the branch'
 		);
 		assert.ok(
-			infoMessages.some((m) => m.includes('would be deleted')),
+			infoMessages.includes('Git Sweep Pro (dry run): 1 branch(es) would be deleted.'),
 			`expected a dry-run summary; got ${JSON.stringify(infoMessages)}`
 		);
 
