@@ -25,7 +25,7 @@ function createDeps(overrides: {
 	return {
 		getWorkspaceRoot: () => '/repo',
 		getSettings: () => ({ ...DEFAULT_SWEEP_SETTINGS, confirmBeforeDelete: false }),
-		output: { show: () => undefined, appendLine: () => undefined },
+		output: { show: () => undefined, appendLine: () => undefined, header: () => undefined },
 		runGitCommand: overrides.runGitCommand ?? (async () => ({ stdout: '', stderr: '' })),
 		ui: {
 			withProgress: async (_, task) => task(),

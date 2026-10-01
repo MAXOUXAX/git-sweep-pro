@@ -82,14 +82,14 @@ suite('cli rpc bridge', () => {
 			await ui.showQuickPick([{ label: 'main' }], { canPickMany: false, ignoreFocusOut: true, matchOnDescription: true, title: 't', placeHolder: '' }),
 			{ label: 'main' }
 		);
-		assert.deepStrictEqual(await ui.pickBranches({ items: [{ label: 'a', picked: true }], title: 't', placeHolder: '' }), ['a']);
+		assert.deepStrictEqual(await ui.pickBranches({ items: [{ label: 'a', picked: true }], title: 't' }), ['a']);
 		assert.strictEqual(await ui.confirm('Delete?', 'Delete'), true);
 	});
 
 	test('a dismissed prompt comes back as undefined', async () => {
 		const host = createRecordingHostUi({});
 		const { ui } = connect(host);
-		assert.strictEqual(await ui.pickBranches({ items: [], title: 't', placeHolder: '' }), undefined);
+		assert.strictEqual(await ui.pickBranches({ items: [], title: 't' }), undefined);
 		assert.strictEqual(await ui.confirm('Delete?', 'Delete'), false);
 	});
 

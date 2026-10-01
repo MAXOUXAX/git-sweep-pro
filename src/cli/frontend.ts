@@ -1,7 +1,7 @@
 import pc from 'picocolors';
-import type { QuickPickItemLike, SweepWorkflowDeps, WorkflowOutcome, WorkflowUi } from '../core/sweep-workflow';
+import type { NoticeOptions, QuickPickItemLike, SweepWorkflowDeps, WorkflowOutcome, WorkflowUi } from '../core/sweep-workflow';
 import type { CliOptions } from './args';
-import { stripProductPrefix, type CliIo } from './io';
+import type { CliIo } from './io';
 import type { Prompter } from './prompter';
 import { createRpcFrontend } from './rpc-frontend';
 
@@ -60,7 +60,12 @@ function traceTo(io: CliIo, options: TerminalOptions): (line: string) => void {
 }
 
 function printProgress(io: CliIo, title: string): void {
-	io.stderr(`${pc.cyan('…')} ${stripProductPrefix(title)}\n`);
+	io.stderr(`${pc.cyan('…')} ${title}\n`);
+}
+
+/** Terminal wording of a notification: the output is already on screen, so only a dry run is called out. */
+function notice(message: string, options?: NoticeOptions): string {
+	return options?.dryRun ? `Dry run: ${message}` : message;
 }
 
 /** The picker item named on the command line; failing to find it fails the workflow. */
@@ -82,8 +87,9 @@ export function createPlainFrontend(io: CliIo, options: TerminalOptions): Fronte
 		trace: traceTo(io, options),
 		output: {
 			show: () => undefined,
-			appendLine: (line) => {
-				if (options.verbose || !/^(---|Workspace:|Mode:)/.test(line)) {
+			appendLine: (line) => io.stderr(`${pc.dim(line)}\n`),
+			header: (line) => {
+				if (options.verbose) {
 					io.stderr(`${pc.dim(line)}\n`);
 				}
 			},
@@ -104,8 +110,8 @@ export function createPlainFrontend(io: CliIo, options: TerminalOptions): Fronte
 				return preselected;
 			},
 			pickBranches: async ({ items }) => items.filter((item) => item.picked).map((item) => item.label),
-			showInformationMessage: (message) => io.stdout(`${stripProductPrefix(message)}\n`),
-			showErrorMessage: (message) => io.stderr(`${pc.red('error:')} ${stripProductPrefix(message)}\n`),
+			showInformationMessage: (message, notification) => io.stdout(`${notice(message, notification)}\n`),
+			showErrorMessage: (message, notification) => io.stderr(`${pc.red('error:')} ${notice(message, notification)}\n`),
 			confirm: async (message, confirmLabel) => {
 				if (options.yes) {
 					return true;
@@ -124,8 +130,9 @@ export function createInteractiveFrontend(io: CliIo, options: TerminalOptions, p
 		trace: traceTo(io, options),
 		output: {
 			show: () => undefined,
-			appendLine: (line) => {
-				if (options.verbose || !/^(---|Workspace:|Mode:)/.test(line)) {
+			appendLine: (line) => prompter.detail(line),
+			header: (line) => {
+				if (options.verbose) {
 					prompter.detail(line);
 				}
 			},
@@ -138,7 +145,7 @@ export function createInteractiveFrontend(io: CliIo, options: TerminalOptions, p
 					printProgress(io, progress.title);
 					return task();
 				}
-				return prompter.spin(stripProductPrefix(progress.title), task);
+				return prompter.spin(progress.title, task);
 			},
 			showQuickPick: async (items, pickOptions) => {
 				if (options.presetPick !== undefined) {
@@ -157,14 +164,14 @@ export function createInteractiveFrontend(io: CliIo, options: TerminalOptions, p
 					return items.filter((item) => item.picked).map((item) => item.label);
 				}
 				const values = await prompter.multiselect(
-					`${stripProductPrefix(title)} ${pc.dim('(space: toggle, a: all, enter: confirm)')}`,
+					`${title} ${pc.dim('(space: toggle, a: all, enter: confirm)')}`,
 					items.map((item, value) => ({ value, label: item.label })),
 					items.flatMap((item, index) => (item.picked ? [index] : []))
 				);
 				return values?.map((index) => items[index].label);
 			},
-			showInformationMessage: (message) => prompter.success(stripProductPrefix(message)),
-			showErrorMessage: (message) => prompter.error(stripProductPrefix(message)),
+			showInformationMessage: (message, notification) => prompter.success(notice(message, notification)),
+			showErrorMessage: (message, notification) => prompter.error(notice(message, notification)),
 			confirm: async (message, confirmLabel) => options.yes || (await prompter.confirm(message, confirmLabel)) === true,
 		},
 	};

@@ -74,7 +74,7 @@ export function activate(context: vscode.ExtensionContext) {
 	/** Runs the bundled CLI against `root`, rendering its prompts with the VS Code UI. */
 	const runCli = async (root: string | undefined, args: string[]): Promise<void> => {
 		if (!root) {
-			hostUi.showErrorMessage('Git Sweep Pro: No workspace folder is open.');
+			hostUi.showErrorMessage('No workspace folder is open.');
 			return;
 		}
 		const cliArgs = [...args, ...settingsToCliArgs(getSweepSettings())];

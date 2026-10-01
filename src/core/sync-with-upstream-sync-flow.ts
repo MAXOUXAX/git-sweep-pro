@@ -164,8 +164,8 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<WorkflowO
 	}
 
 	deps.output.show(true);
-	deps.output.appendLine(syncMessages.outputHeader);
-	deps.output.appendLine(`Workspace: ${workspaceRoot}`);
+	deps.output.header(syncMessages.outputHeader);
+	deps.output.header(`Workspace: ${workspaceRoot}`);
 
 	const runGit = (args: string[]) => deps.runGitCommand(args, workspaceRoot);
 
@@ -190,7 +190,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<WorkflowO
 		if (!currentBranch || currentBranch === 'HEAD') {
 			deps.ui.showErrorMessage(syncMessages.couldNotDetermineBranch);
 			deps.output.appendLine(`[error] ${syncMessages.couldNotDetermineBranch}`);
-			deps.output.appendLine(syncMessages.outputFailed);
+			deps.output.header(syncMessages.outputFailed);
 			return 'failed';
 		}
 		featureBranch = currentBranch;
@@ -225,7 +225,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<WorkflowO
 		if (!targetItem) {
 			deps.ui.showErrorMessage(syncMessages.internalBranchNotFound);
 			deps.output.appendLine(`[error] ${syncMessages.internalBranchNotFound}`);
-			deps.output.appendLine(syncMessages.outputFailed);
+			deps.output.header(syncMessages.outputFailed);
 			return 'failed';
 		}
 
@@ -287,7 +287,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<WorkflowO
 			if (isConflict) {
 				await saveMemento(deps, makeMemento());
 				deps.ui.showInformationMessage(syncMessages.rebaseConflicts);
-				deps.output.appendLine(syncMessages.outputRebasePaused);
+				deps.output.header(syncMessages.outputRebasePaused);
 				return 'paused';
 			}
 			throw rebaseError;
@@ -360,7 +360,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<WorkflowO
 		// the memento and would otherwise act on the outdated state.
 		await clearMemento(deps);
 
-		deps.output.appendLine(syncMessages.outputComplete);
+		deps.output.header(syncMessages.outputComplete);
 		deps.ui.showInformationMessage(syncMessages.syncedWith(featureBranch, upstreamRef));
 		return outcome;
 	} catch (error) {
@@ -374,9 +374,9 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<WorkflowO
 			showSyncGitCommandError(deps, message);
 		}
 		deps.output.appendLine(`[error] ${message}`);
-		deps.output.appendLine(syncMessages.outputFailed);
+		deps.output.header(syncMessages.outputFailed);
 		return 'failed';
 	} finally {
-		deps.output.appendLine(syncMessages.outputSessionEnded);
+		deps.output.header(syncMessages.outputSessionEnded);
 	}
 }

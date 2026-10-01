@@ -140,7 +140,7 @@ async function runList(root: string, deps: SweepWorkflowDeps, options: CliOption
 		}
 		return 'ok';
 	} catch (error) {
-		deps.ui.showErrorMessage(describeGitFailure(toErrorMessage(error), 'Git Sweep Pro failed:'));
+		deps.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	}
 }

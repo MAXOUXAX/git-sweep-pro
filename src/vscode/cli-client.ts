@@ -111,7 +111,7 @@ export function runCliProcess(options: CliRunOptions): Promise<number> {
 		};
 
 		child.on('error', (error) => {
-			options.ui.showErrorMessage(`Git Sweep Pro: Could not start the git-sweep-pro CLI: ${error.message}`);
+			options.ui.showErrorMessage(`Could not start the git-sweep-pro CLI: ${error.message}`);
 			finish(-1);
 		});
 		child.on('close', (code) => finish(code ?? -1));

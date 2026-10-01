@@ -34,19 +34,19 @@ async function getDefaultBranchName(runGit: (args: string[]) => Promise<{ stdout
 export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Promise<WorkflowOutcome> {
 	const workspaceRoot = deps.getWorkspaceRoot();
 	if (!workspaceRoot) {
-		deps.ui.showErrorMessage('Git Sweep Pro: No workspace folder is open.');
+		deps.ui.showErrorMessage('No workspace folder is open.');
 		return 'failed';
 	}
 
 	deps.output.show(true);
-	deps.output.appendLine('--- Post Pull Request session started ---');
-	deps.output.appendLine(`Workspace: ${workspaceRoot}`);
+	deps.output.header('--- Post Pull Request session started ---');
+	deps.output.header(`Workspace: ${workspaceRoot}`);
 
 	const runGit = (args: string[]) => deps.runGitCommand(args, workspaceRoot);
 
 	try {
 		await deps.ui.withProgress(
-			{ title: 'Git Sweep Pro: Fetching remotes...' },
+			{ title: 'Fetching remotes' },
 			() => runGit(['fetch', '-p'])
 		);
 
@@ -58,13 +58,13 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 
 		const currentBranch = currentBranchResult.stdout.trim();
 		if (!currentBranch || currentBranch === 'HEAD') {
-			deps.ui.showErrorMessage('Git Sweep Pro: Could not determine current branch (detached HEAD?).');
+			deps.ui.showErrorMessage('Could not determine current branch (detached HEAD?).');
 			return 'failed';
 		}
 
 		const branchItems = parseBranches(branchListResult.stdout);
 		if (branchItems.length === 0) {
-			deps.ui.showInformationMessage('Git Sweep Pro: No other branches available to checkout.');
+			deps.ui.showInformationMessage('No other branches available to checkout.');
 			return 'cancelled';
 		}
 
@@ -95,14 +95,14 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		const selectedItem = singlePick(selected);
 		if (!selectedItem) {
 			deps.output.appendLine('Operation cancelled.');
-			deps.output.appendLine('--- Post Pull Request session ended ---');
+			deps.output.header('--- Post Pull Request session ended ---');
 			return 'cancelled';
 		}
 
 		const targetItem = findBranchByPickLabel(branchItems, selectedItem.label);
 		if (!targetItem) {
 			deps.output.appendLine('[error] Could not match selected branch to branch list.');
-			deps.ui.showErrorMessage('Git Sweep Pro: Internal error — selected branch not found.');
+			deps.ui.showErrorMessage('Internal error — selected branch not found.');
 			return 'failed';
 		}
 
@@ -111,7 +111,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 
 		try {
 			await deps.ui.withProgress(
-				{ title: `Git Sweep Pro: Checking out ${localTarget}...` },
+				{ title: `Checking out ${localTarget}` },
 				async () => {
 					if (targetItem.isRemote) {
 						// Attempt to switch to an existing local branch first to preserve
@@ -128,9 +128,9 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			);
 		} catch (checkoutError) {
 			const msg = toErrorMessage(checkoutError);
-			deps.ui.showErrorMessage(`Git Sweep Pro: Checkout failed: ${msg}`);
+			deps.ui.showErrorMessage(`Checkout failed: ${msg}`);
 			deps.output.appendLine(`[error] Checkout failed: ${msg}`);
-			deps.output.appendLine('--- Post Pull Request session ended ---');
+			deps.output.header('--- Post Pull Request session ended ---');
 			return 'failed';
 		}
 
@@ -142,13 +142,13 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		} else {
 			try {
 				await deps.ui.withProgress(
-					{ title: `Git Sweep Pro: Deleting branch ${currentBranch}...` },
+					{ title: `Deleting branch ${currentBranch}` },
 					() => runGit(['branch', '-D', currentBranch])
 				);
 				deps.output.appendLine(`Deleted branch: ${currentBranch}`);
 			} catch {
 				deps.ui.showErrorMessage(
-					`Git Sweep Pro: Could not delete branch "${currentBranch}". You can delete it manually with: git branch -D ${escapeForShell(currentBranch)}`
+					`Could not delete branch "${currentBranch}". You can delete it manually with: git branch -D ${escapeForShell(currentBranch)}`
 				);
 				outcome = 'failed';
 			}
@@ -163,7 +163,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		let pulled = false;
 		try {
 			await deps.ui.withProgress(
-				{ title: `Git Sweep Pro: Pulling ${localTarget}...` },
+				{ title: `Pulling ${localTarget}` },
 				() => runGit(['pull'])
 			);
 			pulled = true;
@@ -172,23 +172,23 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			if (isNoUpstreamError(toErrorMessage(pullError))) {
 				deps.output.appendLine(`No upstream configured for ${localTarget}. Pull skipped.`);
 				deps.ui.showInformationMessage(
-					`Git Sweep Pro: Switched to ${localTarget}. (No upstream—pull skipped.)`
+					`Switched to ${localTarget}. (No upstream—pull skipped.)`
 				);
 			} else {
 				throw pullError;
 			}
 		}
 
-		deps.output.appendLine('--- Post Pull Request session ended ---');
+		deps.output.header('--- Post Pull Request session ended ---');
 		if (pulled) {
-			deps.ui.showInformationMessage(`Git Sweep Pro: Switched to ${localTarget} and pulled.`);
+			deps.ui.showInformationMessage(`Switched to ${localTarget} and pulled.`);
 		}
 		return outcome;
 	} catch (error) {
 		const message = toErrorMessage(error);
-		deps.ui.showErrorMessage(describeGitFailure(message, 'Git Sweep Pro failed:'));
+		deps.ui.showErrorMessage(...describeGitFailure(message, { failed: true }));
 		deps.output.appendLine(`[error] ${message}`);
-		deps.output.appendLine('--- Post Pull Request session ended ---');
+		deps.output.header('--- Post Pull Request session ended ---');
 		return 'failed';
 	}
 }

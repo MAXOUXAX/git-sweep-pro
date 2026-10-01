@@ -1,7 +1,6 @@
 import * as assert from 'assert';
 import { parseArgs } from '../../cli/args';
 import { createFrontend, createInteractiveFrontend, createPlainFrontend, type TerminalOptions } from '../../cli/frontend';
-import { stripProductPrefix } from '../../cli/io';
 import type { QuickPickOptionsLike } from '../../core/sweep-workflow';
 import { createFakePrompter } from './fake-prompter';
 import { createFakeIo } from './git-fixture';
@@ -23,12 +22,6 @@ const branchItems = [
 const plain: TerminalOptions = { yes: false, presetPick: undefined, verbose: false };
 
 suite('cli front ends', () => {
-	test('stripProductPrefix drops the product name but keeps a qualifier', () => {
-		assert.strictEqual(stripProductPrefix('Git Sweep Pro: Done.'), 'Done.');
-		assert.strictEqual(stripProductPrefix('Git Sweep Pro (dry run): 2 would go.'), 'Dry run: 2 would go.');
-		assert.strictEqual(stripProductPrefix('Other text'), 'Other text');
-	});
-
 	suite('createFrontend', () => {
 		test('--rpc forwards everything to the host as NDJSON', async () => {
 			const io = createFakeIo('/repo', { interactive: true });
@@ -58,28 +51,34 @@ suite('cli front ends', () => {
 		test('messages go to stdout, errors and output to stderr', () => {
 			const io = createFakeIo('/repo');
 			const frontend = createPlainFrontend(io, plain);
-			frontend.ui.showInformationMessage('Git Sweep Pro: hello');
-			frontend.ui.showErrorMessage('Git Sweep Pro: broken');
+			frontend.ui.showInformationMessage('hello');
+			frontend.ui.showInformationMessage('2 branch(es) would be deleted.', { dryRun: true });
+			frontend.ui.showErrorMessage('broken', { failed: true, seeOutput: true });
 			frontend.output.appendLine('- feature/x');
-			assert.deepStrictEqual(io.out, ['hello\n']);
-			assert.ok(io.err[0].includes('error:') && io.err[0].includes('broken'));
+			assert.deepStrictEqual(io.out, ['hello\n', 'Dry run: 2 branch(es) would be deleted.\n']);
+			assert.ok(io.err[0].includes('error:') && io.err[0].endsWith(' broken\n'));
 			assert.ok(io.err[1].includes('- feature/x'));
 		});
 
-		test('git traces only show with --verbose', () => {
+		test('session headers and git traces only show with --verbose', () => {
 			const quiet = createFakeIo('/repo');
-			createPlainFrontend(quiet, plain).trace('$ git fetch -p');
+			const quietFrontend = createPlainFrontend(quiet, plain);
+			quietFrontend.output.header('--- Git Sweep session started ---');
+			quietFrontend.trace('$ git fetch -p');
 			assert.deepStrictEqual(quiet.err, []);
 
 			const verbose = createFakeIo('/repo');
-			createPlainFrontend(verbose, { ...plain, verbose: true }).trace('$ git fetch -p');
-			assert.deepStrictEqual(verbose.err, ['$ git fetch -p\n']);
+			const verboseFrontend = createPlainFrontend(verbose, { ...plain, verbose: true });
+			verboseFrontend.output.header('--- Git Sweep session started ---');
+			verboseFrontend.trace('$ git fetch -p');
+			assert.strictEqual(verbose.err.length, 2);
+			assert.strictEqual(verbose.err[1], '$ git fetch -p\n');
 		});
 
 		test('withProgress prints the title and returns the task result', async () => {
 			const io = createFakeIo('/repo');
-			assert.strictEqual(await createPlainFrontend(io, plain).ui.withProgress({ title: 'Git Sweep Pro: Fetching...' }, async () => 42), 42);
-			assert.ok(io.err[0].includes('Fetching...'));
+			assert.strictEqual(await createPlainFrontend(io, plain).ui.withProgress({ title: 'Fetching' }, async () => 42), 42);
+			assert.ok(io.err[0].includes('Fetching'));
 		});
 
 		test('confirm is refused unless --yes', async () => {
@@ -91,7 +90,7 @@ suite('cli front ends', () => {
 
 		test('pickBranches keeps the pre-selection', async () => {
 			const { ui } = createPlainFrontend(createFakeIo('/repo'), plain);
-			assert.deepStrictEqual(await ui.pickBranches({ items: branchItems, title: 't', placeHolder: '' }), ['a', 'b']);
+			assert.deepStrictEqual(await ui.pickBranches({ items: branchItems, title: 't' }), ['a', 'b']);
 		});
 
 		test('showQuickPick falls back to the pre-picked item, or fails without one', async () => {
@@ -117,16 +116,17 @@ suite('cli front ends', () => {
 		test('messages, output, progress and the session frame use the widgets', async () => {
 			const { prompter, calls } = createFakePrompter();
 			const frontend = createInteractiveFrontend(interactiveIo(), plain, prompter);
-			frontend.ui.showInformationMessage('Git Sweep Pro: Deleted 1 branch(es).');
-			frontend.ui.showErrorMessage('Git Sweep Pro: oops');
+			frontend.ui.showInformationMessage('Deleted 1 branch(es).');
+			frontend.ui.showErrorMessage('oops', { failed: true });
+			frontend.output.header('--- Git Sweep session started ---');
 			frontend.output.appendLine('- a');
-			assert.strictEqual(await frontend.ui.withProgress({ title: 'Git Sweep Pro: Fetching...' }, async () => 'ok'), 'ok');
+			assert.strictEqual(await frontend.ui.withProgress({ title: 'Fetching' }, async () => 'ok'), 'ok');
 			frontend.outro?.('paused');
 			assert.deepStrictEqual(calls, [
 				'success Deleted 1 branch(es).',
 				'error oops',
 				'detail - a',
-				'spin Fetching...',
+				'spin Fetching',
 				'outro Paused: resolve the conflicts, then run "git sweep-pro sync --continue".',
 			]);
 		});
@@ -142,7 +142,7 @@ suite('cli front ends', () => {
 		test('pickBranches maps the multiselect with the pre-selection as initial values', async () => {
 			const { prompter, seen } = createFakePrompter({ multiselect: [0, 2] });
 			const { ui } = createInteractiveFrontend(interactiveIo(), plain, prompter);
-			assert.deepStrictEqual(await ui.pickBranches({ items: branchItems, title: 't', placeHolder: '' }), ['a', 'c']);
+			assert.deepStrictEqual(await ui.pickBranches({ items: branchItems, title: 't' }), ['a', 'c']);
 			assert.deepStrictEqual(seen.initial, [0, 1]);
 			assert.deepStrictEqual(seen.options?.map((o) => o.label), ['a', 'b', 'c']);
 		});
@@ -150,12 +150,12 @@ suite('cli front ends', () => {
 		test('pickBranches: cancel returns undefined, --yes skips the prompt', async () => {
 			const cancelled = createFakePrompter();
 			assert.strictEqual(
-				await createInteractiveFrontend(interactiveIo(), plain, cancelled.prompter).ui.pickBranches({ items: branchItems, title: 't', placeHolder: '' }),
+				await createInteractiveFrontend(interactiveIo(), plain, cancelled.prompter).ui.pickBranches({ items: branchItems, title: 't' }),
 				undefined
 			);
 			const yes = createFakePrompter();
 			assert.deepStrictEqual(
-				await createInteractiveFrontend(interactiveIo(), { ...plain, yes: true }, yes.prompter).ui.pickBranches({ items: branchItems, title: 't', placeHolder: '' }),
+				await createInteractiveFrontend(interactiveIo(), { ...plain, yes: true }, yes.prompter).ui.pickBranches({ items: branchItems, title: 't' }),
 				['a', 'b']
 			);
 			assert.deepStrictEqual(yes.calls, []);

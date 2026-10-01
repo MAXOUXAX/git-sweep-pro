@@ -33,17 +33,17 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<Workflo
 	}
 
 	deps.output.show(true);
-	deps.output.appendLine(syncMessages.outputResumeHeader);
+	deps.output.header(syncMessages.outputResumeHeader);
 	try {
 		return await doResume(deps, workspaceRoot, gitDir);
 	} catch (error) {
 		const message = toErrorMessage(error);
 		showSyncGitCommandError(deps, message);
 		deps.output.appendLine(`[error] ${message}`);
-		deps.output.appendLine(syncMessages.outputFailed);
+		deps.output.header(syncMessages.outputFailed);
 		return 'failed';
 	} finally {
-		deps.output.appendLine(syncMessages.outputSessionEnded);
+		deps.output.header(syncMessages.outputSessionEnded);
 	}
 }
 
@@ -59,11 +59,11 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 		if (rebaseActive) {
 			deps.ui.showErrorMessage(syncMessages.rebaseNotStartedByExtension);
 			deps.output.appendLine(syncMessages.rebaseNotStartedByExtension);
-			deps.output.appendLine(syncMessages.outputFailed);
+			deps.output.header(syncMessages.outputFailed);
 		} else {
 			deps.ui.showInformationMessage(syncMessages.noRebaseNothingToResume);
 			deps.output.appendLine(syncMessages.nothingToResume);
-			deps.output.appendLine(syncMessages.outputResumeComplete);
+			deps.output.header(syncMessages.outputResumeComplete);
 		}
 		return rebaseActive ? 'failed' : 'ok';
 	}
@@ -71,7 +71,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 	if (memento.workspaceRoot !== workspaceRoot) {
 		deps.ui.showErrorMessage(syncMessages.rebaseInOtherWorkspace);
 		deps.output.appendLine(syncMessages.rebaseInOtherWorkspace);
-		deps.output.appendLine(syncMessages.outputFailed);
+		deps.output.header(syncMessages.outputFailed);
 		return 'failed';
 	}
 
@@ -79,7 +79,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 	if (!featureBranch) {
 		deps.ui.showErrorMessage(syncMessages.couldNotDetermineRebaseBranch);
 		deps.output.appendLine(`[error] ${syncMessages.couldNotDetermineRebaseBranch}`);
-		deps.output.appendLine(syncMessages.outputFailed);
+		deps.output.header(syncMessages.outputFailed);
 		return 'failed';
 	}
 	const hasStash = memento.hasStash;
@@ -90,7 +90,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 		if (rebasingBranch && rebasingBranch !== featureBranch) {
 			deps.ui.showErrorMessage(syncMessages.rebaseBranchMismatch(featureBranch, rebasingBranch));
 			deps.output.appendLine(syncMessages.rebaseBranchMismatch(featureBranch, rebasingBranch));
-			deps.output.appendLine(syncMessages.outputFailed);
+			deps.output.header(syncMessages.outputFailed);
 			return 'failed';
 		}
 	}
@@ -106,7 +106,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 			if (isRebaseInProgress(gitDir, deps)) {
 				deps.ui.showErrorMessage(syncMessages.remainingConflicts);
 				deps.output.appendLine(`[error] ${msg}`);
-				deps.output.appendLine(syncMessages.outputRebasePaused);
+				deps.output.header(syncMessages.outputRebasePaused);
 				return 'paused';
 			}
 			// The rebase ended between the initial check and the continue attempt
@@ -125,9 +125,9 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 			);
 		} catch (checkoutError) {
 			const msg = toErrorMessage(checkoutError);
-			deps.ui.showErrorMessage(syncMessages.errorGeneric(msg));
+			deps.ui.showErrorMessage(msg);
 			deps.output.appendLine(`[error] ${msg}`);
-			deps.output.appendLine(syncMessages.outputFailed);
+			deps.output.header(syncMessages.outputFailed);
 			return 'failed';
 		}
 	}
@@ -141,7 +141,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 		const msg = toErrorMessage(pushError);
 		deps.ui.showErrorMessage(syncMessages.rebaseOkPushFailed(msg));
 		deps.output.appendLine(`[error] ${msg}`);
-		deps.output.appendLine(syncMessages.outputFailed);
+		deps.output.header(syncMessages.outputFailed);
 		return 'failed';
 	}
 
@@ -173,7 +173,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 	}
 
 	await clearMemento(deps);
-	deps.output.appendLine(syncMessages.outputResumeComplete);
+	deps.output.header(syncMessages.outputResumeComplete);
 	deps.ui.showInformationMessage(syncMessages.syncedSuccess(featureBranch));
 	return outcome;
 }

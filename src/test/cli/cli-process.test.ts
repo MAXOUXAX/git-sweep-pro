@@ -70,13 +70,13 @@ suite('cli process client (real git)', function () {
 		const host = createHostUi(true);
 		const code = await runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: fx.dir, args: ['sweep'], ui: host.ui });
 		assert.strictEqual(code, 1);
-		assert.deepStrictEqual(host.errors, ['Git Sweep Pro: The selected workspace folder is not a Git repository.']);
+		assert.deepStrictEqual(host.errors, ['The selected workspace folder is not a Git repository.']);
 	});
 
 	test('reports a runtime that cannot be started', async () => {
 		const host = createHostUi(true);
 		const code = await runCliProcess({ nodePath: path.join(fx.dir, 'no-such-node'), cliPath: CLI_PATH, cwd: fx.repo, args: [], ui: host.ui });
 		assert.strictEqual(code, -1);
-		assert.ok(host.errors[0]?.startsWith('Git Sweep Pro: Could not start the git-sweep-pro CLI'));
+		assert.ok(host.errors[0]?.startsWith('Could not start the git-sweep-pro CLI'));
 	});
 });

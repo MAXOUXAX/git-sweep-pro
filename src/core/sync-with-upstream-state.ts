@@ -55,7 +55,7 @@ export async function resolveGitDir(
 }
 
 export function showSyncGitCommandError(deps: SyncWithUpstreamDeps, message: string): void {
-	deps.ui.showErrorMessage(describeGitFailure(message, 'Git Sweep Pro:'));
+	deps.ui.showErrorMessage(...describeGitFailure(message));
 }
 
 export async function saveMemento(deps: SyncWithUpstreamDeps, memento: SyncMemento): Promise<void> {

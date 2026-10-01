@@ -33,10 +33,10 @@ export async function createClackPrompter(output: NodeJS.WritableStream = proces
 			spinner.start(title);
 			try {
 				const result = await task();
-				spinner.stop(title.replace(/\.{3}$/, ''));
+				spinner.stop(title);
 				return result;
 			} catch (error) {
-				spinner.error(title.replace(/\.{3}$/, ''));
+				spinner.error(title);
 				throw error;
 			}
 		},

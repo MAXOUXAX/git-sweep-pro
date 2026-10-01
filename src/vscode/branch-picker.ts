@@ -9,7 +9,6 @@ import { clearAll, invertSelection, selectAll, type SelectableBranch } from '../
 export function pickBranchesWithActions(options: {
 	readonly items: readonly SelectableBranch[];
 	readonly title: string;
-	readonly placeHolder: string;
 }): Promise<readonly string[] | undefined> {
 	return new Promise((resolve) => {
 		const quickPick = vscode.window.createQuickPick<vscode.QuickPickItem>();
@@ -17,7 +16,7 @@ export function pickBranchesWithActions(options: {
 		quickPick.ignoreFocusOut = true;
 		quickPick.matchOnDescription = true;
 		quickPick.title = options.title;
-		quickPick.placeholder = options.placeHolder;
+		quickPick.placeholder = 'All stale tracked branches are pre-selected. Use the title-bar actions to select all, clear, or invert.';
 
 		const selectAllButton: vscode.QuickInputButton = {
 			iconPath: new vscode.ThemeIcon('check-all'),

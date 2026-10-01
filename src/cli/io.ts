@@ -13,13 +13,3 @@ export type CliIo = {
 	readonly loadPrompter?: () => Promise<Prompter>;
 };
 
-/**
- * Drops the "Git Sweep Pro:" prefix used by extension notifications, which is
- * noise in a terminal. A qualifier survives: "Git Sweep Pro (dry run): x"
- * becomes "Dry run: x".
- */
-export function stripProductPrefix(message: string): string {
-	return message.replace(/^Git Sweep Pro(?: \((.+?)\))?:\s*/, (_match, qualifier?: string) =>
-		qualifier ? `${qualifier[0].toUpperCase()}${qualifier.slice(1)}: ` : ''
-	);
-}

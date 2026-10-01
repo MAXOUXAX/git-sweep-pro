@@ -459,7 +459,7 @@ suite('sync-with-upstream workflow', () => {
 			});
 			await runSyncWithUpstreamWorkflow(h.deps);
 
-			assert.deepStrictEqual(h.errorMessages, [syncMessages.errorGeneric('mysterious failure')]);
+			assert.deepStrictEqual(h.errorMessages, ['mysterious failure']);
 		});
 	});
 

@@ -34,6 +34,7 @@ export function createRpcFrontend(io: CliIo): Frontend {
 		output: {
 			show: (preserveFocus) => send({ type: 'showOutput', preserveFocus }),
 			appendLine: log,
+			header: log,
 		},
 		ui: {
 			withProgress: async (options, task) => {
