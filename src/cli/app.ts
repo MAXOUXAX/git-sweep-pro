@@ -5,7 +5,7 @@ import { runGitCommand, type CommandResult } from '../core/git-command';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import { GONE_REFS_ARGS, isProtectedBranch, parseGoneBranchRefs, type SweepSettings } from '../core/sweep-logic';
 import { runSweepWorkflow, type SweepWorkflowDeps, type WorkflowUi } from '../core/sweep-workflow';
-import { MEMENTO_KEY } from '../core/sync-with-upstream-state';
+import { MEMENTO_KEY, type StateStore } from '../core/sync-with-upstream-state';
 import {
 	runSyncWithUpstreamResumeWorkflow,
 	runSyncWithUpstreamWorkflow,
@@ -14,7 +14,7 @@ import {
 import { parseArgs, USAGE, UsageError, type CliOptions } from './args';
 import type { CliIo } from './io';
 import { createRpcUi } from './rpc-ui';
-import { createFileStateStore, createMemoryStateStore, stateFilePath, type StateStore } from './state-store';
+import { createFileStateStore, createMemoryStateStore, stateFilePath } from './state-store';
 import { createTerminalUi } from './terminal-ui';
 
 /** Exit codes, documented in the README. */
@@ -125,7 +125,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	};
 
 	prompter?.intro(`git sweep-pro ${options.command}`);
-	const code = await runCommand(options, deps, io);
+	const code = await runCommand(options, workspaceRoot, deps, io);
 	prompter?.outro(
 		code === EXIT.ok
 			? 'Done.'
@@ -136,12 +136,10 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	return code;
 }
 
-async function runCommand(options: CliOptions, deps: CliDeps, io: CliIo): Promise<number> {
-	const workspaceRoot = deps.getWorkspaceRoot() as string;
-
+async function runCommand(options: CliOptions, workspaceRoot: string, deps: CliDeps, io: CliIo): Promise<number> {
 	switch (options.command) {
 		case 'list':
-			return runList(deps, options, io);
+			return runList(workspaceRoot, deps, options, io);
 		case 'sweep':
 			await runSweepWorkflow({ dryRun: options.dryRun, forceDelete: options.force }, deps);
 			break;
@@ -172,8 +170,7 @@ async function runCommand(options: CliOptions, deps: CliDeps, io: CliIo): Promis
 }
 
 /** `list`: prints stale branches without touching them (`--json` for scripts). */
-async function runList(deps: CliDeps, options: CliOptions, io: CliIo): Promise<number> {
-	const root = deps.getWorkspaceRoot() as string;
+async function runList(root: string, deps: CliDeps, options: CliOptions, io: CliIo): Promise<number> {
 	const { protectedBranches, autoFetchPrune } = deps.getSettings();
 	try {
 		if (autoFetchPrune) {

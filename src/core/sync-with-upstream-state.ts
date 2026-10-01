@@ -16,11 +16,14 @@ export type SyncMemento = {
 	readonly tempBranchToCleanup?: string;
 };
 
+/** Key-value store that keeps a paused sync across runs. Setting a key to `undefined` removes it. */
+export type StateStore = {
+	get: <T>(key: string) => T | undefined;
+	update: (key: string, value: unknown) => PromiseLike<void>;
+};
+
 export type SyncWithUpstreamDeps = SweepWorkflowDeps & {
-	readonly workspaceState: {
-		get: <T>(key: string) => T | undefined;
-		update: (key: string, value: unknown) => PromiseLike<void>;
-	};
+	readonly workspaceState: StateStore;
 	readonly fileExists: (filePath: string) => boolean;
 	readonly readFileUtf8: (filePath: string) => string;
 };

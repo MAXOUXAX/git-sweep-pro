@@ -1,10 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-
-export type StateStore = {
-	get: <T>(key: string) => T | undefined;
-	update: (key: string, value: unknown) => Promise<void>;
-};
+import type { StateStore } from '../core/sync-with-upstream-state';
 
 /**
  * Persists workflow state (e.g. a sync paused on conflicts) as JSON inside the
