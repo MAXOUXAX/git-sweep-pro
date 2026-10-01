@@ -27,9 +27,7 @@ export function createFakePrompter(answers: { select?: number; multiselect?: num
 			calls.push(`spin ${title}`);
 			return task();
 		},
-		info: (message) => calls.push(`info ${message}`),
 		success: (message) => calls.push(`success ${message}`),
-		warn: (message) => calls.push(`warn ${message}`),
 		error: (message) => calls.push(`error ${message}`),
 		detail: (message) => calls.push(`detail ${message}`),
 	};

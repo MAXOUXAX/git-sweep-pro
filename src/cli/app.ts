@@ -12,10 +12,9 @@ import {
 	type SyncWithUpstreamDeps,
 } from '../core/sync-with-upstream-workflow';
 import { EXIT, parseArgs, USAGE, UsageError, type CliOptions } from './args';
+import { createFrontend } from './frontend';
 import type { CliIo } from './io';
-import { createRpcUi } from './rpc-ui';
 import { createFileStateStore, createMemoryStateStore, stateFilePath } from './state-store';
-import { createTerminalUi } from './terminal-ui';
 
 /** git config key holding extra protected-branch globs (multi-valued). */
 export const PROTECTED_CONFIG_KEY = 'git-sweep-pro.protected';
@@ -74,32 +73,8 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 		return EXIT.failed;
 	}
 
-	// Three front ends: RPC for the extension, interactive widgets for a human,
-	// plain text for pipes and CI.
-	const rpcUi = options.rpc ? createRpcUi(io) : undefined;
-	const prompter = !rpcUi && io.interactive ? await io.loadPrompter?.() : undefined;
-	const terminalUi = rpcUi
-		? undefined
-		: createTerminalUi(io, { yes: options.yes, presetPick: options.positionals[0], spinners: !options.verbose }, prompter);
-
-	// In a terminal, git traces only show with --verbose, and so does the
-	// session chatter that the prompts already convey.
-	const traceLine = (line: string): void => {
-		if (rpcUi) {
-			rpcUi.log(line);
-		} else if (options.verbose) {
-			io.stderr(`${line}\n`);
-		}
-	};
-	const workflowLine = (line: string): void => {
-		if (rpcUi) {
-			rpcUi.log(line);
-		} else if (options.verbose || !/^(---|Workspace:|Mode:)/.test(line)) {
-			terminalUi?.detail(line);
-		}
-	};
-
-	const runGit: RunGit = (args, cwd) => runGitCommand(args, cwd, { appendLine: traceLine });
+	const frontend = await createFrontend(options, io);
+	const runGit: RunGit = (args, cwd) => runGitCommand(args, cwd, { appendLine: frontend.trace });
 	const workspaceRoot = (await tryGit(runGit, ['rev-parse', '--show-toplevel'], requestedDir)) || requestedDir;
 	const configProtected = (await tryGit(runGit, ['config', '--get-all', PROTECTED_CONFIG_KEY], workspaceRoot)) ?? '';
 
@@ -113,25 +88,14 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	const deps: SweepWorkflowDeps = {
 		getWorkspaceRoot: () => workspaceRoot,
 		getSettings: () => settings,
-		output: {
-			show: (preserveFocus) => rpcUi?.showOutput(preserveFocus),
-			appendLine: workflowLine,
-		},
+		output: frontend.output,
 		runGitCommand: runGit,
-		ui: (rpcUi ?? terminalUi)!,
+		ui: frontend.ui,
 	};
 
-	prompter?.intro(`git sweep-pro ${options.command}`);
+	frontend.intro?.(`git sweep-pro ${options.command}`);
 	const outcome = await runCommand(options, workspaceRoot, deps, io);
-	prompter?.outro(
-		outcome === 'ok'
-			? 'Done.'
-			: outcome === 'cancelled'
-				? 'Cancelled.'
-				: outcome === 'paused'
-					? 'Paused: resolve the conflicts, then run "git sweep-pro sync --continue".'
-					: 'Finished with errors.'
-	);
+	frontend.outro?.(outcome);
 	return EXIT_CODES[outcome];
 }
 

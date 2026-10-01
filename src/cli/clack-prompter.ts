@@ -40,9 +40,7 @@ export async function createClackPrompter(output: NodeJS.WritableStream = proces
 				throw error;
 			}
 		},
-		info: (message) => p.log.info(message, common),
 		success: (message) => p.log.success(message, common),
-		warn: (message) => p.log.warn(message, common),
 		error: (message) => p.log.error(message, common),
 		detail: (message) => p.log.message(pc.dim(message), common),
 	};

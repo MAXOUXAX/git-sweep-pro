@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import type { CliIo } from '../../cli/io';
-import { createRpcUi } from '../../cli/rpc-ui';
+import { createRpcFrontend } from '../../cli/rpc-frontend';
 import type { HostUi } from '../../core/rpc-protocol';
 import { createCliEventHandler } from '../../vscode/cli-client';
 
@@ -33,7 +33,7 @@ function createRecordingHostUi(answers: { pick?: unknown; branches?: readonly st
 }
 
 /** Wires the CLI's RPC UI straight into the host handler, as the real pipes would. */
-function connect(host: HostUi): ReturnType<typeof createRpcUi> {
+function connect(host: HostUi): ReturnType<typeof createRpcFrontend> {
 	const responses: string[] = [];
 	const waiters: Array<(line: string) => void> = [];
 	const handler = createCliEventHandler(host, (response) => {
@@ -57,18 +57,19 @@ function connect(host: HostUi): ReturnType<typeof createRpcUi> {
 		readLine: () =>
 			responses.length > 0 ? Promise.resolve(responses.shift()) : new Promise((resolve) => waiters.push(resolve)),
 	};
-	return createRpcUi(io);
+	return createRpcFrontend(io);
 }
 
 suite('cli rpc bridge', () => {
 	test('forwards notifications, logs and output requests', () => {
 		const host = createRecordingHostUi({});
-		const ui = connect(host);
-		ui.log('$ git fetch -p');
-		ui.showOutput(true);
+		const { ui, output, trace } = connect(host);
+		trace('$ git fetch -p');
+		output.appendLine('Deleted branch a');
+		output.show(true);
 		ui.showInformationMessage('done');
 		ui.showErrorMessage('bad');
-		assert.deepStrictEqual(host.rec.logs, ['$ git fetch -p']);
+		assert.deepStrictEqual(host.rec.logs, ['$ git fetch -p', 'Deleted branch a']);
 		assert.deepStrictEqual(host.rec.shown, [true]);
 		assert.deepStrictEqual(host.rec.infos, ['done']);
 		assert.deepStrictEqual(host.rec.errors, ['bad']);
@@ -76,7 +77,7 @@ suite('cli rpc bridge', () => {
 
 	test('round-trips prompts and their answers', async () => {
 		const host = createRecordingHostUi({ pick: { label: 'main' }, branches: ['a'], confirm: true });
-		const ui = connect(host);
+		const { ui } = connect(host);
 		assert.deepStrictEqual(
 			await ui.showQuickPick([{ label: 'main' }], { canPickMany: false, ignoreFocusOut: true, matchOnDescription: true, title: 't', placeHolder: '' }),
 			{ label: 'main' }
@@ -87,14 +88,14 @@ suite('cli rpc bridge', () => {
 
 	test('a dismissed prompt comes back as undefined', async () => {
 		const host = createRecordingHostUi({});
-		const ui = connect(host);
+		const { ui } = connect(host);
 		assert.strictEqual(await ui.pickBranches({ items: [], title: 't', placeHolder: '' }), undefined);
 		assert.strictEqual(await ui.confirm('Delete?', 'Delete'), false);
 	});
 
 	test('progress spans open and close around the task', async () => {
 		const host = createRecordingHostUi({});
-		const ui = connect(host);
+		const { ui } = connect(host);
 		assert.strictEqual(await ui.withProgress({ title: 'Fetching' }, async () => 'ok'), 'ok');
 		await new Promise((resolve) => setImmediate(resolve));
 		assert.deepStrictEqual(host.rec.progress, ['start Fetching', 'end Fetching']);
@@ -103,13 +104,13 @@ suite('cli rpc bridge', () => {
 	test('requests carry the WorkflowUi method name and its arguments', async () => {
 		const sent: string[] = [];
 		const io: CliIo = { cwd: '/', interactive: false, stdout: (text) => sent.push(text), stderr: () => undefined, readLine: async () => undefined };
-		await createRpcUi(io).confirm('Delete?', 'Delete');
+		await createRpcFrontend(io).ui.confirm('Delete?', 'Delete');
 		assert.deepStrictEqual(JSON.parse(sent[0]), { type: 'request', id: 1, method: 'confirm', params: ['Delete?', 'Delete'] });
 	});
 
 	test('a closed host answers prompts as dismissed', async () => {
 		const io: CliIo = { cwd: '/', interactive: false, stdout: () => undefined, stderr: () => undefined, readLine: async () => undefined };
-		assert.strictEqual(await createRpcUi(io).confirm('Delete?', 'Delete'), false);
+		assert.strictEqual(await createRpcFrontend(io).ui.confirm('Delete?', 'Delete'), false);
 	});
 
 	test('rejects a response for the wrong request', async () => {
@@ -120,7 +121,7 @@ suite('cli rpc bridge', () => {
 			stderr: () => undefined,
 			readLine: async () => JSON.stringify({ type: 'response', id: 99, result: true }),
 		};
-		await assert.rejects(async () => createRpcUi(io).confirm('Delete?', 'Delete'), /Unexpected RPC response/);
+		await assert.rejects(async () => createRpcFrontend(io).ui.confirm('Delete?', 'Delete'), /Unexpected RPC response/);
 	});
 
 	test('host logs non-protocol lines and closes dangling progress on dispose', async () => {

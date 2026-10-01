@@ -18,9 +18,7 @@ export type Prompter = {
 	confirm: (message: string, activeLabel: string) => Promise<boolean | undefined>;
 	/** Runs `task` behind a spinner labelled `title`. */
 	spin: <T>(title: string, task: () => Promise<T>) => Promise<T>;
-	info: (message: string) => void;
 	success: (message: string) => void;
-	warn: (message: string) => void;
 	error: (message: string) => void;
 	/** Secondary detail (workflow output). */
 	detail: (message: string) => void;
