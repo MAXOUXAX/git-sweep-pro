@@ -12,6 +12,7 @@ After a pull request is merged and its remote branch is deleted, the matching lo
 - **Handles squash & rebase merges** — detection is based on the remote branch being gone, not on commit reachability, so branches merged via squash or rebase are still found. When a safe delete refuses them (their commits were rewritten), Git Sweep Pro offers a one-click force-delete for exactly those branches.
 - **Multi-root aware** — when several open folders are Git repositories, it asks which one to operate on and remembers your choice for the session.
 - **Transparent** — every git command it runs and its output is written to the `Git Sweep` output channel, so there are no surprises.
+- **Scriptable** — the same engine is available as the `git sweep-pro` command line, with safe defaults for unattended runs.
 
 ## Getting started
 
@@ -34,6 +35,35 @@ All commands are available from the Command Palette under the **Git Sweep Pro** 
 | **Sync Branch With Upstream** | `git-sweep-pro.syncWithUpstream` | Keeps your feature branch up to date with a base branch (`main`, `develop`, …): stashes local changes, pulls the base, rebases the current branch onto it, force-pushes with `--force-with-lease`, then restores the stash. Pauses on rebase conflicts. |
 | **Resume Sync With Upstream** | `git-sweep-pro.syncWithUpstreamResume` | Resumes a paused sync after you resolve rebase conflicts, or retries a failed force-push and finishes the cleanup. |
 
+## Command line
+
+The extension ships a `git-sweep-pro` command line, and every editor command runs through it: the extension starts the CLI and renders its prompts with VS Code pickers and dialogs. What you can do in the editor, you can do in a terminal or a script.
+
+In VS Code's integrated terminals it is on the `PATH` automatically (setting `gitSweepPro.cli.addToTerminalPath`) and runs on VS Code's own runtime, so Node.js is not required. Because the executable is named `git-sweep-pro`, Git also exposes it as a subcommand:
+
+```sh
+git sweep-pro                 # detect, pick, confirm and delete stale branches
+git sweep-pro --dry-run       # show what would be deleted
+git sweep-pro list --json     # machine-readable list, nothing is deleted
+git sweep-pro -y -p 'release/*'   # non-interactive, with a protected pattern
+git sweep-pro post-pr main    # after a merged PR: switch to main, clean up, pull
+git sweep-pro sync origin/main    # rebase onto origin/main and force-push (with lease)
+git sweep-pro sync --continue     # resume after resolving rebase conflicts
+```
+
+Outside VS Code, run it with Node.js (`node <extension dir>/dist/cli/main.js`) or install it from a checkout of this repository with `npm install -g`.
+
+Without a terminal attached (CI, scripts), prompts keep their defaults and confirmations are **refused** unless `--yes` is passed, so an unattended run never deletes anything by surprise. Protected patterns can also be stored per repository with `git config --add git-sweep-pro.protected 'release/*'`.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Success (including "nothing to do" and a declined confirmation) |
+| `1` | A step failed; details are on stderr |
+| `2` | Invalid arguments |
+| `3` | `sync` or `resume` stopped on rebase conflicts; resolve them and run `sync --continue` |
+
+Run `git sweep-pro --help` for every option. A sync paused on conflicts is recorded in the repository's Git directory, so it can be resumed from either the terminal or the editor.
+
 ## Safety model
 
 Git Sweep Pro is built to make destructive operations feel trustworthy. It never deletes a branch you didn't approve.
@@ -52,6 +82,7 @@ Git Sweep Pro is built to make destructive operations feel trustworthy. It never
 | `gitSweepPro.protectedBranches` | `string[]` | `[]` | Glob patterns for branches that must never be deleted (e.g. `main`, `develop`, `release/*`). `*` matches any characters, `?` matches a single character. |
 | `gitSweepPro.autoFetchPrune` | `boolean` | `true` | Run `git fetch -p` before detecting stale branches. Disable to operate on the local ref state only. |
 | `gitSweepPro.confirmBeforeDelete` | `boolean` | `true` | Show a confirmation dialog before deleting the selected branches. |
+| `gitSweepPro.cli.addToTerminalPath` | `boolean` | `true` | Put the bundled `git-sweep-pro` CLI (also `git sweep-pro`) on the `PATH` of integrated terminals. |
 
 ## Requirements
 

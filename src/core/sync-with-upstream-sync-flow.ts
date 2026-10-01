@@ -10,7 +10,7 @@ import {
 	TEMP_BRANCH_PREFIX,
 	type SyncWithUpstreamDeps,
 } from './sync-with-upstream-state';
-import { singlePick } from './sweep-workflow';
+import { singlePick, type WorkflowOutcome } from './sweep-workflow';
 
 type RunGit = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 
@@ -138,11 +138,11 @@ async function cleanupAfterSyncError(
 	}
 }
 
-export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
+export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<WorkflowOutcome> {
 	const workspaceRoot = deps.getWorkspaceRoot();
 	if (!workspaceRoot) {
 		deps.ui.showErrorMessage(syncMessages.noWorkspace);
-		return;
+		return 'failed';
 	}
 
 	let gitDir: string | undefined;
@@ -151,21 +151,21 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	} catch (error) {
 		const message = toErrorMessage(error);
 		showSyncGitCommandError(deps, message);
-		return;
+		return 'failed';
 	}
 	if (!gitDir) {
 		deps.ui.showErrorMessage(syncMessages.notGitRepo);
-		return;
+		return 'failed';
 	}
 
 	if (isRebaseInProgress(gitDir, deps)) {
 		deps.ui.showInformationMessage(syncMessages.rebaseAlreadyInProgress);
-		return;
+		return 'paused';
 	}
 
 	deps.output.show(true);
-	deps.output.appendLine(syncMessages.outputHeader);
-	deps.output.appendLine(`Workspace: ${workspaceRoot}`);
+	deps.output.header(syncMessages.outputHeader);
+	deps.output.header(`Workspace: ${workspaceRoot}`);
 
 	const runGit = (args: string[]) => deps.runGitCommand(args, workspaceRoot);
 
@@ -173,6 +173,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	let hasStash = false;
 	let tempBranchToCleanup: string | undefined;
 	let skipOuterCleanup = false;
+	let outcome: WorkflowOutcome = 'ok';
 
 	try {
 		await deps.ui.withProgress(
@@ -189,8 +190,8 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		if (!currentBranch || currentBranch === 'HEAD') {
 			deps.ui.showErrorMessage(syncMessages.couldNotDetermineBranch);
 			deps.output.appendLine(`[error] ${syncMessages.couldNotDetermineBranch}`);
-			deps.output.appendLine(syncMessages.outputFailed);
-			return;
+			deps.output.header(syncMessages.outputFailed);
+			return 'failed';
 		}
 		featureBranch = currentBranch;
 
@@ -198,7 +199,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		if (branchItems.length === 0) {
 			deps.ui.showInformationMessage(syncMessages.noBranchesForSync);
 			deps.output.appendLine(syncMessages.operationCancelled);
-			return;
+			return 'cancelled';
 		}
 
 		const quickPickItems = branchItems.map((b) => ({
@@ -217,15 +218,15 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		const selectedItem = singlePick(selected);
 		if (!selectedItem) {
 			deps.output.appendLine(syncMessages.operationCancelled);
-			return;
+			return 'cancelled';
 		}
 
 		const targetItem = findBranchByPickLabel(branchItems, selectedItem.label);
 		if (!targetItem) {
 			deps.ui.showErrorMessage(syncMessages.internalBranchNotFound);
 			deps.output.appendLine(`[error] ${syncMessages.internalBranchNotFound}`);
-			deps.output.appendLine(syncMessages.outputFailed);
-			return;
+			deps.output.header(syncMessages.outputFailed);
+			return 'failed';
 		}
 
 		const upstreamRef = targetItem.ref;
@@ -233,7 +234,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		if (localBranchName(targetItem) === featureBranch) {
 			deps.ui.showInformationMessage(syncMessages.cannotSyncOntoItself(featureBranch));
 			deps.output.appendLine(syncMessages.operationCancelled);
-			return;
+			return 'cancelled';
 		}
 
 		// A status failure must not pass for a clean tree: proceeding without a
@@ -286,8 +287,8 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 			if (isConflict) {
 				await saveMemento(deps, makeMemento());
 				deps.ui.showInformationMessage(syncMessages.rebaseConflicts);
-				deps.output.appendLine(syncMessages.outputRebasePaused);
-				return;
+				deps.output.header(syncMessages.outputRebasePaused);
+				return 'paused';
 			}
 			throw rebaseError;
 		}
@@ -350,6 +351,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 				const popMsg = toErrorMessage(popError);
 				deps.ui.showErrorMessage(syncMessages.rebaseOkStashFailed);
 				deps.output.appendLine(`[stash-pop-error] ${popMsg}`);
+				outcome = 'failed';
 			}
 		}
 
@@ -358,8 +360,9 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 		// the memento and would otherwise act on the outdated state.
 		await clearMemento(deps);
 
-		deps.output.appendLine(syncMessages.outputComplete);
+		deps.output.header(syncMessages.outputComplete);
 		deps.ui.showInformationMessage(syncMessages.syncedWith(featureBranch, upstreamRef));
+		return outcome;
 	} catch (error) {
 		if (!skipOuterCleanup) {
 			await cleanupAfterSyncError(deps, runGit, featureBranch, tempBranchToCleanup, hasStash);
@@ -371,8 +374,9 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 			showSyncGitCommandError(deps, message);
 		}
 		deps.output.appendLine(`[error] ${message}`);
-		deps.output.appendLine(syncMessages.outputFailed);
+		deps.output.header(syncMessages.outputFailed);
+		return 'failed';
 	} finally {
-		deps.output.appendLine(syncMessages.outputSessionEnded);
+		deps.output.header(syncMessages.outputSessionEnded);
 	}
 }

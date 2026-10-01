@@ -1,54 +1,54 @@
 /**
  * Centralized user-visible strings for the Sync With Upstream workflow.
- * Kept in English to match command palette titles in package.json.
+ * Kept in English to match command palette titles in package.json. Front
+ * ends add their own framing (the product name in VS Code), and progress
+ * titles get their ellipsis or spinner there too.
  */
-const PREFIX = 'Git Sweep Pro:';
 
 export const syncMessages = {
-	noWorkspace: `${PREFIX} No workspace folder is open.`,
-	notGitRepo: `${PREFIX} The selected workspace folder is not a Git repository.`,
-	gitNotInstalled: `${PREFIX} Git is not installed or not available in PATH.`,
-	errorGeneric: (msg: string) => `${PREFIX} ${msg}`,
+	noWorkspace: 'No workspace folder is open.',
+	notGitRepo: 'The selected workspace folder is not a Git repository.',
+	gitNotInstalled: 'Git is not installed or not available in PATH.',
 
 	// runSyncFlow
-	couldNotDetermineBranch: `${PREFIX} Could not determine current branch (detached HEAD?).`,
-	internalBranchNotFound: `${PREFIX} Internal error — selected branch not found.`,
-	noBranchesForSync: `${PREFIX} No other branches available for sync.`,
+	couldNotDetermineBranch: 'Could not determine current branch (detached HEAD?).',
+	internalBranchNotFound: 'Internal error — selected branch not found.',
+	noBranchesForSync: 'No other branches available for sync.',
 	pickBranchTitle: 'Sync With Upstream: Choose branch to sync with',
 	pickBranchPlaceholder: 'Local or remote branch',
 	operationCancelled: 'Operation cancelled.',
-	fetchingRemotes: `${PREFIX} Fetching remotes...`,
-	creatingTempBranch: (ref: string) => `${PREFIX} Creating temporary branch for ${ref}...`,
-	pulling: (ref: string) => `${PREFIX} Pulling ${ref}...`,
-	checkingOut: (ref: string) => `${PREFIX} Checking out ${ref}...`,
-	returningTo: (branch: string) => `${PREFIX} Returning to ${branch}...`,
-	rebasing: (ref: string) => `${PREFIX} Rebasing onto ${ref}...`,
-	forcePush: `${PREFIX} Force push...`,
-	recoveringStash: `${PREFIX} Recovering stash...`,
-	rebaseConflicts: `${PREFIX} Rebase conflicts. Resolve them, then run "Sync With Upstream (Resume)" to continue.`,
+	fetchingRemotes: 'Fetching remotes',
+	creatingTempBranch: (ref: string) => `Creating temporary branch for ${ref}`,
+	pulling: (ref: string) => `Pulling ${ref}`,
+	checkingOut: (ref: string) => `Checking out ${ref}`,
+	returningTo: (branch: string) => `Returning to ${branch}`,
+	rebasing: (ref: string) => `Rebasing onto ${ref}`,
+	forcePush: 'Force push',
+	recoveringStash: 'Recovering stash',
+	rebaseConflicts: 'Rebase conflicts. Resolve them, then run "Sync With Upstream (Resume)" to continue.',
 	pushFailed: (msg: string) =>
-		`${PREFIX} Push failed: ${msg}. Run "Sync With Upstream (Resume)" to retry.`,
-	rebaseOkStashFailed: `${PREFIX} Rebase succeeded but stash pop failed. Use "git stash pop" manually.`,
+		`Push failed: ${msg}. Run "Sync With Upstream (Resume)" to retry.`,
+	rebaseOkStashFailed: 'Rebase succeeded but stash pop failed. Use "git stash pop" manually.',
 	cannotSyncOntoItself: (branch: string) =>
-		`${PREFIX} "${branch}" is the current branch. Choose a different branch to sync with.`,
+		`"${branch}" is the current branch. Choose a different branch to sync with.`,
 	stashNotRestored: (ref: string) =>
-		`${PREFIX} Your stashed changes were NOT restored. Recover them with: git stash apply ${ref}`,
-	stashNotRestoredUnknownRef: `${PREFIX} Your stashed changes were NOT restored. Run "git stash list" and apply the "gsp-sync-with-upstream" entry.`,
-	stashPopFailed: `${PREFIX} Stash could not be recovered. Use "git stash pop" manually.`,
-	syncedWith: (branch: string, upstream: string) => `${PREFIX} ${branch} synced with ${upstream}.`,
-	syncedSuccess: (branch: string) => `${PREFIX} ${branch} synced successfully.`,
+		`Your stashed changes were NOT restored. Recover them with: git stash apply ${ref}`,
+	stashNotRestoredUnknownRef: 'Your stashed changes were NOT restored. Run "git stash list" and apply the "gsp-sync-with-upstream" entry.',
+	stashPopFailed: 'Stash could not be recovered. Use "git stash pop" manually.',
+	syncedWith: (branch: string, upstream: string) => `${branch} synced with ${upstream}.`,
+	syncedSuccess: (branch: string) => `${branch} synced successfully.`,
 
 	// runResumeFlow
-	noRebaseNothingToResume: `${PREFIX} No rebase in progress and no saved state. Nothing to resume.`,
-	rebaseInOtherWorkspace: `${PREFIX} A rebase is in progress in another workspace. Open the correct folder.`,
-	couldNotDetermineRebaseBranch: `${PREFIX} Could not determine branch for in-progress rebase.`,
-	remainingConflicts: `${PREFIX} Conflicts remain. Resolve them and run "Sync With Upstream (Resume)" again.`,
-	rebaseOkPushFailed: (msg: string) => `${PREFIX} Rebase OK but push failed: ${msg}`,
-	rebaseContinue: `${PREFIX} Rebase --continue...`,
-	rebaseAlreadyInProgress: `${PREFIX} A rebase is already in progress. Use "Sync With Upstream (Resume)" to continue.`,
-	rebaseNotStartedByExtension: `${PREFIX} A rebase is in progress, but it was not started by Sync With Upstream. Finish it manually (git rebase --continue / --abort).`,
+	noRebaseNothingToResume: 'No rebase in progress and no saved state. Nothing to resume.',
+	rebaseInOtherWorkspace: 'A rebase is in progress in another workspace. Open the correct folder.',
+	couldNotDetermineRebaseBranch: 'Could not determine branch for in-progress rebase.',
+	remainingConflicts: 'Conflicts remain. Resolve them and run "Sync With Upstream (Resume)" again.',
+	rebaseOkPushFailed: (msg: string) => `Rebase OK but push failed: ${msg}`,
+	rebaseContinue: 'Rebase --continue',
+	rebaseAlreadyInProgress: 'A rebase is already in progress. Use "Sync With Upstream (Resume)" to continue.',
+	rebaseNotStartedByExtension: 'A rebase is in progress, but it was not started by Sync With Upstream. Finish it manually (git rebase --continue / --abort).',
 	rebaseBranchMismatch: (expected: string, actual: string) =>
-		`${PREFIX} The rebase in progress is on "${actual}", but the paused sync was for "${expected}". Finish the current rebase manually, then run Resume again.`,
+		`The rebase in progress is on "${actual}", but the paused sync was for "${expected}". Finish the current rebase manually, then run Resume again.`,
 
 	// output panel
 	outputHeader: '--- Sync With Upstream ---',

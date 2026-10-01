@@ -1,0 +1,6 @@
+#!/bin/sh
+# Launcher for the Git Sweep Pro CLI, put on the integrated terminal PATH by the
+# VS Code extension. GIT_SWEEP_PRO_NODE points at VS Code's own runtime, so
+# Node.js does not need to be installed; outside VS Code, `node` is used.
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ELECTRON_RUN_AS_NODE=1 exec "${GIT_SWEEP_PRO_NODE:-node}" "$dir/../dist/cli/main.js" "$@"

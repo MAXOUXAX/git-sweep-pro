@@ -9,20 +9,21 @@ suite('errors', () => {
 	});
 
 	test('describeGitFailure explains a missing repository', () => {
-		assert.strictEqual(
-			describeGitFailure('fatal: not a git repository (or any parent)', 'X:'),
-			'Git Sweep Pro: The selected workspace folder is not a Git repository.'
+		assert.deepStrictEqual(
+			describeGitFailure('fatal: not a git repository (or any parent)', { failed: true }),
+			['The selected workspace folder is not a Git repository.']
 		);
 	});
 
 	test('describeGitFailure explains a missing git executable', () => {
-		const expected = 'Git Sweep Pro: Git is not installed or not available in PATH.';
-		assert.strictEqual(describeGitFailure('spawn git ENOENT', 'X:'), expected);
-		assert.strictEqual(describeGitFailure('git: command not found', 'X:'), expected);
+		const expected = ['Git is not installed or not available in PATH.'];
+		assert.deepStrictEqual(describeGitFailure('spawn git ENOENT', { failed: true }), expected);
+		assert.deepStrictEqual(describeGitFailure('git: command not found'), expected);
 	});
 
-	test('describeGitFailure prefixes anything else', () => {
-		assert.strictEqual(describeGitFailure('weird', 'Git Sweep Pro failed:'), 'Git Sweep Pro failed: weird');
+	test('describeGitFailure passes anything else through with the given options', () => {
+		assert.deepStrictEqual(describeGitFailure('weird', { failed: true }), ['weird', { failed: true }]);
+		assert.deepStrictEqual(describeGitFailure('weird'), ['weird']);
 	});
 
 	test('isNoUpstreamError matches the pull messages for untracked branches', () => {

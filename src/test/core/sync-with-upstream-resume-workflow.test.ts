@@ -8,7 +8,7 @@ suite('sync-with-upstream resume workflow', () => {
 	suite('runSyncWithUpstreamResumeWorkflow', () => {
 		test('fails fast when no workspace is open', async () => {
 			const h = createHarness();
-			await runSyncWithUpstreamResumeWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamResumeWorkflow(h.deps), 'failed');
 
 			assert.deepStrictEqual(h.errorMessages, [syncMessages.noWorkspace]);
 			assert.strictEqual(h.commands.length, 0);
@@ -20,7 +20,7 @@ suite('sync-with-upstream resume workflow', () => {
 				fileExists: fileExistsNoRebase,
 				git: { 'rev-parse --absolute-git-dir': { stdout: '/repo/.git' } },
 			});
-			await runSyncWithUpstreamResumeWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamResumeWorkflow(h.deps), 'ok');
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.noRebaseNothingToResume]);
 			assert.ok(h.outputLines.includes(syncMessages.nothingToResume));
@@ -59,7 +59,7 @@ suite('sync-with-upstream resume workflow', () => {
 					'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
 				},
 			});
-			await runSyncWithUpstreamResumeWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamResumeWorkflow(h.deps), 'failed');
 
 			assert.deepStrictEqual(h.errorMessages, [syncMessages.rebaseNotStartedByExtension]);
 			assert.ok(!h.commands.includes('rebase --continue'));
@@ -136,7 +136,7 @@ suite('sync-with-upstream resume workflow', () => {
 					'push --force-with-lease': { stdout: '' },
 				},
 			});
-			await runSyncWithUpstreamResumeWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamResumeWorkflow(h.deps), 'ok');
 
 			assert.ok(h.commands.includes('rebase --continue'));
 			assert.ok(!h.commands.some((c) => c.startsWith('checkout ')));
@@ -241,7 +241,7 @@ suite('sync-with-upstream resume workflow', () => {
 					'rebase --continue': new Error('CONFLICT (content): Merge conflict in bar.ts'),
 				},
 			});
-			await runSyncWithUpstreamResumeWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamResumeWorkflow(h.deps), 'paused');
 
 			assert.deepStrictEqual(h.errorMessages, [syncMessages.remainingConflicts]);
 			assert.ok(!h.commands.includes('push --force-with-lease'));
@@ -270,7 +270,7 @@ suite('sync-with-upstream resume workflow', () => {
 					'push --force-with-lease': new Error('rejected: failed to push'),
 				},
 			});
-			await runSyncWithUpstreamResumeWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamResumeWorkflow(h.deps), 'failed');
 
 			assert.ok(h.commands.includes('rebase --continue'));
 			assert.ok(h.commands.includes('push --force-with-lease'));

@@ -65,6 +65,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
 		output: {
 			show: () => undefined,
 			appendLine: (line) => outputLines.push(line),
+			header: (line) => outputLines.push(line),
 		},
 		runGitCommand: async (args, _cwd) => {
 			const key = args.join(' ');
