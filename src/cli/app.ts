@@ -11,20 +11,11 @@ import {
 	runSyncWithUpstreamWorkflow,
 	type SyncWithUpstreamDeps,
 } from '../core/sync-with-upstream-workflow';
-import { parseArgs, USAGE, UsageError, type CliOptions } from './args';
+import { EXIT, parseArgs, USAGE, UsageError, type CliOptions } from './args';
 import type { CliIo } from './io';
 import { createRpcUi } from './rpc-ui';
 import { createFileStateStore, createMemoryStateStore, stateFilePath } from './state-store';
 import { createTerminalUi } from './terminal-ui';
-
-/** Exit codes, documented in the README. */
-export const EXIT = {
-	ok: 0,
-	failed: 1,
-	usage: 2,
-	/** A sync stopped on rebase conflicts; run `resume` once they are resolved. */
-	paused: 3,
-} as const;
 
 /** git config key holding extra protected-branch globs (multi-valued). */
 export const PROTECTED_CONFIG_KEY = 'git-sweep-pro.protected';

@@ -25,6 +25,13 @@ suite('cli args', () => {
 		assert.strictEqual(options.verbose, true);
 	});
 
+	test('accepts grouped short flags and a --protect value that starts with a dash', () => {
+		const options = parseArgs(['-ny', '--protect=-wip']);
+		assert.strictEqual(options.dryRun, true);
+		assert.strictEqual(options.yes, true);
+		assert.deepStrictEqual(options.protect, ['-wip']);
+	});
+
 	test('takes a branch positional for post-pr and sync', () => {
 		assert.deepStrictEqual(parseArgs(['post-pr', 'main']).positionals, ['main']);
 		assert.deepStrictEqual(parseArgs(['sync', 'origin/main']).positionals, ['origin/main']);
@@ -46,7 +53,8 @@ suite('cli args', () => {
 		assert.throws(() => parseArgs(['frobnicate']), /Unknown command: frobnicate/);
 		assert.throws(() => parseArgs(['--dry-run', '--force']), /cannot be combined/);
 		assert.throws(() => parseArgs(['--protect']), /requires a value/);
-		assert.throws(() => parseArgs(['-C', '--yes']), /requires a value/);
+		assert.throws(() => parseArgs(['-C', '--yes']), /Option -C requires a value/);
+		assert.throws(() => parseArgs(['--yes=1']), /Option --yes does not take a value/);
 		assert.throws(() => parseArgs(['sweep', 'extra']), /Unexpected argument: extra/);
 		assert.throws(() => parseArgs(['sync', 'a', 'b']), /Unexpected argument: b/);
 	});

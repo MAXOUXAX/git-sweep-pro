@@ -1,3 +1,4 @@
+import { parseArgs as parseArgv, type ParseArgsOptionsConfig } from 'node:util';
 import type { SweepSettings } from '../core/sweep-logic';
 
 export const COMMANDS = ['sweep', 'list', 'post-pr', 'sync', 'resume', 'help', 'version'] as const;
@@ -17,111 +18,104 @@ export type CliOptions = {
 	readonly protect: readonly string[];
 	readonly json: boolean;
 	readonly verbose: boolean;
-	/** `sync --continue` is an alias of `resume`. */
-	readonly continueSync: boolean;
 	/** Internal: drive the UI over NDJSON on stdio (used by the VS Code extension). */
 	readonly rpc: boolean;
 };
 
 export class UsageError extends Error {}
 
-const BOOLEAN_FLAGS: Record<string, keyof CliOptions> = {
-	'--dry-run': 'dryRun',
-	'-n': 'dryRun',
-	'--force': 'force',
-	'-f': 'force',
-	'--yes': 'yes',
-	'-y': 'yes',
-	'--json': 'json',
-	'--verbose': 'verbose',
-	'-v': 'verbose',
-	'--continue': 'continueSync',
-	'--rpc': 'rpc',
-};
+/** Exit codes, documented in the README. */
+export const EXIT = {
+	ok: 0,
+	failed: 1,
+	usage: 2,
+	/** A sync stopped on rebase conflicts; run `resume` once they are resolved. */
+	paused: 3,
+} as const;
 
-const NEGATED_FLAGS: Record<string, keyof CliOptions> = {
-	'--no-fetch': 'fetch',
-	'--no-confirm': 'confirm',
-};
+const OPTIONS = {
+	'dry-run': { type: 'boolean', short: 'n', default: false },
+	force: { type: 'boolean', short: 'f', default: false },
+	yes: { type: 'boolean', short: 'y', default: false },
+	protect: { type: 'string', short: 'p', multiple: true, default: [] },
+	// Declared explicitly: `allowNegative` needs Node 22.4, and VS Code 1.85 runs Node 18.
+	'no-fetch': { type: 'boolean', default: false },
+	'no-confirm': { type: 'boolean', default: false },
+	json: { type: 'boolean', default: false },
+	cwd: { type: 'string', short: 'C' },
+	verbose: { type: 'boolean', short: 'v', default: false },
+	help: { type: 'boolean', short: 'h', default: false },
+	version: { type: 'boolean', default: false },
+	/** `sync --continue` is an alias of `resume`. */
+	continue: { type: 'boolean', default: false },
+	rpc: { type: 'boolean', default: false },
+} satisfies ParseArgsOptionsConfig;
 
 /**
- * Parses `git-sweep-pro` arguments. Deliberately tiny and dependency-free: the
+ * Reports unknown options and missing values with the CLI's own wording. The
+ * strict parse would throw too, but with messages written for Node developers.
+ */
+function rejectInvalidOptions(argv: readonly string[]): void {
+	const { tokens } = parseArgv({ args: [...argv], options: OPTIONS, allowPositionals: true, strict: false, tokens: true });
+	for (const token of tokens) {
+		if (token.kind !== 'option') {
+			continue;
+		}
+		const option = Object.entries(OPTIONS).find(([name]) => name === token.name)?.[1];
+		if (!option) {
+			throw new UsageError(`Unknown option: ${token.rawName}`);
+		}
+		if (option.type === 'string' && (token.value === undefined || (!token.inlineValue && token.value.startsWith('-')))) {
+			throw new UsageError(`Option ${token.rawName} requires a value.`);
+		}
+		if (option.type === 'boolean' && token.value !== undefined) {
+			throw new UsageError(`Option ${token.rawName} does not take a value.`);
+		}
+	}
+}
+
+/**
+ * Parses `git-sweep-pro` arguments with `util.parseArgs`: no dependency, as the
  * CLI ships inside the VS Code extension, which is packaged without
  * node_modules.
  */
 export function parseArgs(argv: readonly string[]): CliOptions {
-	const flags: Record<string, unknown> = {
-		dryRun: false,
-		force: false,
-		yes: false,
-		fetch: true,
-		confirm: true,
-		json: false,
-		verbose: false,
-		continueSync: false,
-		rpc: false,
-	};
-	const protect: string[] = [];
-	const positionals: string[] = [];
-	let cwd: string | undefined;
-	let command: CommandName | undefined;
+	rejectInvalidOptions(argv);
+	const { values, positionals } = parseArgv({ args: [...argv], options: OPTIONS, allowPositionals: true });
 
-	const takeValue = (flag: string, index: number): string => {
-		const value = argv[index + 1];
-		if (value === undefined || value.startsWith('-')) {
-			throw new UsageError(`Option ${flag} requires a value.`);
-		}
-		return value;
-	};
-
-	for (let i = 0; i < argv.length; i++) {
-		const arg = argv[i];
-		if (arg === '-h' || arg === '--help') {
-			command = 'help';
-		} else if (arg === '--version') {
-			command = 'version';
-		} else if (arg === '-C') {
-			cwd = takeValue(arg, i);
-			i++;
-		} else if (arg === '--protect' || arg === '-p') {
-			protect.push(takeValue(arg, i));
-			i++;
-		} else if (arg.startsWith('--protect=')) {
-			protect.push(arg.slice('--protect='.length));
-		} else if (arg in BOOLEAN_FLAGS) {
-			flags[BOOLEAN_FLAGS[arg]] = true;
-		} else if (arg in NEGATED_FLAGS) {
-			flags[NEGATED_FLAGS[arg]] = false;
-		} else if (arg.startsWith('-') && arg !== '-') {
-			throw new UsageError(`Unknown option: ${arg}`);
-		} else if (command === undefined && (COMMANDS as readonly string[]).includes(arg)) {
-			command = arg as CommandName;
-		} else if (command === undefined && positionals.length === 0 && arg !== '-') {
-			throw new UsageError(`Unknown command: ${arg}`);
-		} else {
-			positionals.push(arg);
-		}
-	}
-
-	if (flags.dryRun && flags.force) {
+	if (values['dry-run'] && values.force) {
 		throw new UsageError('--dry-run and --force cannot be combined.');
 	}
 
-	let resolved: CommandName = command ?? 'sweep';
-	if (resolved === 'sync' && flags.continueSync) {
-		resolved = 'resume';
+	const [first, ...rest] = positionals;
+	const named = COMMANDS.find((name) => name === first);
+	if (first !== undefined && named === undefined && first !== '-') {
+		throw new UsageError(`Unknown command: ${first}`);
 	}
-	const maxPositionals = resolved === 'post-pr' || resolved === 'sync' ? 1 : 0;
-	if (positionals.length > maxPositionals) {
-		throw new UsageError(`Unexpected argument: ${positionals[maxPositionals]}`);
+	const args = named ? rest : positionals;
+
+	let command: CommandName = values.help ? 'help' : values.version ? 'version' : (named ?? 'sweep');
+	if (command === 'sync' && values.continue) {
+		command = 'resume';
+	}
+	const maxPositionals = command === 'post-pr' || command === 'sync' ? 1 : 0;
+	if (args.length > maxPositionals) {
+		throw new UsageError(`Unexpected argument: ${args[maxPositionals]}`);
 	}
 
 	return {
-		...(flags as Omit<CliOptions, 'command' | 'positionals' | 'cwd' | 'protect'>),
-		command: resolved,
-		positionals,
-		cwd,
-		protect,
+		command,
+		positionals: args,
+		cwd: values.cwd,
+		dryRun: values['dry-run'],
+		force: values.force,
+		yes: values.yes,
+		fetch: !values['no-fetch'],
+		confirm: !values['no-confirm'],
+		protect: values.protect,
+		json: values.json,
+		verbose: values.verbose,
+		rpc: values.rpc,
 	};
 }
 

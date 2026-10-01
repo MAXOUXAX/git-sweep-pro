@@ -1,7 +1,8 @@
 import * as assert from 'assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { EXIT, PROTECTED_CONFIG_KEY, runCli } from '../../cli/app';
+import { PROTECTED_CONFIG_KEY, runCli } from '../../cli/app';
+import { EXIT } from '../../cli/args';
 import { stateFilePath } from '../../cli/state-store';
 import { createFakePrompter } from './fake-prompter';
 import { branchExists, commitFile, createFakeIo, createRepoFixture, git, makeGoneBranch, type RepoFixture } from './git-fixture';
