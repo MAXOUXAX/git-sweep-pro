@@ -110,7 +110,7 @@ const baseBranchList = [
 const baseGit = {
 	'fetch -p': { stdout: '' },
 	'rev-parse --abbrev-ref HEAD': { stdout: 'feature/merged' },
-	'branch -a': { stdout: baseBranchList },
+	'branch --no-column -a': { stdout: baseBranchList },
 	'for-each-ref --format=%(refname) refs/remotes/*/HEAD': { stdout: 'refs/remotes/origin/HEAD' },
 	'rev-parse --abbrev-ref refs/remotes/origin/HEAD': { stdout: 'origin/main' },
 	[GONE_REFS_CMD]: [{ stdout: 'feature/merged\t[gone]' }, { stdout: '' }],
@@ -164,7 +164,7 @@ suite('post-pull-request workflow', () => {
 			workspaceRoot: '/repo',
 			git: {
 				...baseGit,
-				'branch -a': {
+				'branch --no-column -a': {
 					stdout: '* feature/merged\n  remotes/origin/HEAD -> origin/main',
 				},
 			},
@@ -319,7 +319,7 @@ suite('post-pull-request workflow', () => {
 			git: {
 				...baseGit,
 				'rev-parse --abbrev-ref HEAD': { stdout: 'feature/merged' },
-				'branch -a': {
+				'branch --no-column -a': {
 					stdout: '* feature/merged\n  feature/auth/oauth\n  main\n  remotes/origin/HEAD -> origin/main',
 				},
 				[GONE_REFS_CMD]: [
@@ -384,7 +384,7 @@ suite('post-pull-request workflow', () => {
 
 		const fetchCount = h.commands.filter((c) => c === 'fetch -p').length;
 		assert.ok(fetchCount >= 2, 'Should fetch at least twice (post-PR + sweep)');
-		assert.ok(h.commands.includes('branch -a'), 'Should run branch -a once for post-PR');
+		assert.ok(h.commands.includes('branch --no-column -a'), 'Should run branch --no-column -a once for post-PR');
 		assert.ok(h.commands.includes(GONE_REFS_CMD), 'Sweep workflow should query gone refs');
 		assert.ok(h.commands.includes('branch -d stale'), 'Sweep should delete stale branch');
 	});
@@ -428,7 +428,7 @@ suite('post-pull-request workflow', () => {
 				...baseGit,
 				'for-each-ref --format=%(refname) refs/remotes/*/HEAD': { stdout: 'refs/remotes/upstream/HEAD' },
 				'rev-parse --abbrev-ref refs/remotes/upstream/HEAD': { stdout: 'upstream/main' },
-				'branch -a': {
+				'branch --no-column -a': {
 					stdout: '* feature/merged\n  main\n  remotes/upstream/HEAD -> upstream/main\n  remotes/upstream/main\n  remotes/upstream/develop',
 				},
 				[GONE_REFS_CMD]: [{ stdout: 'feature/merged\t[gone]' }, { stdout: 'main\t' }],
@@ -453,7 +453,7 @@ suite('post-pull-request workflow', () => {
 			git: {
 				...baseGit,
 				'rev-parse --abbrev-ref HEAD': { stdout: 'team/subteam/merged-pr' },
-				'branch -a': {
+				'branch --no-column -a': {
 					stdout: '* team/subteam/merged-pr\n  feature/auth/oauth\n  main\n  remotes/origin/HEAD -> origin/main',
 				},
 				[GONE_REFS_CMD]: [

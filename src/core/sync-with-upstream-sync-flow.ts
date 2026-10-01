@@ -182,7 +182,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 
 		const [currentBranchResult, branchListResult] = await Promise.all([
 			runGit(['rev-parse', '--abbrev-ref', 'HEAD']),
-			runGit(['branch', '-a']),
+			runGit(['branch', '--no-column', '-a']),
 		]);
 
 		const currentBranch = currentBranchResult.stdout.trim();

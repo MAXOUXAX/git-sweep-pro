@@ -52,7 +52,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 
 		const [currentBranchResult, branchListResult, goneRefsResult] = await Promise.all([
 			runGit(['rev-parse', '--abbrev-ref', 'HEAD']),
-			runGit(['branch', '-a']),
+			runGit(['branch', '--no-column', '-a']),
 			runGit([...GONE_REFS_ARGS]),
 		]);
 
