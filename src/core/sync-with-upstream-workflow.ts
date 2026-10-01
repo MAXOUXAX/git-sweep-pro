@@ -1,13 +1,4 @@
-import { runResumeFlow } from './sync-with-upstream-resume-flow';
-import { runSyncFlow } from './sync-with-upstream-sync-flow';
-import type { SyncWithUpstreamDeps } from './sync-with-upstream-state';
-
+/** Public entry points of the Sync With Upstream feature. */
+export { runResumeFlow as runSyncWithUpstreamResumeWorkflow } from './sync-with-upstream-resume-flow';
+export { runSyncFlow as runSyncWithUpstreamWorkflow } from './sync-with-upstream-sync-flow';
 export type { SyncWithUpstreamDeps } from './sync-with-upstream-state';
-
-export async function runSyncWithUpstreamWorkflow(deps: SyncWithUpstreamDeps): Promise<void> {
-	await runSyncFlow(deps);
-}
-
-export async function runSyncWithUpstreamResumeWorkflow(deps: SyncWithUpstreamDeps): Promise<void> {
-	await runResumeFlow(deps);
-}
