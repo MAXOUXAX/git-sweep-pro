@@ -1,14 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'node:child_process';
 import * as readline from 'node:readline';
 import { toErrorMessage } from '../core/errors';
-import type { CliEvent, HostResponse } from '../core/rpc-protocol';
-import type { WorkflowUi } from '../core/sweep-workflow';
+import type { CallMethod, CallParams, CallResults, CliEvent, HostResponse, HostUi, UiCall } from '../core/rpc-protocol';
 
-/** The UI a host provides to a CLI run: the workflow prompts plus the output channel. */
-export type HostUi = WorkflowUi & {
-	readonly log: (line: string) => void;
-	readonly showOutput: (preserveFocus: boolean) => void;
-};
+type CallHandlers = { [K in CallMethod]: (...params: CallParams[K]) => CallResults[K] | PromiseLike<CallResults[K]> };
+
+/** Runs a forwarded call on the host UI. */
+function invoke<K extends CallMethod>(ui: CallHandlers, call: UiCall<K>): CallResults[K] | PromiseLike<CallResults[K]> {
+	return ui[call.method](...call.params);
+}
 
 /**
  * Handles the CLI's NDJSON events: logs, notifications, progress spans and
@@ -26,11 +26,8 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 			case 'showOutput':
 				ui.showOutput(event.preserveFocus);
 				return;
-			case 'info':
-				ui.showInformationMessage(event.message);
-				return;
-			case 'error':
-				ui.showErrorMessage(event.message);
+			case 'notify':
+				invoke(ui, event);
 				return;
 			case 'progressStart':
 				void ui.withProgress({ title: event.title }, () => new Promise<void>((resolve) => openProgress.set(event.id, resolve)));
@@ -39,22 +36,9 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 				openProgress.get(event.id)?.();
 				openProgress.delete(event.id);
 				return;
-			case 'request': {
-				let result: unknown;
-				switch (event.method) {
-					case 'quickPick':
-						result = await ui.showQuickPick(event.params.items, event.params.options);
-						break;
-					case 'pickBranches':
-						result = await ui.pickBranches(event.params);
-						break;
-					case 'confirm':
-						result = await ui.confirm(event.params.message, event.params.confirmLabel);
-						break;
-				}
-				respond({ type: 'response', id: event.id, result });
+			case 'request':
+				respond({ type: 'response', id: event.id, result: await invoke(ui, event) });
 				return;
-			}
 		}
 	};
 

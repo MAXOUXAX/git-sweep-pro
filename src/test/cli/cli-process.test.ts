@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as path from 'node:path';
-import { runCliProcess, type HostUi } from '../../vscode/cli-client';
+import type { HostUi } from '../../core/rpc-protocol';
+import { runCliProcess } from '../../vscode/cli-client';
 import { branchExists, createRepoFixture, makeGoneBranch, type RepoFixture } from './git-fixture';
 
 const CLI_PATH = path.join(__dirname, '..', '..', 'cli', 'main.js');

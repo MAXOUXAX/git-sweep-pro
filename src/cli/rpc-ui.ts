@@ -1,5 +1,5 @@
-import type { CliEvent, HostResponse, RpcRequest } from '../core/rpc-protocol';
-import type { QuickPickItemLike, WorkflowUi } from '../core/sweep-workflow';
+import type { CallResults, CliEvent, HostResponse, PromptMethod, UiCall } from '../core/rpc-protocol';
+import type { WorkflowUi } from '../core/sweep-workflow';
 import type { CliIo } from './io';
 
 export type RpcUi = WorkflowUi & {
@@ -18,15 +18,17 @@ export function createRpcUi(io: CliIo): RpcUi {
 
 	const send = (event: CliEvent): void => io.stdout(`${JSON.stringify(event)}\n`);
 
-	const request = async (payload: RpcRequest): Promise<unknown> => {
+	const request = async <K extends PromptMethod>(
+		call: Extract<UiCall<PromptMethod>, { method: K }>
+	): Promise<CallResults[K] | undefined> => {
 		const id = nextId++;
-		send({ type: 'request', id, ...payload } as CliEvent);
+		send({ type: 'request', id, ...call });
 		const line = await io.readLine();
 		if (line === undefined) {
 			// The host went away: treat it as a dismissed prompt so nothing destructive runs.
 			return undefined;
 		}
-		const response = JSON.parse(line) as HostResponse;
+		const response = JSON.parse(line) as HostResponse<K>;
 		if (response.type !== 'response' || response.id !== id) {
 			throw new Error(`Unexpected RPC response for request ${id}: ${line}`);
 		}
@@ -46,19 +48,13 @@ export function createRpcUi(io: CliIo): RpcUi {
 				send({ type: 'progressEnd', id });
 			}
 		},
-		showQuickPick: async (items, options) =>
-			(await request({ method: 'quickPick', params: { items, options } })) as
-				| QuickPickItemLike
-				| readonly QuickPickItemLike[]
-				| undefined,
-		pickBranches: async (params) =>
-			(await request({ method: 'pickBranches', params })) as readonly string[] | undefined,
-		showInformationMessage: (message) => send({ type: 'info', message }),
-		showErrorMessage: (message) => {
+		showQuickPick: (...params) => request({ method: 'showQuickPick', params }),
+		pickBranches: (...params) => request({ method: 'pickBranches', params }),
+		showInformationMessage: (...params) => send({ type: 'notify', method: 'showInformationMessage', params }),
+		showErrorMessage: (...params) => {
 			errors += 1;
-			send({ type: 'error', message });
+			send({ type: 'notify', method: 'showErrorMessage', params });
 		},
-		confirm: async (message, confirmLabel) =>
-			(await request({ method: 'confirm', params: { message, confirmLabel } })) === true,
+		confirm: async (...params) => (await request({ method: 'confirm', params })) === true,
 	};
 }

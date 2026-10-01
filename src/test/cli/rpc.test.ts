@@ -1,7 +1,8 @@
 import * as assert from 'assert';
 import type { CliIo } from '../../cli/io';
 import { createRpcUi } from '../../cli/rpc-ui';
-import { createCliEventHandler, type HostUi } from '../../vscode/cli-client';
+import type { HostUi } from '../../core/rpc-protocol';
+import { createCliEventHandler } from '../../vscode/cli-client';
 
 type Recorded = {
 	logs: string[];
@@ -98,6 +99,13 @@ suite('cli rpc bridge', () => {
 		assert.strictEqual(await ui.withProgress({ title: 'Fetching' }, async () => 'ok'), 'ok');
 		await new Promise((resolve) => setImmediate(resolve));
 		assert.deepStrictEqual(host.rec.progress, ['start Fetching', 'end Fetching']);
+	});
+
+	test('requests carry the WorkflowUi method name and its arguments', async () => {
+		const sent: string[] = [];
+		const io: CliIo = { cwd: '/', interactive: false, stdout: (text) => sent.push(text), stderr: () => undefined, readLine: async () => undefined };
+		await createRpcUi(io).confirm('Delete?', 'Delete');
+		assert.deepStrictEqual(JSON.parse(sent[0]), { type: 'request', id: 1, method: 'confirm', params: ['Delete?', 'Delete'] });
 	});
 
 	test('a closed host answers prompts as dismissed', async () => {

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { HostUi } from './cli-client';
+import type { HostUi } from '../core/rpc-protocol';
 import { pickBranchesWithActions } from './branch-picker';
 
 /** Renders the CLI's prompts and notifications with the VS Code UI. */
