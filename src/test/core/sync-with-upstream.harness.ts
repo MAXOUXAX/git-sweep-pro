@@ -129,5 +129,5 @@ export const baseGitForSync = {
 	'rev-parse --absolute-git-dir': { stdout: '/repo/.git' },
 	'fetch -p': { stdout: '' },
 	'rev-parse --abbrev-ref HEAD': { stdout: 'feature/my-branch' },
-	'branch -a': { stdout: baseBranchList },
+	'branch --no-column -a': { stdout: baseBranchList },
 };

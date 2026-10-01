@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { syncMessages } from './sync-with-upstream-messages';
+import { describeGitFailure, toErrorMessage } from './errors';
 import type { SweepWorkflowDeps } from './sweep-workflow';
 
 export const MEMENTO_KEY = 'git-sweep-pro.syncWithUpstream.memento';
@@ -44,8 +44,7 @@ export async function resolveGitDir(
 		const dir = result.stdout.trim();
 		return dir || undefined;
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		if (message.toLowerCase().includes('not a git repository')) {
+		if (toErrorMessage(error).toLowerCase().includes('not a git repository')) {
 			return undefined;
 		}
 		throw error;
@@ -53,14 +52,7 @@ export async function resolveGitDir(
 }
 
 export function showSyncGitCommandError(deps: SyncWithUpstreamDeps, message: string): void {
-	const lowerMessage = message.toLowerCase();
-	if (lowerMessage.includes('not a git repository')) {
-		deps.ui.showErrorMessage(syncMessages.notGitRepo);
-	} else if (lowerMessage.includes('command not found') || lowerMessage.includes('enoent')) {
-		deps.ui.showErrorMessage(syncMessages.gitNotInstalled);
-	} else {
-		deps.ui.showErrorMessage(syncMessages.errorGeneric(message));
-	}
+	deps.ui.showErrorMessage(describeGitFailure(message, 'Git Sweep Pro:'));
 }
 
 export async function saveMemento(deps: SyncWithUpstreamDeps, memento: SyncMemento): Promise<void> {
