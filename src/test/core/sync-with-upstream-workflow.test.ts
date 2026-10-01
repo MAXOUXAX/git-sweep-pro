@@ -80,7 +80,7 @@ suite('sync-with-upstream workflow', () => {
 				fileExists: fileExistsNoRebase,
 				git: {
 					...baseGitForSync,
-					'branch -a': { stdout: '* feature/my-branch\n  remotes/origin/HEAD -> origin/main' },
+					'branch --no-column -a': { stdout: '* feature/my-branch\n  remotes/origin/HEAD -> origin/main' },
 				},
 			});
 			await runSyncWithUpstreamWorkflow(h.deps);
@@ -347,7 +347,7 @@ suite('sync-with-upstream workflow', () => {
 				quickPickSelection: { label: 'origin/develop (remote)' },
 				git: {
 					...baseGitForSync,
-					'branch -a': {
+					'branch --no-column -a': {
 						stdout: '* feature/my-branch\n  main\n  remotes/origin/develop\n  remotes/origin/HEAD -> origin/main',
 					},
 					'status --porcelain -u': { stdout: '' },

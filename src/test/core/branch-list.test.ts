@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { parseBranches } from '../../core/branch-list';
+import { branchPickLabel, findBranchByPickLabel, localBranchName, parseBranches, splitRemoteRef, type BranchItem } from '../../core/branch-list';
 
 suite('branch-list parseBranches', () => {
 	test('parses local branches', () => {
@@ -181,5 +181,27 @@ suite('branch-list parseBranches', () => {
 			{ label: 'feature/foo', ref: 'feature/foo', isRemote: false },
 			{ label: 'main', ref: 'main', isRemote: false },
 		]);
+	});
+});
+
+suite('branch helpers', () => {
+	const local: BranchItem = { label: 'feature/x', ref: 'feature/x', isRemote: false };
+	const remote: BranchItem = { label: 'origin/feature/x', ref: 'origin/feature/x', isRemote: true };
+
+	test('splitRemoteRef separates the remote from a nested branch name', () => {
+		assert.deepStrictEqual(splitRemoteRef('origin/feature/x'), { remote: 'origin', branch: 'feature/x' });
+		assert.deepStrictEqual(splitRemoteRef('main'), { remote: undefined, branch: 'main' });
+	});
+
+	test('localBranchName strips the remote only for remote items', () => {
+		assert.strictEqual(localBranchName(local), 'feature/x');
+		assert.strictEqual(localBranchName(remote), 'feature/x');
+	});
+
+	test('branchPickLabel and findBranchByPickLabel round-trip', () => {
+		assert.strictEqual(branchPickLabel(local), 'feature/x');
+		assert.strictEqual(branchPickLabel(remote), 'origin/feature/x (remote)');
+		assert.strictEqual(findBranchByPickLabel([local, remote], 'origin/feature/x (remote)'), remote);
+		assert.strictEqual(findBranchByPickLabel([local, remote], 'nope'), undefined);
 	});
 });

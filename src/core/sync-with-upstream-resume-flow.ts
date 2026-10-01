@@ -1,3 +1,4 @@
+import { toErrorMessage } from './errors';
 import { syncMessages } from './sync-with-upstream-messages';
 import {
 	clearMemento,
@@ -21,7 +22,7 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	try {
 		gitDir = await resolveGitDir(workspaceRoot, deps);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = toErrorMessage(error);
 		showSyncGitCommandError(deps, message);
 		return;
 	}
@@ -35,7 +36,7 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	try {
 		await doResume(deps, workspaceRoot, gitDir);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = toErrorMessage(error);
 		showSyncGitCommandError(deps, message);
 		deps.output.appendLine(`[error] ${message}`);
 		deps.output.appendLine(syncMessages.outputFailed);
@@ -99,7 +100,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 				() => runGit(['rebase', '--continue'])
 			);
 		} catch (continueError) {
-			const msg = continueError instanceof Error ? continueError.message : String(continueError);
+			const msg = toErrorMessage(continueError);
 			if (isRebaseInProgress(gitDir, deps)) {
 				deps.ui.showErrorMessage(syncMessages.remainingConflicts);
 				deps.output.appendLine(`[error] ${msg}`);
@@ -121,7 +122,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 				() => runGit(['checkout', featureBranch])
 			);
 		} catch (checkoutError) {
-			const msg = checkoutError instanceof Error ? checkoutError.message : String(checkoutError);
+			const msg = toErrorMessage(checkoutError);
 			deps.ui.showErrorMessage(syncMessages.errorGeneric(msg));
 			deps.output.appendLine(`[error] ${msg}`);
 			deps.output.appendLine(syncMessages.outputFailed);
@@ -135,7 +136,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 			() => runGit(['push', '--force-with-lease'])
 		);
 	} catch (pushError) {
-		const msg = pushError instanceof Error ? pushError.message : String(pushError);
+		const msg = toErrorMessage(pushError);
 		deps.ui.showErrorMessage(syncMessages.rebaseOkPushFailed(msg));
 		deps.output.appendLine(`[error] ${msg}`);
 		deps.output.appendLine(syncMessages.outputFailed);
@@ -161,7 +162,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 				() => runGit(['stash', 'pop'])
 			);
 		} catch (popError) {
-			const popMsg = popError instanceof Error ? popError.message : String(popError);
+			const popMsg = toErrorMessage(popError);
 			deps.ui.showErrorMessage(syncMessages.stashPopFailed);
 			deps.output.appendLine(`[stash-pop-error] ${popMsg}`);
 		}

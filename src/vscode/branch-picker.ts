@@ -1,0 +1,74 @@
+import * as vscode from 'vscode';
+import { clearAll, invertSelection, selectAll, type SelectableBranch } from '../core/sweep-selection';
+
+/**
+ * Presents a multi-select branch picker with title-bar quick actions (select
+ * all, clear all, invert selection). Resolves to the labels of the selected
+ * branches, or `undefined` when the picker is dismissed without accepting.
+ */
+export function pickBranchesWithActions(options: {
+	readonly items: readonly SelectableBranch[];
+	readonly title: string;
+	readonly placeHolder: string;
+}): Promise<readonly string[] | undefined> {
+	return new Promise((resolve) => {
+		const quickPick = vscode.window.createQuickPick<vscode.QuickPickItem>();
+		quickPick.canSelectMany = true;
+		quickPick.ignoreFocusOut = true;
+		quickPick.matchOnDescription = true;
+		quickPick.title = options.title;
+		quickPick.placeholder = options.placeHolder;
+
+		const selectAllButton: vscode.QuickInputButton = {
+			iconPath: new vscode.ThemeIcon('check-all'),
+			tooltip: 'Select all',
+		};
+		const clearAllButton: vscode.QuickInputButton = {
+			iconPath: new vscode.ThemeIcon('clear-all'),
+			tooltip: 'Clear all',
+		};
+		const invertButton: vscode.QuickInputButton = {
+			iconPath: new vscode.ThemeIcon('arrow-swap'),
+			tooltip: 'Invert selection',
+		};
+		quickPick.buttons = [selectAllButton, clearAllButton, invertButton];
+
+		const applySelection = (next: readonly SelectableBranch[]): void => {
+			const pickedLabels = new Set(next.filter((entry) => entry.picked).map((entry) => entry.label));
+			quickPick.selectedItems = quickPick.items.filter((item) => pickedLabels.has(item.label));
+		};
+
+		quickPick.items = options.items.map((item) => ({ label: item.label }));
+		applySelection(options.items);
+
+		const currentSelection = (): SelectableBranch[] => {
+			const selectedLabels = new Set(quickPick.selectedItems.map((item) => item.label));
+			return quickPick.items.map((item) => ({ label: item.label, picked: selectedLabels.has(item.label) }));
+		};
+
+		quickPick.onDidTriggerButton((button) => {
+			if (button === selectAllButton) {
+				applySelection(selectAll(currentSelection()));
+			} else if (button === clearAllButton) {
+				applySelection(clearAll(currentSelection()));
+			} else if (button === invertButton) {
+				applySelection(invertSelection(currentSelection()));
+			}
+		});
+
+		let accepted = false;
+		quickPick.onDidAccept(() => {
+			accepted = true;
+			resolve(quickPick.selectedItems.map((item) => item.label));
+			quickPick.hide();
+		});
+		quickPick.onDidHide(() => {
+			if (!accepted) {
+				resolve(undefined);
+			}
+			quickPick.dispose();
+		});
+
+		quickPick.show();
+	});
+}
