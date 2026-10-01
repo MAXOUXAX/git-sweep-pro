@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { runSweepWorkflow, type QuickPickItemLike, type SweepWorkflowDeps } from '../../core/sweep-workflow';
+import { findStaleBranches, runSweepWorkflow, type QuickPickItemLike, type SweepWorkflowDeps } from '../../core/sweep-workflow';
 import { DEFAULT_SWEEP_SETTINGS, type SweepMode, type SweepSettings } from '../../core/sweep-logic';
 import type { SelectableBranch } from '../../core/sweep-selection';
 
@@ -523,5 +523,18 @@ suite('sweep workflow', () => {
 
 		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: No branches selected.']);
 		assert.ok(!h.commands.some((cmd) => cmd.startsWith('branch -d')));
+	});
+
+	test('findStaleBranches fetches, then splits gone branches by the protected patterns', async () => {
+		const h = createHarness({
+			settings: { protectedBranches: ['release/*'] },
+			git: {
+				[GONE_REFS_CMD]: { stdout: 'feature/a\t[gone]\nrelease/1\t[gone]\nmain\t' },
+			},
+		});
+
+		assert.deepStrictEqual(await findStaleBranches('/repo', h.deps), { stale: ['feature/a'], protected: ['release/1'] });
+		assert.deepStrictEqual(h.commands, ['fetch -p', GONE_REFS_CMD]);
+		assert.strictEqual(h.progressTitles.length, 1);
 	});
 });

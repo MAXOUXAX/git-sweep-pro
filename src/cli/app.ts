@@ -3,8 +3,8 @@ import * as path from 'node:path';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand, type CommandResult } from '../core/git-command';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
-import { GONE_REFS_ARGS, isProtectedBranch, parseGoneBranchRefs, type SweepSettings } from '../core/sweep-logic';
-import { runSweepWorkflow, type SweepWorkflowDeps, type WorkflowUi } from '../core/sweep-workflow';
+import type { SweepSettings } from '../core/sweep-logic';
+import { findStaleBranches, runSweepWorkflow, type SweepWorkflowDeps, type WorkflowUi } from '../core/sweep-workflow';
 import { MEMENTO_KEY, type StateStore } from '../core/sync-with-upstream-state';
 import {
 	runSyncWithUpstreamResumeWorkflow,
@@ -171,19 +171,12 @@ async function runCommand(options: CliOptions, workspaceRoot: string, deps: CliD
 
 /** `list`: prints stale branches without touching them (`--json` for scripts). */
 async function runList(root: string, deps: CliDeps, options: CliOptions, io: CliIo): Promise<number> {
-	const { protectedBranches, autoFetchPrune } = deps.getSettings();
 	try {
-		if (autoFetchPrune) {
-			await deps.runGitCommand(['fetch', '-p'], root);
-		}
-		const gone = parseGoneBranchRefs((await deps.runGitCommand([...GONE_REFS_ARGS], root)).stdout);
-		const isProtected = (branch: string) => isProtectedBranch(branch, protectedBranches);
-		const stale = gone.filter((branch) => !isProtected(branch));
-		const protectedStale = gone.filter(isProtected);
+		const { stale, protected: protectedStale } = await findStaleBranches(root, deps);
 
 		if (options.json) {
 			io.stdout(`${JSON.stringify({ stale, protected: protectedStale }, null, 2)}\n`);
-		} else if (gone.length === 0) {
+		} else if (stale.length === 0 && protectedStale.length === 0) {
 			io.stderr('No stale branches found.\n');
 		} else {
 			stale.forEach((branch) => io.stdout(`${branch}\n`));

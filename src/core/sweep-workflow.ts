@@ -63,6 +63,35 @@ export function singlePick(
 	return selected === undefined || Array.isArray(selected) ? undefined : (selected as QuickPickItemLike);
 }
 
+export type StaleBranches = {
+	/** Branches whose upstream is gone: the sweep candidates. */
+	readonly stale: string[];
+	/** Branches whose upstream is gone but that match a protected pattern. */
+	readonly protected: string[];
+};
+
+/**
+ * Fetches and prunes (unless disabled in the settings), then finds the local
+ * branches whose upstream is gone, split by the protected-branch patterns.
+ */
+export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkflowDeps): Promise<StaleBranches> {
+	const settings = deps.getSettings();
+	if (settings.autoFetchPrune) {
+		await deps.ui.withProgress(
+			{
+				title: 'Git Sweep Pro: Fetching and pruning remote references...',
+			},
+			() => deps.runGitCommand(['fetch', '-p'], workspaceRoot)
+		);
+	} else {
+		deps.output.appendLine('Auto fetch/prune disabled; using local ref state.');
+	}
+
+	const gone = parseGoneBranchRefs((await deps.runGitCommand([...GONE_REFS_ARGS], workspaceRoot)).stdout);
+	const isProtected = (branch: string) => isProtectedBranch(branch, settings.protectedBranches);
+	return { stale: gone.filter((branch) => !isProtected(branch)), protected: gone.filter(isProtected) };
+}
+
 function describeDeleteFlag(mode: SweepMode): '-d' | '-D' {
 	return mode.forceDelete ? '-D' : '-d';
 }
@@ -82,29 +111,13 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 	const settings = deps.getSettings();
 
 	try {
-		if (settings.autoFetchPrune) {
-			await deps.ui.withProgress(
-				{
-					title: 'Git Sweep Pro: Fetching and pruning remote references...',
-				},
-				() => deps.runGitCommand(['fetch', '-p'], workspaceRoot)
-			);
-		} else {
-			deps.output.appendLine('Auto fetch/prune disabled; using local ref state.');
-		}
+		const { stale: candidateBranches, protected: protectedBranches } = await findStaleBranches(workspaceRoot, deps);
 
-		const branchResult = await deps.runGitCommand([...GONE_REFS_ARGS], workspaceRoot);
-		const goneBranches = parseGoneBranchRefs(branchResult.stdout);
-
-		if (goneBranches.length === 0) {
+		if (candidateBranches.length === 0 && protectedBranches.length === 0) {
 			deps.output.appendLine('No stale tracked branches found.');
 			deps.ui.showInformationMessage('Git Sweep Pro: No stale branches found.');
 			return;
 		}
-
-		const protectedPatterns = settings.protectedBranches;
-		const protectedBranches = goneBranches.filter((branch) => isProtectedBranch(branch, protectedPatterns));
-		const candidateBranches = goneBranches.filter((branch) => !protectedBranches.includes(branch));
 
 		if (protectedBranches.length > 0) {
 			deps.output.appendLine('Protected branches skipped (matched gitSweepPro.protectedBranches):');
@@ -145,7 +158,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		}
 
 		const summary = formatSweepSummary({
-			totalDetected: goneBranches.length,
+			totalDetected: candidateBranches.length + protectedBranches.length,
 			protectedCount: protectedBranches.length,
 			selectedCount: branchNames.length,
 			mode,
