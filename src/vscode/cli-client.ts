@@ -17,6 +17,7 @@ function invoke<K extends CallMethod>(ui: CallHandlers, call: UiCall<K>): CallRe
  */
 export function createCliEventHandler(ui: HostUi, respond: (response: HostResponse) => void) {
 	const openProgress = new Map<number, () => void>();
+	let errorShown = false;
 
 	const handleEvent = async (event: CliEvent): Promise<void> => {
 		switch (event.type) {
@@ -27,6 +28,7 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 				ui.showOutput(event.preserveFocus);
 				return;
 			case 'notify':
+				errorShown ||= event.method === 'showErrorMessage';
 				invoke(ui, event);
 				return;
 			case 'progressStart':
@@ -54,6 +56,8 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 			}
 			return handleEvent(event);
 		},
+		/** True once the CLI reported an error to the user. */
+		errorShown: (): boolean => errorShown,
 		/** Closes any progress notification left open (e.g. the CLI crashed mid-task). */
 		dispose: (): void => {
 			openProgress.forEach((resolve) => resolve());
@@ -72,11 +76,18 @@ export type CliRunOptions = {
 	readonly spawnFn?: (command: string, args: readonly string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
 };
 
+export type CliRunResult = {
+	/** The CLI's exit code; -1 when it could not start. */
+	readonly exitCode: number;
+	/** True when the user already saw an error notification for this run. */
+	readonly errorShown: boolean;
+};
+
 /**
  * Runs `git-sweep-pro --rpc <args>` as a child process, rendering its UI with
- * `ui`, and resolves to the CLI's exit code (-1 when it could not start).
+ * `ui`, and resolves once it exits.
  */
-export function runCliProcess(options: CliRunOptions): Promise<number> {
+export function runCliProcess(options: CliRunOptions): Promise<CliRunResult> {
 	const spawnFn = options.spawnFn ?? spawn;
 	return new Promise((resolve) => {
 		const child = spawnFn(options.nodePath, [options.cliPath, '--rpc', ...options.args], {
@@ -100,19 +111,19 @@ export function runCliProcess(options: CliRunOptions): Promise<number> {
 		readline.createInterface({ input: child.stderr }).on('line', (line) => options.ui.log(`[cli] ${line}`));
 
 		let settled = false;
-		const finish = (code: number): void => {
+		const finish = (exitCode: number, startFailed = false): void => {
 			if (!settled) {
 				settled = true;
 				void queue.then(() => {
 					handler.dispose();
-					resolve(code);
+					resolve({ exitCode, errorShown: startFailed || handler.errorShown() });
 				});
 			}
 		};
 
 		child.on('error', (error) => {
 			options.ui.showErrorMessage(`Could not start the git-sweep-pro CLI: ${error.message}`);
-			finish(-1);
+			finish(-1, true);
 		});
 		child.on('close', (code) => finish(code ?? -1));
 	});

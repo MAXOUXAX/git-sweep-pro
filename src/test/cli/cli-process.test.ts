@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { HostUi } from '../../core/rpc-protocol';
 import { runCliProcess } from '../../vscode/cli-client';
@@ -47,9 +48,9 @@ suite('cli process client (real git)', function () {
 		makeGoneBranch(fx.repo, 'feature/a');
 		const host = createHostUi(true);
 
-		const code = await runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: fx.repo, args: ['sweep'], ui: host.ui });
+		const result = await runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: fx.repo, args: ['sweep'], ui: host.ui });
 
-		assert.strictEqual(code, 0);
+		assert.deepStrictEqual(result, { exitCode: 0, errorShown: false });
 		assert.ok(!branchExists(fx.repo, 'feature/a'));
 		assert.strictEqual(host.confirms.length, 1);
 		assert.ok(host.infos.some((m) => m.includes('Deleted 1 branch(es)')), JSON.stringify(host.infos));
@@ -61,22 +62,31 @@ suite('cli process client (real git)', function () {
 		makeGoneBranch(fx.repo, 'feature/a');
 		const host = createHostUi(false);
 
-		assert.strictEqual(await runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: fx.repo, args: [], ui: host.ui }), 0);
+		assert.strictEqual((await runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: fx.repo, args: [], ui: host.ui })).exitCode, 0);
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 		assert.ok(host.infos.some((m) => m.includes('Deletion cancelled')));
 	});
 
 	test('errors are surfaced and give a non-zero exit code', async () => {
 		const host = createHostUi(true);
-		const code = await runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: fx.dir, args: ['sweep'], ui: host.ui });
-		assert.strictEqual(code, 1);
+		const result = await runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: fx.dir, args: ['sweep'], ui: host.ui });
+		assert.deepStrictEqual(result, { exitCode: 1, errorShown: true });
 		assert.deepStrictEqual(host.errors, ['The selected workspace folder is not a Git repository.']);
+	});
+
+	test('a crash exits non-zero without an error notification, its stderr goes to the log', async () => {
+		const crashingCli = path.join(fx.dir, 'crash.js');
+		fs.writeFileSync(crashingCli, "process.stderr.write('fatal: boom\\n'); process.exit(1);\n");
+		const host = createHostUi(true);
+		const result = await runCliProcess({ nodePath: process.execPath, cliPath: crashingCli, cwd: fx.repo, args: [], ui: host.ui });
+		assert.deepStrictEqual(result, { exitCode: 1, errorShown: false });
+		assert.deepStrictEqual(host.logs, ['[cli] fatal: boom']);
 	});
 
 	test('reports a runtime that cannot be started', async () => {
 		const host = createHostUi(true);
-		const code = await runCliProcess({ nodePath: path.join(fx.dir, 'no-such-node'), cliPath: CLI_PATH, cwd: fx.repo, args: [], ui: host.ui });
-		assert.strictEqual(code, -1);
+		const result = await runCliProcess({ nodePath: path.join(fx.dir, 'no-such-node'), cliPath: CLI_PATH, cwd: fx.repo, args: [], ui: host.ui });
+		assert.deepStrictEqual(result, { exitCode: -1, errorShown: true });
 		assert.ok(host.errors[0]?.startsWith('Could not start the git-sweep-pro CLI'));
 	});
 });

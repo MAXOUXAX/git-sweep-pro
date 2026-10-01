@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { settingsToCliArgs } from './cli/args';
+import { EXIT, settingsToCliArgs } from './cli/args';
 import { runGitCommand } from './core/git-command';
 import { orderModeActions, resolveSweepModeAction, type SweepModeSetting, type SweepSettings } from './core/sweep-logic';
 import { resolveTargetRepository, resolveWorkspaceRoot, type RepositoryResolution } from './core/workspace';
@@ -10,6 +10,7 @@ import { applyTerminalPath } from './vscode/terminal-path';
 
 const OUTPUT_CHANNEL_NAME = 'Git Sweep';
 const LAST_REPO_STATE_KEY = 'gitSweepPro.lastSelectedRepo';
+const SHOW_OUTPUT = 'Show output';
 /** Compiled CLI entry point, next to this file in both out/ and dist/. */
 const CLI_PATH = path.join(__dirname, 'cli', 'main.js');
 
@@ -79,7 +80,23 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 		const cliArgs = [...args, ...settingsToCliArgs(getSweepSettings())];
 		outputChannel.appendLine(`> git-sweep-pro ${cliArgs.join(' ')}`);
-		await runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: root, args: cliArgs, ui: hostUi });
+		const { exitCode, errorShown } = await runCliProcess({
+			nodePath: process.execPath,
+			cliPath: CLI_PATH,
+			cwd: root,
+			args: cliArgs,
+			ui: hostUi,
+		});
+		// A crash only reaches stderr, which lands in the output channel: point there.
+		if (exitCode !== EXIT.ok && exitCode !== EXIT.paused && !errorShown) {
+			const choice = await vscode.window.showErrorMessage(
+				`Git Sweep Pro: The command stopped unexpectedly (exit code ${exitCode}).`,
+				SHOW_OUTPUT
+			);
+			if (choice === SHOW_OUTPUT) {
+				outputChannel.show();
+			}
+		}
 	};
 
 	/** Registers a command that first resolves the target repository, then runs `handler` on it. */
