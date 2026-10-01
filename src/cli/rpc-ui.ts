@@ -5,7 +5,6 @@ import type { CliIo } from './io';
 export type RpcUi = WorkflowUi & {
 	readonly log: (line: string) => void;
 	readonly showOutput: (preserveFocus: boolean) => void;
-	readonly errorCount: () => number;
 };
 
 /**
@@ -14,7 +13,6 @@ export type RpcUi = WorkflowUi & {
  */
 export function createRpcUi(io: CliIo): RpcUi {
 	let nextId = 1;
-	let errors = 0;
 
 	const send = (event: CliEvent): void => io.stdout(`${JSON.stringify(event)}\n`);
 
@@ -36,7 +34,6 @@ export function createRpcUi(io: CliIo): RpcUi {
 	};
 
 	return {
-		errorCount: () => errors,
 		log: (line) => send({ type: 'log', line }),
 		showOutput: (preserveFocus) => send({ type: 'showOutput', preserveFocus }),
 		withProgress: async (options, task) => {
@@ -51,10 +48,7 @@ export function createRpcUi(io: CliIo): RpcUi {
 		showQuickPick: (...params) => request({ method: 'showQuickPick', params }),
 		pickBranches: (...params) => request({ method: 'pickBranches', params }),
 		showInformationMessage: (...params) => send({ type: 'notify', method: 'showInformationMessage', params }),
-		showErrorMessage: (...params) => {
-			errors += 1;
-			send({ type: 'notify', method: 'showErrorMessage', params });
-		},
+		showErrorMessage: (...params) => send({ type: 'notify', method: 'showErrorMessage', params }),
 		confirm: async (...params) => (await request({ method: 'confirm', params })) === true,
 	};
 }

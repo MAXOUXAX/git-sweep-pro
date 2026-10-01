@@ -19,8 +19,6 @@ export type TerminalUiOptions = {
 export type TerminalUi = WorkflowUi & {
 	/** Prints a line of workflow output (secondary detail). */
 	readonly detail: (line: string) => void;
-	/** Number of error messages shown so far; drives the exit code. */
-	readonly errorCount: () => number;
 };
 
 /**
@@ -32,11 +30,9 @@ export type TerminalUi = WorkflowUi & {
  * confirmations are refused unless `--yes` was given.
  */
 export function createTerminalUi(io: CliIo, options: TerminalUiOptions, prompter?: Prompter): TerminalUi {
-	let errors = 0;
 	const interactive = io.interactive && prompter !== undefined;
 
 	const showError = (message: string): void => {
-		errors += 1;
 		if (interactive) {
 			prompter.error(message);
 		} else {
@@ -49,7 +45,7 @@ export function createTerminalUi(io: CliIo, options: TerminalUiOptions, prompter
 			const preset = options.presetPick;
 			const match = items.find((item) => item.label === preset || item.label === `${preset} (remote)`);
 			if (!match) {
-				showError(`Branch "${preset}" is not available. Choose one of: ${items.map((i) => i.label).join(', ')}`);
+				throw new Error(`Branch "${preset}" is not available. Choose one of: ${items.map((i) => i.label).join(', ')}`);
 			}
 			return match;
 		}
@@ -57,8 +53,7 @@ export function createTerminalUi(io: CliIo, options: TerminalUiOptions, prompter
 		const defaultIndex = items.findIndex((item) => item.picked);
 		if (!interactive) {
 			if (defaultIndex < 0) {
-				showError(`${title}: no default available; pass the branch as an argument.`);
-				return undefined;
+				throw new Error(`${title}: no default available; pass the branch as an argument.`);
 			}
 			return items[defaultIndex];
 		}
@@ -72,7 +67,6 @@ export function createTerminalUi(io: CliIo, options: TerminalUiOptions, prompter
 	};
 
 	return {
-		errorCount: () => errors,
 		detail: (line) => (interactive ? prompter.detail(line) : io.stderr(`${pc.dim(line)}\n`)),
 		withProgress: (progress, task) => {
 			const title = stripProductPrefix(progress.title);

@@ -72,7 +72,6 @@ suite('cli rpc bridge', () => {
 		assert.deepStrictEqual(host.rec.shown, [true]);
 		assert.deepStrictEqual(host.rec.infos, ['done']);
 		assert.deepStrictEqual(host.rec.errors, ['bad']);
-		assert.strictEqual(ui.errorCount(), 1);
 	});
 
 	test('round-trips prompts and their answers', async () => {

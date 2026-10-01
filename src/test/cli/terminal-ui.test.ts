@@ -29,7 +29,7 @@ suite('cli terminal ui', () => {
 	});
 
 	suite('plain output (pipes, CI)', () => {
-		test('messages go to stdout/stderr and errors are counted', () => {
+		test('messages go to stdout and stderr', () => {
 			const io = createFakeIo('/repo');
 			const ui = createTerminalUi(io, plain);
 			ui.showInformationMessage('Git Sweep Pro: hello');
@@ -38,7 +38,6 @@ suite('cli terminal ui', () => {
 			assert.deepStrictEqual(io.out, ['hello\n']);
 			assert.ok(io.err[0].includes('error:') && io.err[0].includes('broken'));
 			assert.ok(io.err[1].includes('- feature/x'));
-			assert.strictEqual(ui.errorCount(), 1);
 		});
 
 		test('withProgress prints the title and returns the task result', async () => {
@@ -63,8 +62,7 @@ suite('cli terminal ui', () => {
 			const ui = createTerminalUi(createFakeIo('/repo'), plain);
 			const items = [{ label: 'dev' }, { label: 'main', picked: true }];
 			assert.deepStrictEqual(await ui.showQuickPick(items, pickOptions), items[1]);
-			assert.strictEqual(await ui.showQuickPick([{ label: 'dev' }], pickOptions), undefined);
-			assert.strictEqual(ui.errorCount(), 1);
+			await assert.rejects(async () => ui.showQuickPick([{ label: 'dev' }], pickOptions), /no default available/);
 		});
 
 		test('an interactive terminal without a prompter still behaves safely', async () => {
@@ -79,8 +77,7 @@ suite('cli terminal ui', () => {
 		assert.deepStrictEqual(await createTerminalUi(io, { ...plain, presetPick: 'origin/dev' }).showQuickPick(items, pickOptions), items[1]);
 
 		const missing = createTerminalUi(io, { ...plain, presetPick: 'nope' });
-		assert.strictEqual(await missing.showQuickPick(items, pickOptions), undefined);
-		assert.strictEqual(missing.errorCount(), 1);
+		await assert.rejects(async () => missing.showQuickPick(items, pickOptions), /Branch "nope" is not available/);
 	});
 
 	suite('interactive (prompter)', () => {
@@ -94,7 +91,6 @@ suite('cli terminal ui', () => {
 			ui.detail('- a');
 			assert.strictEqual(await ui.withProgress({ title: 'Git Sweep Pro: Fetching...' }, async () => 'ok'), 'ok');
 			assert.deepStrictEqual(calls, ['success Deleted 1 branch(es).', 'error oops', 'detail - a', 'spin Fetching...']);
-			assert.strictEqual(ui.errorCount(), 1);
 		});
 
 		test('spinners are skipped when disabled (--verbose)', async () => {

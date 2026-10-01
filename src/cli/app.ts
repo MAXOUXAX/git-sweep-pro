@@ -4,8 +4,8 @@ import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand, type CommandResult } from '../core/git-command';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import type { SweepSettings } from '../core/sweep-logic';
-import { findStaleBranches, runSweepWorkflow, type SweepWorkflowDeps, type WorkflowUi } from '../core/sweep-workflow';
-import { MEMENTO_KEY, type StateStore } from '../core/sync-with-upstream-state';
+import { findStaleBranches, runSweepWorkflow, type SweepWorkflowDeps, type WorkflowOutcome } from '../core/sweep-workflow';
+import type { StateStore } from '../core/sync-with-upstream-state';
 import {
 	runSyncWithUpstreamResumeWorkflow,
 	runSyncWithUpstreamWorkflow,
@@ -21,7 +21,13 @@ import { createTerminalUi } from './terminal-ui';
 export const PROTECTED_CONFIG_KEY = 'git-sweep-pro.protected';
 
 type RunGit = (args: string[], cwd: string) => Promise<CommandResult>;
-type CliDeps = SweepWorkflowDeps & { readonly ui: WorkflowUi & { readonly errorCount: () => number } };
+
+const EXIT_CODES: Record<WorkflowOutcome, number> = {
+	ok: EXIT.ok,
+	cancelled: EXIT.ok,
+	failed: EXIT.failed,
+	paused: EXIT.paused,
+};
 
 function readVersion(): string {
 	const manifest = path.join(__dirname, '..', '..', 'package.json');
@@ -104,7 +110,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 		confirmBeforeDelete: options.confirm,
 	};
 
-	const deps: CliDeps = {
+	const deps: SweepWorkflowDeps = {
 		getWorkspaceRoot: () => workspaceRoot,
 		getSettings: () => settings,
 		output: {
@@ -116,27 +122,27 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	};
 
 	prompter?.intro(`git sweep-pro ${options.command}`);
-	const code = await runCommand(options, workspaceRoot, deps, io);
+	const outcome = await runCommand(options, workspaceRoot, deps, io);
 	prompter?.outro(
-		code === EXIT.ok
+		outcome === 'ok'
 			? 'Done.'
-			: code === EXIT.paused
-				? 'Paused: resolve the conflicts, then run "git sweep-pro sync --continue".'
-				: 'Finished with errors.'
+			: outcome === 'cancelled'
+				? 'Cancelled.'
+				: outcome === 'paused'
+					? 'Paused: resolve the conflicts, then run "git sweep-pro sync --continue".'
+					: 'Finished with errors.'
 	);
-	return code;
+	return EXIT_CODES[outcome];
 }
 
-async function runCommand(options: CliOptions, workspaceRoot: string, deps: CliDeps, io: CliIo): Promise<number> {
+async function runCommand(options: CliOptions, workspaceRoot: string, deps: SweepWorkflowDeps, io: CliIo): Promise<WorkflowOutcome> {
 	switch (options.command) {
+		case 'sweep':
+			return runSweepWorkflow({ dryRun: options.dryRun, forceDelete: options.force }, deps);
 		case 'list':
 			return runList(workspaceRoot, deps, options, io);
-		case 'sweep':
-			await runSweepWorkflow({ dryRun: options.dryRun, forceDelete: options.force }, deps);
-			break;
 		case 'post-pr':
-			await runPostPullRequestWorkflow(deps);
-			break;
+			return runPostPullRequestWorkflow(deps);
 		case 'sync':
 		case 'resume': {
 			const gitDir = await tryGit(deps.runGitCommand, ['rev-parse', '--absolute-git-dir'], workspaceRoot);
@@ -147,21 +153,16 @@ async function runCommand(options: CliOptions, workspaceRoot: string, deps: CliD
 				fileExists: (p) => fs.existsSync(p),
 				readFileUtf8: (p) => fs.readFileSync(p, 'utf8'),
 			};
-			await (options.command === 'sync'
-				? runSyncWithUpstreamWorkflow(syncDeps)
-				: runSyncWithUpstreamResumeWorkflow(syncDeps));
-			if (deps.ui.errorCount() === 0 && store.get(MEMENTO_KEY) !== undefined) {
-				return EXIT.paused;
-			}
-			break;
+			return options.command === 'sync' ? runSyncWithUpstreamWorkflow(syncDeps) : runSyncWithUpstreamResumeWorkflow(syncDeps);
 		}
+		case 'help':
+		case 'version':
+			return 'ok';
 	}
-
-	return deps.ui.errorCount() > 0 ? EXIT.failed : EXIT.ok;
 }
 
 /** `list`: prints stale branches without touching them (`--json` for scripts). */
-async function runList(root: string, deps: CliDeps, options: CliOptions, io: CliIo): Promise<number> {
+async function runList(root: string, deps: SweepWorkflowDeps, options: CliOptions, io: CliIo): Promise<WorkflowOutcome> {
 	try {
 		const { stale, protected: protectedStale } = await findStaleBranches(root, deps);
 
@@ -173,9 +174,9 @@ async function runList(root: string, deps: CliDeps, options: CliOptions, io: Cli
 			stale.forEach((branch) => io.stdout(`${branch}\n`));
 			protectedStale.forEach((branch) => io.stdout(`${branch} (protected)\n`));
 		}
-		return EXIT.ok;
+		return 'ok';
 	} catch (error) {
 		deps.ui.showErrorMessage(describeGitFailure(toErrorMessage(error), 'Git Sweep Pro failed:'));
-		return EXIT.failed;
+		return 'failed';
 	}
 }

@@ -60,7 +60,7 @@ Without a terminal attached (CI, scripts), prompts keep their defaults and confi
 | `0` | Success (including "nothing to do" and a declined confirmation) |
 | `1` | A step failed; details are on stderr |
 | `2` | Invalid arguments |
-| `3` | `sync` stopped on rebase conflicts; resolve them and run `sync --continue` |
+| `3` | `sync` or `resume` stopped on rebase conflicts; resolve them and run `sync --continue` |
 
 Run `git sweep-pro --help` for every option. A sync paused on conflicts is recorded in the repository's Git directory, so it can be resumed from either the terminal or the editor.
 

@@ -45,6 +45,9 @@ export type WorkflowUi = {
 	confirm: (message: string, confirmLabel: string) => PromiseLike<boolean>;
 };
 
+/** How a workflow ended. The CLI maps it to its exit code. */
+export type WorkflowOutcome = 'ok' | 'failed' | 'paused' | 'cancelled';
+
 export type SweepWorkflowDeps = {
 	readonly getWorkspaceRoot: () => string | undefined;
 	readonly getSettings: () => SweepSettings;
@@ -96,11 +99,11 @@ function describeDeleteFlag(mode: SweepMode): '-d' | '-D' {
 	return mode.forceDelete ? '-D' : '-d';
 }
 
-export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps): Promise<void> {
+export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps): Promise<WorkflowOutcome> {
 	const workspaceRoot = deps.getWorkspaceRoot();
 	if (!workspaceRoot) {
 		deps.ui.showErrorMessage('Git Sweep Pro: No workspace folder is open.');
-		return;
+		return 'failed';
 	}
 
 	deps.output.show(true);
@@ -116,7 +119,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		if (candidateBranches.length === 0 && protectedBranches.length === 0) {
 			deps.output.appendLine('No stale tracked branches found.');
 			deps.ui.showInformationMessage('Git Sweep Pro: No stale branches found.');
-			return;
+			return 'ok';
 		}
 
 		if (protectedBranches.length > 0) {
@@ -131,7 +134,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			deps.ui.showInformationMessage(
 				`Git Sweep Pro: All ${protectedBranches.length} stale branch(es) are protected.`
 			);
-			return;
+			return 'ok';
 		}
 
 		const quickPickItems: SelectableBranch[] = candidateBranches.map((branch) => ({
@@ -149,7 +152,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		if (branchNames.length === 0) {
 			deps.output.appendLine('Operation cancelled or no branches selected.');
 			deps.ui.showInformationMessage('Git Sweep Pro: No branches selected.');
-			return;
+			return 'cancelled';
 		}
 
 		deps.output.appendLine(`${mode.dryRun ? '[DRY RUN]' : '[DELETE]'} Selected branches:`);
@@ -172,7 +175,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			deps.ui.showInformationMessage(
 				`Git Sweep Pro (dry run): ${branchNames.length} branch(es) would be deleted.`
 			);
-			return;
+			return 'ok';
 		}
 
 		if (settings.confirmBeforeDelete) {
@@ -183,7 +186,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			if (!confirmed) {
 				deps.output.appendLine('Deletion cancelled at confirmation prompt.');
 				deps.ui.showInformationMessage('Git Sweep Pro: Deletion cancelled.');
-				return;
+				return 'cancelled';
 			}
 		}
 
@@ -251,11 +254,13 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 		if (failedBranches.length > 0) {
 			deps.ui.showErrorMessage(`Git Sweep Pro: ${outcome} See "Git Sweep" output for details.`);
-		} else {
-			deps.ui.showInformationMessage(`Git Sweep Pro: ${outcome}`);
+			return 'failed';
 		}
+		deps.ui.showInformationMessage(`Git Sweep Pro: ${outcome}`);
+		return 'ok';
 	} catch (error) {
 		deps.ui.showErrorMessage(describeGitFailure(toErrorMessage(error), 'Git Sweep Pro failed:'));
+		return 'failed';
 	} finally {
 		deps.output.appendLine('--- Git Sweep session ended ---');
 	}

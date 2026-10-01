@@ -10,12 +10,13 @@ import {
 	type SyncWithUpstreamDeps,
 } from './sync-with-upstream-state';
 import { syncLocalBranchFromRemote } from './sync-with-upstream-sync-flow';
+import type { WorkflowOutcome } from './sweep-workflow';
 
-export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
+export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<WorkflowOutcome> {
 	const workspaceRoot = deps.getWorkspaceRoot();
 	if (!workspaceRoot) {
 		deps.ui.showErrorMessage(syncMessages.noWorkspace);
-		return;
+		return 'failed';
 	}
 
 	let gitDir: string | undefined;
@@ -24,28 +25,29 @@ export async function runResumeFlow(deps: SyncWithUpstreamDeps): Promise<void> {
 	} catch (error) {
 		const message = toErrorMessage(error);
 		showSyncGitCommandError(deps, message);
-		return;
+		return 'failed';
 	}
 	if (!gitDir) {
 		deps.ui.showErrorMessage(syncMessages.notGitRepo);
-		return;
+		return 'failed';
 	}
 
 	deps.output.show(true);
 	deps.output.appendLine(syncMessages.outputResumeHeader);
 	try {
-		await doResume(deps, workspaceRoot, gitDir);
+		return await doResume(deps, workspaceRoot, gitDir);
 	} catch (error) {
 		const message = toErrorMessage(error);
 		showSyncGitCommandError(deps, message);
 		deps.output.appendLine(`[error] ${message}`);
 		deps.output.appendLine(syncMessages.outputFailed);
+		return 'failed';
 	} finally {
 		deps.output.appendLine(syncMessages.outputSessionEnded);
 	}
 }
 
-async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDir: string): Promise<void> {
+async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDir: string): Promise<WorkflowOutcome> {
 	const runGit = (args: string[]) => deps.runGitCommand(args, workspaceRoot);
 
 	let rebaseActive = isRebaseInProgress(gitDir, deps);
@@ -63,14 +65,14 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 			deps.output.appendLine(syncMessages.nothingToResume);
 			deps.output.appendLine(syncMessages.outputResumeComplete);
 		}
-		return;
+		return rebaseActive ? 'failed' : 'ok';
 	}
 
 	if (memento.workspaceRoot !== workspaceRoot) {
 		deps.ui.showErrorMessage(syncMessages.rebaseInOtherWorkspace);
 		deps.output.appendLine(syncMessages.rebaseInOtherWorkspace);
 		deps.output.appendLine(syncMessages.outputFailed);
-		return;
+		return 'failed';
 	}
 
 	const featureBranch = memento.featureBranch;
@@ -78,7 +80,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 		deps.ui.showErrorMessage(syncMessages.couldNotDetermineRebaseBranch);
 		deps.output.appendLine(`[error] ${syncMessages.couldNotDetermineRebaseBranch}`);
 		deps.output.appendLine(syncMessages.outputFailed);
-		return;
+		return 'failed';
 	}
 	const hasStash = memento.hasStash;
 	const tempBranchToCleanup = memento.tempBranchToCleanup;
@@ -89,7 +91,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 			deps.ui.showErrorMessage(syncMessages.rebaseBranchMismatch(featureBranch, rebasingBranch));
 			deps.output.appendLine(syncMessages.rebaseBranchMismatch(featureBranch, rebasingBranch));
 			deps.output.appendLine(syncMessages.outputFailed);
-			return;
+			return 'failed';
 		}
 	}
 
@@ -105,7 +107,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 				deps.ui.showErrorMessage(syncMessages.remainingConflicts);
 				deps.output.appendLine(`[error] ${msg}`);
 				deps.output.appendLine(syncMessages.outputRebasePaused);
-				return;
+				return 'paused';
 			}
 			// The rebase ended between the initial check and the continue attempt
 			// (e.g. finished manually): fall back to the non-rebase resume path.
@@ -126,7 +128,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 			deps.ui.showErrorMessage(syncMessages.errorGeneric(msg));
 			deps.output.appendLine(`[error] ${msg}`);
 			deps.output.appendLine(syncMessages.outputFailed);
-			return;
+			return 'failed';
 		}
 	}
 
@@ -140,7 +142,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 		deps.ui.showErrorMessage(syncMessages.rebaseOkPushFailed(msg));
 		deps.output.appendLine(`[error] ${msg}`);
 		deps.output.appendLine(syncMessages.outputFailed);
-		return;
+		return 'failed';
 	}
 
 	if (tempBranchToCleanup) {
@@ -155,6 +157,7 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 		await syncLocalBranchFromRemote(deps, runGit, memento.upstreamRef, featureBranch);
 	}
 
+	let outcome: WorkflowOutcome = 'ok';
 	if (hasStash) {
 		try {
 			await deps.ui.withProgress(
@@ -165,10 +168,12 @@ async function doResume(deps: SyncWithUpstreamDeps, workspaceRoot: string, gitDi
 			const popMsg = toErrorMessage(popError);
 			deps.ui.showErrorMessage(syncMessages.stashPopFailed);
 			deps.output.appendLine(`[stash-pop-error] ${popMsg}`);
+			outcome = 'failed';
 		}
 	}
 
 	await clearMemento(deps);
 	deps.output.appendLine(syncMessages.outputResumeComplete);
 	deps.ui.showInformationMessage(syncMessages.syncedSuccess(featureBranch));
+	return outcome;
 }

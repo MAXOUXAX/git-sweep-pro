@@ -119,7 +119,7 @@ const baseGit = {
 suite('post-pull-request workflow', () => {
 	test('fails fast when no workspace is open', async () => {
 		const h = createHarness();
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, ['Git Sweep Pro: No workspace folder is open.']);
 		assert.strictEqual(h.commands.length, 0);
@@ -183,7 +183,7 @@ suite('post-pull-request workflow', () => {
 			git: baseGit,
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'cancelled');
 
 		assert.strictEqual(h.quickPickRequests.length, 1);
 		assert.strictEqual(h.quickPickRequests[0]?.title, 'Post Pull Request: Branch to switch to');
@@ -203,7 +203,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'ok');
 
 		assert.ok(h.commands.includes('checkout main'));
 		assert.ok(h.commands.includes('branch -D feature/merged'));
@@ -275,7 +275,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, [
 			'Git Sweep Pro: Checkout failed: fatal: pathspec main did not match any file(s) known to git',
@@ -299,7 +299,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, [
 			"Git Sweep Pro: Could not delete branch \"feature/merged\". You can delete it manually with: git branch -D 'feature/merged'",
@@ -358,7 +358,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, [
 			'Git Sweep Pro failed: error: Your local changes would be overwritten by merge.',

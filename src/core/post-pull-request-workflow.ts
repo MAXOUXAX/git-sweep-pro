@@ -2,7 +2,7 @@ import { branchPickLabel, findBranchByPickLabel, localBranchName, parseBranches 
 import { describeGitFailure, isNoUpstreamError, toErrorMessage } from './errors';
 import { escapeForShell } from './git-command';
 import { GONE_REFS_ARGS, isProtectedBranch, parseGoneBranchRefs } from './sweep-logic';
-import { runSweepWorkflow, singlePick, type SweepWorkflowDeps } from './sweep-workflow';
+import { runSweepWorkflow, singlePick, type SweepWorkflowDeps, type WorkflowOutcome } from './sweep-workflow';
 
 export type PostPullRequestDeps = SweepWorkflowDeps;
 
@@ -31,11 +31,11 @@ async function getDefaultBranchName(runGit: (args: string[]) => Promise<{ stdout
 	}
 }
 
-export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Promise<void> {
+export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Promise<WorkflowOutcome> {
 	const workspaceRoot = deps.getWorkspaceRoot();
 	if (!workspaceRoot) {
 		deps.ui.showErrorMessage('Git Sweep Pro: No workspace folder is open.');
-		return;
+		return 'failed';
 	}
 
 	deps.output.show(true);
@@ -59,13 +59,13 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		const currentBranch = currentBranchResult.stdout.trim();
 		if (!currentBranch || currentBranch === 'HEAD') {
 			deps.ui.showErrorMessage('Git Sweep Pro: Could not determine current branch (detached HEAD?).');
-			return;
+			return 'failed';
 		}
 
 		const branchItems = parseBranches(branchListResult.stdout);
 		if (branchItems.length === 0) {
 			deps.ui.showInformationMessage('Git Sweep Pro: No other branches available to checkout.');
-			return;
+			return 'cancelled';
 		}
 
 		const defaultBranch = await getDefaultBranchName(runGit);
@@ -96,14 +96,14 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		if (!selectedItem) {
 			deps.output.appendLine('Operation cancelled.');
 			deps.output.appendLine('--- Post Pull Request session ended ---');
-			return;
+			return 'cancelled';
 		}
 
 		const targetItem = findBranchByPickLabel(branchItems, selectedItem.label);
 		if (!targetItem) {
 			deps.output.appendLine('[error] Could not match selected branch to branch list.');
 			deps.ui.showErrorMessage('Git Sweep Pro: Internal error — selected branch not found.');
-			return;
+			return 'failed';
 		}
 
 		const targetRef = targetItem.ref;
@@ -131,10 +131,11 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			deps.ui.showErrorMessage(`Git Sweep Pro: Checkout failed: ${msg}`);
 			deps.output.appendLine(`[error] Checkout failed: ${msg}`);
 			deps.output.appendLine('--- Post Pull Request session ended ---');
-			return;
+			return 'failed';
 		}
 
 		deps.output.appendLine(`Checked out: ${localTarget}`);
+		let outcome: WorkflowOutcome = 'ok';
 
 		if (isProtectedBranch(currentBranch, deps.getSettings().protectedBranches)) {
 			deps.output.appendLine(`Branch "${currentBranch}" is protected; skipping deletion.`);
@@ -149,12 +150,15 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 				deps.ui.showErrorMessage(
 					`Git Sweep Pro: Could not delete branch "${currentBranch}". You can delete it manually with: git branch -D ${escapeForShell(currentBranch)}`
 				);
+				outcome = 'failed';
 			}
 		}
 
 		// Sweep here intentionally uses safe delete (-d only): dryRun=false, forceDelete=false.
 		// runSweepWorkflow is not given forceDelete to avoid -D on other gone branches.
-		await runSweepWorkflow({ dryRun: false, forceDelete: false }, deps);
+		if ((await runSweepWorkflow({ dryRun: false, forceDelete: false }, deps)) === 'failed') {
+			outcome = 'failed';
+		}
 
 		let pulled = false;
 		try {
@@ -179,10 +183,12 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		if (pulled) {
 			deps.ui.showInformationMessage(`Git Sweep Pro: Switched to ${localTarget} and pulled.`);
 		}
+		return outcome;
 	} catch (error) {
 		const message = toErrorMessage(error);
 		deps.ui.showErrorMessage(describeGitFailure(message, 'Git Sweep Pro failed:'));
 		deps.output.appendLine(`[error] ${message}`);
 		deps.output.appendLine('--- Post Pull Request session ended ---');
+		return 'failed';
 	}
 }

@@ -17,7 +17,7 @@ suite('sync-with-upstream workflow', () => {
 	suite('runSyncWithUpstreamWorkflow', () => {
 		test('fails fast when no workspace is open', async () => {
 			const h = createHarness();
-			await runSyncWithUpstreamWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'failed');
 
 			assert.deepStrictEqual(h.errorMessages, [syncMessages.noWorkspace]);
 			assert.strictEqual(h.commands.length, 0);
@@ -52,7 +52,7 @@ suite('sync-with-upstream workflow', () => {
 				fileExists: (p) => p.includes('rebase-merge') || p.includes('rebase-apply'),
 				git: { 'rev-parse --absolute-git-dir': { stdout: '/repo/.git' } },
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'paused');
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.rebaseAlreadyInProgress]);
 			assert.ok(!h.commands.includes('fetch -p'));
@@ -96,7 +96,7 @@ suite('sync-with-upstream workflow', () => {
 				quickPickSelection: undefined,
 				git: baseGitForSync,
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'cancelled');
 
 			assert.ok(h.outputLines.includes(syncMessages.operationCancelled));
 			assert.strictEqual(h.quickPickRequests.length, 1);
@@ -152,7 +152,7 @@ suite('sync-with-upstream workflow', () => {
 					'push --force-with-lease': { stdout: '' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'ok');
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedWith('feature/my-branch', 'main')]);
 			assert.deepStrictEqual(h.errorMessages, []);
@@ -286,7 +286,7 @@ suite('sync-with-upstream workflow', () => {
 					'rev-parse --abbrev-ref HEAD': { stdout: 'main' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'cancelled');
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.cannotSyncOntoItself('main')]);
 			assert.ok(h.outputLines.includes(syncMessages.operationCancelled));
@@ -382,7 +382,7 @@ suite('sync-with-upstream workflow', () => {
 					'rebase main': new Error('CONFLICT (content): Merge conflict in foo.ts'),
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'paused');
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.rebaseConflicts]);
 			assert.ok(h.outputLines.includes(syncMessages.outputRebasePaused));
@@ -410,7 +410,7 @@ suite('sync-with-upstream workflow', () => {
 				},
 			});
 
-			await runSyncWithUpstreamWorkflow(h.deps);
+			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'failed');
 
 			assert.ok(h.errorMessages.some((m) => m.includes('non-fast-forward')));
 			assert.ok(h.outputLines.includes(syncMessages.infoStateSavedForResume));
