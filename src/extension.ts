@@ -1,15 +1,18 @@
-import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { EXIT, settingsToCliArgs } from './cli/args';
 import { runGitCommand } from './core/git-command';
-import { runPostPullRequestWorkflow } from './core/post-pull-request-workflow';
 import { orderModeActions, resolveSweepModeAction, type SweepModeSetting, type SweepSettings } from './core/sweep-logic';
-import { runSweepWorkflow, type SweepWorkflowDeps } from './core/sweep-workflow';
-import { runSyncWithUpstreamResumeWorkflow, runSyncWithUpstreamWorkflow, type SyncWithUpstreamDeps } from './core/sync-with-upstream-workflow';
 import { resolveTargetRepository, resolveWorkspaceRoot, type RepositoryResolution } from './core/workspace';
-import { pickBranchesWithActions } from './vscode/branch-picker';
+import { runCliProcess } from './vscode/cli-client';
+import { createVscodeHostUi } from './vscode/host-ui';
+import { applyTerminalPath } from './vscode/terminal-path';
 
 const OUTPUT_CHANNEL_NAME = 'Git Sweep';
 const LAST_REPO_STATE_KEY = 'gitSweepPro.lastSelectedRepo';
+const SHOW_OUTPUT = 'Show output';
+/** Compiled CLI entry point, next to this file in both out/ and dist/. */
+const CLI_PATH = path.join(__dirname, 'cli', 'main.js');
 
 function getSweepSettings(): SweepSettings {
 	const config = vscode.workspace.getConfiguration('gitSweepPro');
@@ -23,6 +26,7 @@ function getSweepSettings(): SweepSettings {
 
 export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+	const hostUi = createVscodeHostUi(outputChannel);
 	const silentOutput = { appendLine: () => undefined };
 
 	// Resolves which repository the command should target. In a multi-root
@@ -68,46 +72,37 @@ export function activate(context: vscode.ExtensionContext) {
 			},
 		});
 
-	const createSweepDeps = (workspaceRoot: string | undefined): SweepWorkflowDeps => ({
-		getWorkspaceRoot: () => workspaceRoot,
-		getSettings: getSweepSettings,
-		output: {
-			show: (preserveFocus) => outputChannel.show(preserveFocus),
-			appendLine: (line) => outputChannel.appendLine(line),
-		},
-		runGitCommand: (args, cwd) => runGitCommand(args, cwd, outputChannel),
-		ui: {
-			withProgress: (options, task) =>
-				vscode.window.withProgress(
-					{ location: vscode.ProgressLocation.Notification, title: options.title, cancellable: false },
-					task
-				),
-			showQuickPick: (items, options) => vscode.window.showQuickPick(items, options),
-			pickBranches: (options) => pickBranchesWithActions(options),
-			showInformationMessage: (message) => {
-				void vscode.window.showInformationMessage(message);
-			},
-			showErrorMessage: (message) => {
-				void vscode.window.showErrorMessage(message);
-			},
-			confirm: async (message, confirmLabel) => {
-				const choice = await vscode.window.showWarningMessage(message, { modal: true }, confirmLabel);
-				return choice === confirmLabel;
-			},
-		},
-	});
-
-	const createSyncDeps = (workspaceRoot: string | undefined): SyncWithUpstreamDeps => ({
-		...createSweepDeps(workspaceRoot),
-		workspaceState: context.workspaceState,
-		fileExists: (p) => fs.existsSync(p),
-		readFileUtf8: (p) => fs.readFileSync(p, 'utf8'),
-	});
+	/** Runs the bundled CLI against `root`, rendering its prompts with the VS Code UI. */
+	const runCli = async (root: string | undefined, args: string[]): Promise<void> => {
+		if (!root) {
+			hostUi.showErrorMessage('No workspace folder is open.');
+			return;
+		}
+		const cliArgs = [...args, ...settingsToCliArgs(getSweepSettings())];
+		outputChannel.appendLine(`> git-sweep-pro ${cliArgs.join(' ')}`);
+		const { exitCode, errorShown } = await runCliProcess({
+			nodePath: process.execPath,
+			cliPath: CLI_PATH,
+			cwd: root,
+			args: cliArgs,
+			ui: hostUi,
+		});
+		// A crash only reaches stderr, which lands in the output channel: point there.
+		if (exitCode !== EXIT.ok && exitCode !== EXIT.paused && !errorShown) {
+			const choice = await vscode.window.showErrorMessage(
+				`Git Sweep Pro: The command stopped unexpectedly (exit code ${exitCode}).`,
+				SHOW_OUTPUT
+			);
+			if (choice === SHOW_OUTPUT) {
+				outputChannel.show();
+			}
+		}
+	};
 
 	/** Registers a command that first resolves the target repository, then runs `handler` on it. */
 	const registerRepoCommand = (
 		command: string,
-		handler: (workspaceRoot: string | undefined) => Promise<void>
+		handler: (root: string | undefined) => Promise<void>
 	): vscode.Disposable =>
 		vscode.commands.registerCommand(command, async () => {
 			const resolution = await resolveRepo();
@@ -116,8 +111,15 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 		});
 
+	applyTerminalPath(context);
+
 	context.subscriptions.push(
 		outputChannel,
+		vscode.workspace.onDidChangeConfiguration((event) => {
+			if (event.affectsConfiguration('gitSweepPro.cli.addToTerminalPath')) {
+				applyTerminalPath(context);
+			}
+		}),
 		registerRepoCommand('git-sweep-pro.run', async (root) => {
 			const action = await vscode.window.showInformationMessage(
 				'Git Sweep Pro: Choose execution mode',
@@ -126,21 +128,13 @@ export function activate(context: vscode.ExtensionContext) {
 			);
 			const mode = resolveSweepModeAction(action);
 			if (mode) {
-				await runSweepWorkflow(mode, createSweepDeps(root));
+				await runCli(root, ['sweep', ...(mode.dryRun ? ['--dry-run'] : mode.forceDelete ? ['--force'] : [])]);
 			}
 		}),
-		registerRepoCommand('git-sweep-pro.dryRun', (root) =>
-			runSweepWorkflow({ dryRun: true, forceDelete: false }, createSweepDeps(root))
-		),
-		registerRepoCommand('git-sweep-pro.postPullRequest', (root) =>
-			runPostPullRequestWorkflow(createSweepDeps(root))
-		),
-		registerRepoCommand('git-sweep-pro.syncWithUpstream', (root) =>
-			runSyncWithUpstreamWorkflow(createSyncDeps(root))
-		),
-		registerRepoCommand('git-sweep-pro.syncWithUpstreamResume', (root) =>
-			runSyncWithUpstreamResumeWorkflow(createSyncDeps(root))
-		)
+		registerRepoCommand('git-sweep-pro.dryRun', (root) => runCli(root, ['sweep', '--dry-run'])),
+		registerRepoCommand('git-sweep-pro.postPullRequest', (root) => runCli(root, ['post-pr'])),
+		registerRepoCommand('git-sweep-pro.syncWithUpstream', (root) => runCli(root, ['sync'])),
+		registerRepoCommand('git-sweep-pro.syncWithUpstreamResume', (root) => runCli(root, ['resume']))
 	);
 }
 

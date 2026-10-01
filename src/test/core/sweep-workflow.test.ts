@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { runSweepWorkflow, type QuickPickItemLike, type SweepWorkflowDeps } from '../../core/sweep-workflow';
+import { findStaleBranches, runSweepWorkflow, type NoticeOptions, type QuickPickItemLike, type SweepWorkflowDeps } from '../../core/sweep-workflow';
 import { DEFAULT_SWEEP_SETTINGS, type SweepMode, type SweepSettings } from '../../core/sweep-logic';
 import type { SelectableBranch } from '../../core/sweep-selection';
 
@@ -18,6 +18,7 @@ type Harness = {
 	outputLines: string[];
 	infoMessages: string[];
 	errorMessages: string[];
+	noticeOptions: Array<NoticeOptions | undefined>;
 	commands: string[];
 	progressTitles: string[];
 	quickPickRequests: Array<{ items: readonly SelectableBranch[]; title: string }>;
@@ -28,6 +29,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 	const outputLines: string[] = [];
 	const infoMessages: string[] = [];
 	const errorMessages: string[] = [];
+	const noticeOptions: Array<NoticeOptions | undefined> = [];
 	const commands: string[] = [];
 	const progressTitles: string[] = [];
 	const quickPickRequests: Array<{ items: readonly SelectableBranch[]; title: string }> = [];
@@ -45,6 +47,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 		output: {
 			show: () => undefined,
 			appendLine: (line) => outputLines.push(line),
+			header: (line) => outputLines.push(line),
 		},
 		runGitCommand: async (args) => {
 			const key = args.join(' ');
@@ -71,11 +74,13 @@ function createHarness(options: HarnessOptions = {}): Harness {
 				}
 				return options.quickPickSelection.map((item) => item.label);
 			},
-			showInformationMessage: (message) => {
+			showInformationMessage: (message, options) => {
 				infoMessages.push(message);
+				noticeOptions.push(options);
 			},
-			showErrorMessage: (message) => {
+			showErrorMessage: (message, options) => {
 				errorMessages.push(message);
+				noticeOptions.push(options);
 			},
 			confirm: async (message, confirmLabel) => {
 				confirmRequests.push({ message, confirmLabel });
@@ -84,7 +89,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 		},
 	};
 
-	return { deps, outputLines, infoMessages, errorMessages, commands, progressTitles, quickPickRequests, confirmRequests };
+	return { deps, outputLines, infoMessages, errorMessages, noticeOptions, commands, progressTitles, quickPickRequests, confirmRequests };
 }
 
 suite('sweep workflow', () => {
@@ -94,9 +99,9 @@ suite('sweep workflow', () => {
 
 	test('fails fast when no workspace is open', async () => {
 		const h = createHarness();
-		await runSweepWorkflow(safeMode, h.deps);
+		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'failed');
 
-		assert.deepStrictEqual(h.errorMessages, ['Git Sweep Pro: No workspace folder is open.']);
+		assert.deepStrictEqual(h.errorMessages, ['No workspace folder is open.']);
 		assert.deepStrictEqual(h.commands, []);
 		assert.deepStrictEqual(h.outputLines, []);
 	});
@@ -110,13 +115,13 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
 
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: No stale branches found.']);
+		assert.deepStrictEqual(h.infoMessages, ['No stale branches found.']);
 		assert.deepStrictEqual(h.commands, ['fetch -p', GONE_REFS_CMD]);
 		assert.ok(h.outputLines.includes('No stale tracked branches found.'));
 		assert.strictEqual(h.quickPickRequests.length, 0);
-		assert.strictEqual(h.progressTitles[0], 'Git Sweep Pro: Fetching and pruning remote references...');
+		assert.strictEqual(h.progressTitles[0], 'Fetching and pruning remote references');
 		assert.strictEqual(h.outputLines.at(-1), '--- Git Sweep session ended ---');
 	});
 
@@ -130,9 +135,9 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'cancelled');
 
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: No branches selected.']);
+		assert.deepStrictEqual(h.infoMessages, ['No branches selected.']);
 		assert.ok(h.outputLines.includes('Operation cancelled or no branches selected.'));
 		assert.strictEqual(h.quickPickRequests.length, 1);
 	});
@@ -149,7 +154,7 @@ suite('sweep workflow', () => {
 
 		await runSweepWorkflow(safeMode, h.deps);
 
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: No branches selected.']);
+		assert.deepStrictEqual(h.infoMessages, ['No branches selected.']);
 	});
 
 	test('dry-run mode reports selection and avoids delete commands', async () => {
@@ -164,14 +169,15 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(dryMode, h.deps);
+		assert.strictEqual(await runSweepWorkflow(dryMode, h.deps), 'ok');
 
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro (dry run): 2 branch(es) would be deleted.']);
+		assert.deepStrictEqual(h.infoMessages, ['2 branch(es) would be deleted.']);
+		assert.deepStrictEqual(h.noticeOptions, [{ dryRun: true }]);
 		assert.deepStrictEqual(h.commands, ['fetch -p', GONE_REFS_CMD]);
 		assert.ok(h.outputLines.includes('[DRY RUN] Selected branches:'));
 		assert.ok(h.outputLines.includes('- stale/one'));
 		assert.ok(h.outputLines.includes('- stale/two'));
-		assert.strictEqual(h.quickPickRequests[0]?.title, 'Git Sweep Pro: Select branches to include in dry run');
+		assert.strictEqual(h.quickPickRequests[0]?.title, 'Select branches to include in dry run');
 	});
 
 	test('safe delete deletes all selected branches successfully', async () => {
@@ -188,12 +194,12 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
 
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deleted 2 branch(es); 0 skipped, 0 failed.']);
+		assert.deepStrictEqual(h.infoMessages, ['Deleted 2 branch(es); 0 skipped, 0 failed.']);
 		assert.ok(h.commands.includes('branch -d stale/one'));
 		assert.ok(h.commands.includes('branch -d stale/two'));
-		assert.strictEqual(h.quickPickRequests[0]?.title, 'Git Sweep Pro: Select branches to delete');
+		assert.strictEqual(h.quickPickRequests[0]?.title, 'Select branches to delete');
 	});
 
 	test('force delete uses -D and reports partial failure', async () => {
@@ -210,10 +216,10 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(forceMode, h.deps);
+		assert.strictEqual(await runSweepWorkflow(forceMode, h.deps), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'Git Sweep Pro: Deleted 1 branch(es); 0 skipped, 1 failed. See "Git Sweep" output for details.',
+			'Deleted 1 branch(es); 0 skipped, 1 failed.',
 		]);
 		assert.ok(h.outputLines.some((line) => line.includes('[delete-failed] stale/two: not fully merged')));
 	});
@@ -240,7 +246,7 @@ suite('sweep workflow', () => {
 		assert.strictEqual(h.confirmRequests.length, 1);
 		assert.match(h.confirmRequests[0].message, /squash\/rebase merged/);
 		assert.ok(h.commands.includes('branch -D squashed/one'));
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deleted 2 branch(es); 0 skipped, 0 failed.']);
+		assert.deepStrictEqual(h.infoMessages, ['Deleted 2 branch(es); 0 skipped, 0 failed.']);
 	});
 
 	test('leaves not-fully-merged branches when force-delete is declined', async () => {
@@ -255,12 +261,12 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
 
 		assert.strictEqual(h.confirmRequests.length, 1);
 		assert.ok(!h.commands.includes('branch -D squashed/one'));
 		assert.ok(h.outputLines.some((line) => line === 'Force-delete of not-fully-merged branches declined.'));
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deleted 0 branch(es); 1 skipped, 0 failed.']);
+		assert.deepStrictEqual(h.infoMessages, ['Deleted 0 branch(es); 1 skipped, 0 failed.']);
 		assert.deepStrictEqual(h.errorMessages, []);
 	});
 
@@ -292,7 +298,7 @@ suite('sweep workflow', () => {
 		await runSweepWorkflow(safeMode, h.deps);
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'Git Sweep Pro: The selected workspace folder is not a Git repository.',
+			'The selected workspace folder is not a Git repository.',
 		]);
 		assert.strictEqual(h.outputLines.at(-1), '--- Git Sweep session ended ---');
 	});
@@ -307,7 +313,7 @@ suite('sweep workflow', () => {
 
 		await runSweepWorkflow(safeMode, h.deps);
 
-		assert.deepStrictEqual(h.errorMessages, ['Git Sweep Pro: Git is not installed or not available in PATH.']);
+		assert.deepStrictEqual(h.errorMessages, ['Git is not installed or not available in PATH.']);
 	});
 
 	test('maps unknown errors to generic failure message', async () => {
@@ -318,9 +324,10 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'failed');
 
-		assert.deepStrictEqual(h.errorMessages, ['Git Sweep Pro failed: mysterious failure']);
+		assert.deepStrictEqual(h.errorMessages, ['mysterious failure']);
+		assert.deepStrictEqual(h.noticeOptions, [{ failed: true }]);
 	});
 
 	test('pre-selects all stale branches in quick-pick', async () => {
@@ -366,7 +373,7 @@ suite('sweep workflow', () => {
 		assert.ok(h.outputLines.some((line) => line.includes('Protected branches skipped')));
 		assert.ok(h.outputLines.some((line) => line === '- release/2.0'));
 		assert.ok(h.outputLines.some((line) => line === '- main'));
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deleted 1 branch(es); 0 skipped, 0 failed.']);
+		assert.deepStrictEqual(h.infoMessages, ['Deleted 1 branch(es); 0 skipped, 0 failed.']);
 	});
 
 	test('reports when all stale branches are protected', async () => {
@@ -381,9 +388,9 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
 
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: All 2 stale branch(es) are protected.']);
+		assert.deepStrictEqual(h.infoMessages, ['All 2 stale branch(es) are protected.']);
 		assert.strictEqual(h.quickPickRequests.length, 0);
 	});
 
@@ -420,7 +427,7 @@ suite('sweep workflow', () => {
 
 		assert.strictEqual(h.confirmRequests.length, 1);
 		assert.ok(h.confirmRequests[0].message.includes('git branch -d'));
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deleted 1 branch(es); 0 skipped, 0 failed.']);
+		assert.deepStrictEqual(h.infoMessages, ['Deleted 1 branch(es); 0 skipped, 0 failed.']);
 	});
 
 	test('aborts deletion when confirmation is declined', async () => {
@@ -436,11 +443,11 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'cancelled');
 
 		assert.strictEqual(h.confirmRequests.length, 1);
 		assert.ok(!h.commands.includes('branch -d stale/one'));
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deletion cancelled.']);
+		assert.deepStrictEqual(h.infoMessages, ['Deletion cancelled.']);
 	});
 
 	test('does not confirm on dry run even when confirmBeforeDelete is enabled', async () => {
@@ -457,7 +464,7 @@ suite('sweep workflow', () => {
 		await runSweepWorkflow(dryMode, h.deps);
 
 		assert.strictEqual(h.confirmRequests.length, 0);
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro (dry run): 1 branch(es) would be deleted.']);
+		assert.deepStrictEqual(h.infoMessages, ['1 branch(es) would be deleted.']);
 	});
 
 	test('writes a summary preview (detected, selected, mode) before deleting', async () => {
@@ -506,7 +513,7 @@ suite('sweep workflow', () => {
 		assert.ok(h.confirmRequests[0].message.includes('Detected: 3 stale branch(es)'));
 		assert.ok(h.confirmRequests[0].message.includes('Selected: 1'));
 		assert.ok(!h.commands.includes('branch -d stale/two'));
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: Deleted 1 branch(es); 0 skipped, 0 failed.']);
+		assert.deepStrictEqual(h.infoMessages, ['Deleted 1 branch(es); 0 skipped, 0 failed.']);
 	});
 
 	test('treats picker dismissal (undefined) as no selection', async () => {
@@ -521,7 +528,20 @@ suite('sweep workflow', () => {
 
 		await runSweepWorkflow(safeMode, h.deps);
 
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: No branches selected.']);
+		assert.deepStrictEqual(h.infoMessages, ['No branches selected.']);
 		assert.ok(!h.commands.some((cmd) => cmd.startsWith('branch -d')));
+	});
+
+	test('findStaleBranches fetches, then splits gone branches by the protected patterns', async () => {
+		const h = createHarness({
+			settings: { protectedBranches: ['release/*'] },
+			git: {
+				[GONE_REFS_CMD]: { stdout: 'feature/a\t[gone]\nrelease/1\t[gone]\nmain\t' },
+			},
+		});
+
+		assert.deepStrictEqual(await findStaleBranches('/repo', h.deps), { stale: ['feature/a'], protected: ['release/1'] });
+		assert.deepStrictEqual(h.commands, ['fetch -p', GONE_REFS_CMD]);
+		assert.strictEqual(h.progressTitles.length, 1);
 	});
 });

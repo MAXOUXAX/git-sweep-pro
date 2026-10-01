@@ -12,40 +12,65 @@ type ProgressOptions = {
 	readonly title: string;
 };
 
+export type QuickPickOptionsLike = {
+	readonly canPickMany: boolean;
+	readonly ignoreFocusOut: boolean;
+	readonly matchOnDescription: boolean;
+	readonly title: string;
+	readonly placeHolder: string;
+};
+
+/**
+ * Context a front end may render around a notification. The core writes
+ * neutral messages; each host adds its own framing (product name, pointers).
+ */
+export type NoticeOptions = {
+	/** The message reports a dry run. */
+	readonly dryRun?: boolean;
+	/** The message is a raw error from a failed operation. */
+	readonly failed?: boolean;
+	/** More details were written to the workflow output. */
+	readonly seeOutput?: boolean;
+};
+
+/**
+ * Everything a workflow needs from its front end. Implemented by the VS Code
+ * extension, the CLI's terminal prompts, and the CLI's RPC bridge.
+ */
+export type WorkflowUi = {
+	withProgress: <T>(options: ProgressOptions, task: () => Promise<T>) => PromiseLike<T>;
+	showQuickPick: (
+		items: QuickPickItemLike[],
+		options: QuickPickOptionsLike
+	) => PromiseLike<readonly QuickPickItemLike[] | QuickPickItemLike | undefined>;
+	/**
+	 * Shows a multi-select branch picker with quick-action buttons (select all,
+	 * clear all, invert selection). Resolves to the labels of the selected
+	 * branches, or `undefined` when the picker was dismissed.
+	 */
+	pickBranches: (options: {
+		readonly items: readonly SelectableBranch[];
+		readonly title: string;
+	}) => PromiseLike<readonly string[] | undefined>;
+	showInformationMessage: (message: string, options?: NoticeOptions) => void;
+	showErrorMessage: (message: string, options?: NoticeOptions) => void;
+	confirm: (message: string, confirmLabel: string) => PromiseLike<boolean>;
+};
+
+/** How a workflow ended. The CLI maps it to its exit code. */
+export type WorkflowOutcome = 'ok' | 'failed' | 'paused' | 'cancelled';
+
 export type SweepWorkflowDeps = {
 	readonly getWorkspaceRoot: () => string | undefined;
 	readonly getSettings: () => SweepSettings;
 	readonly output: {
 		show: (preserveFocus: boolean) => void;
 		appendLine: (line: string) => void;
+		/** Session framing (start and end markers, workspace, mode): always kept in VS Code, only shown in a terminal with --verbose. */
+		header: (line: string) => void;
 	};
 	readonly runGitCommand: (args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
-	readonly ui: {
-		withProgress: <T>(options: ProgressOptions, task: () => Promise<T>) => PromiseLike<T>;
-		showQuickPick: (
-			items: QuickPickItemLike[],
-			options: {
-				readonly canPickMany: boolean;
-				readonly ignoreFocusOut: boolean;
-				readonly matchOnDescription: boolean;
-				readonly title: string;
-				readonly placeHolder: string;
-			}
-		) => PromiseLike<readonly QuickPickItemLike[] | QuickPickItemLike | undefined>;
-		/**
-		 * Shows a multi-select branch picker with quick-action buttons (select all,
-		 * clear all, invert selection). Resolves to the labels of the selected
-		 * branches, or `undefined` when the picker was dismissed.
-		 */
-		pickBranches: (options: {
-			readonly items: readonly SelectableBranch[];
-			readonly title: string;
-			readonly placeHolder: string;
-		}) => PromiseLike<readonly string[] | undefined>;
-		showInformationMessage: (message: string) => void;
-		showErrorMessage: (message: string) => void;
-		confirm: (message: string, confirmLabel: string) => PromiseLike<boolean>;
-	};
+	readonly ui: WorkflowUi;
 };
 
 /** Narrows a single-select quick pick result to the picked item (or undefined when dismissed). */
@@ -55,51 +80,64 @@ export function singlePick(
 	return selected === undefined || Array.isArray(selected) ? undefined : (selected as QuickPickItemLike);
 }
 
+export type StaleBranches = {
+	/** Branches whose upstream is gone: the sweep candidates. */
+	readonly stale: string[];
+	/** Branches whose upstream is gone but that match a protected pattern. */
+	readonly protected: string[];
+};
+
+/**
+ * Fetches and prunes (unless disabled in the settings), then finds the local
+ * branches whose upstream is gone, split by the protected-branch patterns.
+ */
+export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkflowDeps): Promise<StaleBranches> {
+	const settings = deps.getSettings();
+	if (settings.autoFetchPrune) {
+		await deps.ui.withProgress(
+			{
+				title: 'Fetching and pruning remote references',
+			},
+			() => deps.runGitCommand(['fetch', '-p'], workspaceRoot)
+		);
+	} else {
+		deps.output.appendLine('Auto fetch/prune disabled; using local ref state.');
+	}
+
+	const gone = parseGoneBranchRefs((await deps.runGitCommand([...GONE_REFS_ARGS], workspaceRoot)).stdout);
+	const isProtected = (branch: string) => isProtectedBranch(branch, settings.protectedBranches);
+	return { stale: gone.filter((branch) => !isProtected(branch)), protected: gone.filter(isProtected) };
+}
+
 function describeDeleteFlag(mode: SweepMode): '-d' | '-D' {
 	return mode.forceDelete ? '-D' : '-d';
 }
 
-export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps): Promise<void> {
+export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps): Promise<WorkflowOutcome> {
 	const workspaceRoot = deps.getWorkspaceRoot();
 	if (!workspaceRoot) {
-		deps.ui.showErrorMessage('Git Sweep Pro: No workspace folder is open.');
-		return;
+		deps.ui.showErrorMessage('No workspace folder is open.');
+		return 'failed';
 	}
 
 	deps.output.show(true);
-	deps.output.appendLine('--- Git Sweep session started ---');
-	deps.output.appendLine(`Workspace: ${workspaceRoot}`);
-	deps.output.appendLine(`Mode: ${mode.dryRun ? 'dry-run' : 'delete'}, delete flag: ${describeDeleteFlag(mode)}`);
+	deps.output.header('--- Git Sweep session started ---');
+	deps.output.header(`Workspace: ${workspaceRoot}`);
+	deps.output.header(`Mode: ${mode.dryRun ? 'dry-run' : 'delete'}, delete flag: ${describeDeleteFlag(mode)}`);
 
 	const settings = deps.getSettings();
 
 	try {
-		if (settings.autoFetchPrune) {
-			await deps.ui.withProgress(
-				{
-					title: 'Git Sweep Pro: Fetching and pruning remote references...',
-				},
-				() => deps.runGitCommand(['fetch', '-p'], workspaceRoot)
-			);
-		} else {
-			deps.output.appendLine('Auto fetch/prune disabled; using local ref state.');
-		}
+		const { stale: candidateBranches, protected: protectedBranches } = await findStaleBranches(workspaceRoot, deps);
 
-		const branchResult = await deps.runGitCommand([...GONE_REFS_ARGS], workspaceRoot);
-		const goneBranches = parseGoneBranchRefs(branchResult.stdout);
-
-		if (goneBranches.length === 0) {
+		if (candidateBranches.length === 0 && protectedBranches.length === 0) {
 			deps.output.appendLine('No stale tracked branches found.');
-			deps.ui.showInformationMessage('Git Sweep Pro: No stale branches found.');
-			return;
+			deps.ui.showInformationMessage('No stale branches found.');
+			return 'ok';
 		}
-
-		const protectedPatterns = settings.protectedBranches;
-		const protectedBranches = goneBranches.filter((branch) => isProtectedBranch(branch, protectedPatterns));
-		const candidateBranches = goneBranches.filter((branch) => !protectedBranches.includes(branch));
 
 		if (protectedBranches.length > 0) {
-			deps.output.appendLine('Protected branches skipped (matched gitSweepPro.protectedBranches):');
+			deps.output.appendLine('Protected branches skipped:');
 			for (const branch of protectedBranches) {
 				deps.output.appendLine(`- ${branch}`);
 			}
@@ -107,10 +145,8 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 		if (candidateBranches.length === 0) {
 			deps.output.appendLine('All stale branches are protected; nothing to do.');
-			deps.ui.showInformationMessage(
-				`Git Sweep Pro: All ${protectedBranches.length} stale branch(es) are protected.`
-			);
-			return;
+			deps.ui.showInformationMessage(`All ${protectedBranches.length} stale branch(es) are protected.`);
+			return 'ok';
 		}
 
 		const quickPickItems: SelectableBranch[] = candidateBranches.map((branch) => ({
@@ -120,15 +156,14 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 		const selected = await deps.ui.pickBranches({
 			items: quickPickItems,
-			title: mode.dryRun ? 'Git Sweep Pro: Select branches to include in dry run' : 'Git Sweep Pro: Select branches to delete',
-			placeHolder: 'All stale tracked branches are pre-selected. Use the title-bar actions to select all, clear, or invert.',
+			title: mode.dryRun ? 'Select branches to include in dry run' : 'Select branches to delete',
 		});
 
 		const branchNames = [...(selected ?? [])];
 		if (branchNames.length === 0) {
 			deps.output.appendLine('Operation cancelled or no branches selected.');
-			deps.ui.showInformationMessage('Git Sweep Pro: No branches selected.');
-			return;
+			deps.ui.showInformationMessage('No branches selected.');
+			return 'cancelled';
 		}
 
 		deps.output.appendLine(`${mode.dryRun ? '[DRY RUN]' : '[DELETE]'} Selected branches:`);
@@ -137,7 +172,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		}
 
 		const summary = formatSweepSummary({
-			totalDetected: goneBranches.length,
+			totalDetected: candidateBranches.length + protectedBranches.length,
 			protectedCount: protectedBranches.length,
 			selectedCount: branchNames.length,
 			mode,
@@ -148,10 +183,8 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		}
 
 		if (mode.dryRun) {
-			deps.ui.showInformationMessage(
-				`Git Sweep Pro (dry run): ${branchNames.length} branch(es) would be deleted.`
-			);
-			return;
+			deps.ui.showInformationMessage(`${branchNames.length} branch(es) would be deleted.`, { dryRun: true });
+			return 'ok';
 		}
 
 		if (settings.confirmBeforeDelete) {
@@ -161,8 +194,8 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			);
 			if (!confirmed) {
 				deps.output.appendLine('Deletion cancelled at confirmation prompt.');
-				deps.ui.showInformationMessage('Git Sweep Pro: Deletion cancelled.');
-				return;
+				deps.ui.showInformationMessage('Deletion cancelled.');
+				return 'cancelled';
 			}
 		}
 
@@ -229,13 +262,15 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		});
 
 		if (failedBranches.length > 0) {
-			deps.ui.showErrorMessage(`Git Sweep Pro: ${outcome} See "Git Sweep" output for details.`);
-		} else {
-			deps.ui.showInformationMessage(`Git Sweep Pro: ${outcome}`);
+			deps.ui.showErrorMessage(outcome, { seeOutput: true });
+			return 'failed';
 		}
+		deps.ui.showInformationMessage(outcome);
+		return 'ok';
 	} catch (error) {
-		deps.ui.showErrorMessage(describeGitFailure(toErrorMessage(error), 'Git Sweep Pro failed:'));
+		deps.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
+		return 'failed';
 	} finally {
-		deps.output.appendLine('--- Git Sweep session ended ---');
+		deps.output.header('--- Git Sweep session ended ---');
 	}
 }

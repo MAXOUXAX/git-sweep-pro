@@ -39,10 +39,16 @@
     "rebase",
     "sync upstream",
     "force-with-lease",
-    "housekeeping"
+    "housekeeping",
+    "cli"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
+  "bin": {
+    "git-sweep-pro": "./dist/cli/main.js"
+  },
   "contributes": {
     "commands": [
       {
@@ -111,13 +117,18 @@
           "type": "boolean",
           "default": true,
           "description": "Show a confirmation dialog before deleting the selected branches."
+        },
+        "gitSweepPro.cli.addToTerminalPath": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Make the bundled `git-sweep-pro` command line (also usable as `git sweep-pro`) available in VS Code's integrated terminals. New terminals pick up changes."
         }
       }
     }
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
-    "build": "tsc -p ./tsconfig.build.json",
+    "build": "tsc -p ./tsconfig.build.json --noEmit && node ./scripts/bundle.mjs",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
@@ -132,22 +143,28 @@
     "package": "vsce package --no-dependencies",
     "publish:vsce": "vsce publish --no-dependencies",
     "publish:ovsx": "ovsx publish --no-dependencies",
-    "semantic-release": "semantic-release"
+    "semantic-release": "semantic-release",
+    "cli": "node ./out/cli/main.js"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/exec": "^7.1.0",
+    "@semantic-release/git": "^10.0.1",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
-    "typescript-eslint": "^8.54.0",
-    "eslint": "^9.39.2",
-    "typescript": "^5.9.3",
+    "@types/vscode": "^1.85.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.2",
     "ovsx": "^0.10.1",
     "semantic-release": "^24.2.9",
-    "@semantic-release/changelog": "^6.0.3",
-    "@semantic-release/exec": "^7.1.0",
-    "@semantic-release/git": "^10.0.1"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.54.0"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1",
+    "picocolors": "^1.1.1"
   }
 }

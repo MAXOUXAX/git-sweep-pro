@@ -59,6 +59,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 		output: {
 			show: () => undefined,
 			appendLine: (line) => outputLines.push(line),
+			header: (line) => outputLines.push(line),
 		},
 		runGitCommand: async (args) => {
 			const key = args.join(' ');
@@ -119,9 +120,9 @@ const baseGit = {
 suite('post-pull-request workflow', () => {
 	test('fails fast when no workspace is open', async () => {
 		const h = createHarness();
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
 
-		assert.deepStrictEqual(h.errorMessages, ['Git Sweep Pro: No workspace folder is open.']);
+		assert.deepStrictEqual(h.errorMessages, ['No workspace folder is open.']);
 		assert.strictEqual(h.commands.length, 0);
 		assert.ok(!h.outputLines.includes('--- Post Pull Request session started ---'));
 	});
@@ -138,7 +139,7 @@ suite('post-pull-request workflow', () => {
 		await runPostPullRequestWorkflow(h.deps);
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'Git Sweep Pro: Could not determine current branch (detached HEAD?).',
+			'Could not determine current branch (detached HEAD?).',
 		]);
 		assert.strictEqual(h.quickPickRequests.length, 0);
 	});
@@ -155,7 +156,7 @@ suite('post-pull-request workflow', () => {
 		await runPostPullRequestWorkflow(h.deps);
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'Git Sweep Pro: Could not determine current branch (detached HEAD?).',
+			'Could not determine current branch (detached HEAD?).',
 		]);
 	});
 
@@ -172,7 +173,7 @@ suite('post-pull-request workflow', () => {
 
 		await runPostPullRequestWorkflow(h.deps);
 
-		assert.deepStrictEqual(h.infoMessages, ['Git Sweep Pro: No other branches available to checkout.']);
+		assert.deepStrictEqual(h.infoMessages, ['No other branches available to checkout.']);
 		assert.strictEqual(h.quickPickRequests.length, 0);
 	});
 
@@ -183,7 +184,7 @@ suite('post-pull-request workflow', () => {
 			git: baseGit,
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'cancelled');
 
 		assert.strictEqual(h.quickPickRequests.length, 1);
 		assert.strictEqual(h.quickPickRequests[0]?.title, 'Post Pull Request: Branch to switch to');
@@ -203,7 +204,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'ok');
 
 		assert.ok(h.commands.includes('checkout main'));
 		assert.ok(h.commands.includes('branch -D feature/merged'));
@@ -212,8 +213,8 @@ suite('post-pull-request workflow', () => {
 		assert.ok(h.commands.includes('fetch -p'));
 		assert.ok(h.commands.includes('pull'));
 		assert.deepStrictEqual(h.infoMessages, [
-			'Git Sweep Pro: No stale branches found.',
-			'Git Sweep Pro: Switched to main and pulled.',
+			'No stale branches found.',
+			'Switched to main and pulled.',
 		]);
 		assert.ok(h.outputLines.includes('--- Post Pull Request session ended ---'));
 	});
@@ -275,10 +276,10 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'Git Sweep Pro: Checkout failed: fatal: pathspec main did not match any file(s) known to git',
+			'Checkout failed: fatal: pathspec main did not match any file(s) known to git',
 		]);
 		assert.ok(!h.commands.includes('branch -D feature/merged'));
 		assert.ok(!h.commands.includes('pull'));
@@ -299,16 +300,16 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, [
-			"Git Sweep Pro: Could not delete branch \"feature/merged\". You can delete it manually with: git branch -D 'feature/merged'",
+			"Could not delete branch \"feature/merged\". You can delete it manually with: git branch -D 'feature/merged'",
 		]);
 		assert.ok(h.commands.includes('pull'));
 		assert.ok(h.outputLines.includes('Checked out: main'));
 		assert.deepStrictEqual(h.infoMessages, [
-			'Git Sweep Pro: No stale branches found.',
-			'Git Sweep Pro: Switched to main and pulled.',
+			'No stale branches found.',
+			'Switched to main and pulled.',
 		]);
 	});
 
@@ -338,8 +339,8 @@ suite('post-pull-request workflow', () => {
 
 		assert.deepStrictEqual(h.errorMessages, []);
 		assert.deepStrictEqual(h.infoMessages, [
-			'Git Sweep Pro: No stale branches found.',
-			'Git Sweep Pro: Switched to feature/auth/oauth. (No upstream—pull skipped.)',
+			'No stale branches found.',
+			'Switched to feature/auth/oauth. (No upstream—pull skipped.)',
 		]);
 		assert.ok(h.outputLines.includes('No upstream configured for feature/auth/oauth. Pull skipped.'));
 		assert.ok(h.outputLines.includes('--- Post Pull Request session ended ---'));
@@ -358,10 +359,10 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'Git Sweep Pro failed: error: Your local changes would be overwritten by merge.',
+			'error: Your local changes would be overwritten by merge.',
 		]);
 		assert.ok(h.outputLines.some((l) => l.includes('--- Post Pull Request session ended ---')));
 	});
@@ -400,7 +401,7 @@ suite('post-pull-request workflow', () => {
 		await runPostPullRequestWorkflow(h.deps);
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'Git Sweep Pro: The selected workspace folder is not a Git repository.',
+			'The selected workspace folder is not a Git repository.',
 		]);
 		assert.ok(h.outputLines.some((l) => l.includes('--- Post Pull Request session ended ---')));
 	});
@@ -416,7 +417,7 @@ suite('post-pull-request workflow', () => {
 		await runPostPullRequestWorkflow(h.deps);
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'Git Sweep Pro: Git is not installed or not available in PATH.',
+			'Git is not installed or not available in PATH.',
 		]);
 	});
 
