@@ -57,7 +57,7 @@ Without a terminal, as when an agent runs it, every prompt takes its safe defaul
 ## Safety
 
 - **Only gone branches are pre-selected.** Other branches are offered only with `--merged`, when their work is already on the default branch, and you select them yourself.
-- **Safe delete first.** `git branch -d` refuses unmerged work. Force delete (`-D`) is opt-in, or offered afterwards for exactly the branches a squash or rebase merge left behind.
+- **Safe delete first.** `git branch -d` refuses unmerged work. Force delete (`-D`) is opt-in, or offered afterward for exactly the branches a squash or rebase merge left behind.
 - **Protected branches are never deleted:** `--protect 'release/*'`, `git config --add git-sweep-pro.protected 'release/*'`, or the `gitSweepPro.protectedBranches` setting.
 - **Deletions can be undone.** `gsp restore` recreates any of the last 100 deleted branches, tracking its upstream again if it still exists, until Git garbage-collects its commits (two weeks by default).
 - **Worktree aware.** Branches checked out in another worktree are never pre-selected; selecting one removes its worktree first, and only if it has no uncommitted changes.
