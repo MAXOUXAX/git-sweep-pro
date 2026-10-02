@@ -14,8 +14,9 @@ fs.rmSync('dist', { recursive: true, force: true });
 const common = {
 	bundle: true,
 	platform: 'node',
-	// VS Code 1.85 (the minimum engine) runs extensions on Node 18.
-	target: 'node18',
+	// VS Code 1.92 (the minimum engine) runs extensions on Node 20.14; @clack/prompts
+	// needs 20.12 (util.styleText).
+	target: 'node20.14',
 	format: 'cjs',
 	logLevel: 'info',
 };

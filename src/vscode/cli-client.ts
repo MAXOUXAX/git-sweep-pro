@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'node:child_process';
 import * as readline from 'node:readline';
 import { toErrorMessage } from '../core/errors';
-import type { CallMethod, CallParams, CallResults, CliEvent, HostResponse, HostUi, UiCall } from '../core/rpc-protocol';
+import type { CallMethod, CallParams, CallResults, CliEvent, HostResponse, HostUi, PromptMethod, UiCall } from '../core/rpc-protocol';
 
 type CallHandlers = { [K in CallMethod]: (...params: CallParams[K]) => CallResults[K] | PromiseLike<CallResults[K]> };
 
@@ -35,9 +35,17 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 				openProgress.get(event.id)?.();
 				openProgress.delete(event.id);
 				return;
-			case 'request':
-				respond({ type: 'response', id: event.id, result: await invoke(ui, event) });
+			case 'request': {
+				let result: CallResults[PromptMethod] | undefined;
+				try {
+					result = await invoke(ui, event);
+				} catch (error) {
+					// The CLI waits for this answer: a failed prompt counts as dismissed, so nothing destructive runs.
+					ui.log(`[error] ${event.method} failed: ${toErrorMessage(error)}`);
+				}
+				respond({ type: 'response', id: event.id, result });
 				return;
+			}
 		}
 	};
 

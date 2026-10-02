@@ -21,6 +21,11 @@ suite('agent instructions', () => {
 			assert.strictEqual(upsertAgentBlock(outdated), `# Rules\n\n${AGENT_BLOCK}\n\n## More\n`);
 		});
 
+		test('ignores an end marker that comes before the start marker', () => {
+			const content = '<!-- END:git-sweep-pro -->\n# Rules\n';
+			assert.strictEqual(upsertAgentBlock(content), `${content}\n${AGENT_BLOCK}\n`);
+		});
+
 		test('is idempotent', () => {
 			const once = upsertAgentBlock('# Rules\n');
 			assert.strictEqual(upsertAgentBlock(once), once);
@@ -95,6 +100,43 @@ suite('agent instructions', () => {
 
 			assert.deepStrictEqual(fs.readdirSync(root), []);
 			assert.deepStrictEqual(fake.infoMessages, ['No files selected.']);
+		});
+
+		test('follows a symbolic link within the repository', async () => {
+			fs.writeFileSync(path.join(root, 'AGENTS.md'), '# Rules\n');
+			fs.symlinkSync('AGENTS.md', path.join(root, 'CLAUDE.md'));
+			const fake = createFakeContext({ root });
+
+			assert.strictEqual(await runAgentsWorkflow(fake.context, ['CLAUDE.md', 'AGENTS.md']), 'ok');
+
+			assert.ok(fs.lstatSync(path.join(root, 'CLAUDE.md')).isSymbolicLink());
+			assert.strictEqual(read('AGENTS.md'), `# Rules\n\n${AGENT_BLOCK}\n`);
+			assert.deepStrictEqual(fake.infoMessages, [
+				'Added the gsp instructions to CLAUDE.md. AGENTS.md already has the gsp instructions.',
+			]);
+		});
+
+		test('never writes through a symbolic link that leaves the repository', async () => {
+			const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsp-outside-'));
+			fs.writeFileSync(path.join(outside, 'notes.md'), 'private\n');
+			fs.symlinkSync(path.join(outside, 'notes.md'), path.join(root, 'AGENTS.md'));
+			const fake = createFakeContext({ root });
+
+			assert.strictEqual(await runAgentsWorkflow(fake.context, ['AGENTS.md']), 'failed');
+
+			assert.strictEqual(fs.readFileSync(path.join(outside, 'notes.md'), 'utf8'), 'private\n');
+			assert.match(fake.errorMessages[0], /^Unable to write AGENTS\.md: it links to .*notes\.md, outside the repository\.$/);
+			fs.rmSync(outside, { recursive: true, force: true });
+		});
+
+		test('never creates a file through a dangling symbolic link', async () => {
+			const outside = path.join(os.tmpdir(), `gsp-missing-${process.pid}.md`);
+			fs.symlinkSync(outside, path.join(root, 'AGENTS.md'));
+			const fake = createFakeContext({ root });
+
+			assert.strictEqual(await runAgentsWorkflow(fake.context, ['AGENTS.md']), 'failed');
+
+			assert.ok(!fs.existsSync(outside));
 		});
 
 		test('reports a file it cannot write', async () => {

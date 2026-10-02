@@ -44,9 +44,18 @@ async function findMainWorktree({ git }: WorkflowContext): Promise<string | unde
 export async function findStaleBranches(context: WorkflowContext): Promise<StaleBranches> {
 	const { settings, git, ui, output } = context;
 	if (settings.autoFetchPrune) {
+		// Merged branches are checked against the remote's default branch:
+		// follow it when it was renamed, which a plain fetch does not do once
+		// <remote>/HEAD exists (Git 2.48+; older versions ignore the setting).
+		const followRemoteHead = settings.includeMergedBranches
+			? (await git(['remote'])).stdout
+					.split('\n')
+					.filter(Boolean)
+					.flatMap((remote) => ['-c', `remote.${remote}.followRemoteHEAD=always`])
+			: [];
 		await ui.withProgress({ title: 'Fetching and pruning remote references' }, () =>
 			Promise.all([
-				git(['fetch', '-p']),
+				git([...followRemoteHead, 'fetch', '-p']),
 				// Forget worktrees whose directory no longer exists: until then Git
 				// treats their branches as checked out and refuses to delete them.
 				git(['worktree', 'prune']),

@@ -35,6 +35,22 @@ suite('cli state store', () => {
 		assert.ok(!fs.existsSync(file));
 	});
 
+	test('removes its temporary file when the rename fails', async () => {
+		const file = stateFilePath(dir);
+		// The module object itself: the store reads fs through live bindings to it.
+		const nodeFs = require('node:fs') as typeof fs;
+		const rename = nodeFs.renameSync;
+		nodeFs.renameSync = () => {
+			throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+		};
+		try {
+			await assert.rejects(async () => createFileStateStore(file).update('k', 1), /EPERM/);
+		} finally {
+			nodeFs.renameSync = rename;
+		}
+		assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), []);
+	});
+
 	test('surfaces a corrupt state file instead of silently dropping it', () => {
 		const file = stateFilePath(dir);
 		fs.mkdirSync(path.dirname(file), { recursive: true });
