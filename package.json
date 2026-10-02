@@ -87,6 +87,12 @@
         "category": "Git Sweep Pro",
         "title": "Restore Deleted Branches",
         "shortTitle": "Restore Branches"
+      },
+      {
+        "command": "git-sweep-pro.agents",
+        "category": "Git Sweep Pro",
+        "title": "Add Instructions for Coding Agents",
+        "shortTitle": "Agent Instructions"
       }
     ],
     "configuration": {

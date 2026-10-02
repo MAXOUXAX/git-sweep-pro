@@ -177,6 +177,14 @@ suite('cli app (real git)', function () {
 		assert.ok(io.out.join('').includes('Nothing to resume.'));
 	});
 
+	test('agents writes the instructions at the repository root, even from a subdirectory', async () => {
+		fs.mkdirSync(path.join(fx.repo, 'src'));
+		const io = createFakeIo(path.join(fx.repo, 'src'));
+		assert.strictEqual(await runCli(['agents', 'CLAUDE.md'], io), EXIT.ok);
+		assert.ok(fs.readFileSync(path.join(fx.repo, 'CLAUDE.md'), 'utf8').includes('Run `gsp help` to see its commands.'));
+		assert.deepStrictEqual(io.out, ['Created CLAUDE.md with the gsp instructions.\n']);
+	});
+
 	test('--rpc emits NDJSON events', async () => {
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['list', '--rpc', '--json'], io), EXIT.ok);

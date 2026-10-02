@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand, type CommandResult } from '../core/git-command';
@@ -130,6 +131,8 @@ async function runCommand(options: CliOptions, dir: string, frontend: Frontend, 
 			return runPostPullRequestWorkflow(context, requested);
 		case 'restore':
 			return runRestore(context, options, frontend, io);
+		case 'agents':
+			return runAgentsWorkflow(context, options.positionals.filter(isAgentFile));
 		case 'sync':
 		case 'resume': {
 			// A paused sync belongs to the worktree it was started in.
