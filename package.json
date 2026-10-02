@@ -158,24 +158,30 @@
     "cli": "node ./out/cli/main.js"
   },
   "devDependencies": {
-    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/changelog": "^7.0.0",
     "@semantic-release/exec": "^7.1.0",
-    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/git": "^11.0.1",
     "@types/mocha": "^10.0.10",
-    "@types/node": "22.x",
-    "@types/vscode": "^1.85.0",
-    "@vscode/test-cli": "^0.0.12",
-    "@vscode/test-electron": "^2.5.2",
-    "@vscode/vsce": "^3.2.1",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "~1.85.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
-    "eslint": "^9.39.2",
-    "ovsx": "^0.10.1",
-    "semantic-release": "^24.2.9",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.54.0"
+    "eslint": "^10.11.0",
+    "ovsx": "^1.2.0",
+    "semantic-release": "^25.0.9",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.0"
   },
   "dependencies": {
     "@clack/prompts": "^1.8.1",
     "picocolors": "^1.1.1"
+  },
+  "overrides": {
+    "mocha": {
+      "diff": "^8.0.4",
+      "serialize-javascript": "^7.0.5"
+    }
   }
 }
