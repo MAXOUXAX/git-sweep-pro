@@ -216,6 +216,24 @@ suite('sync-with-upstream resume workflow', () => {
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedSuccess('feature/my-branch')]);
 		});
 
+		test('a failed stash pop fails the resume, without a success message', async () => {
+			const h = createHarness({
+				fileExists: fileExistsNoRebase,
+				memento: {
+					workspaceRoot: '/repo',
+					featureBranch: 'feature/my-branch',
+					hasStash: true,
+					upstreamRef: 'main',
+					upstreamIsRemote: false,
+				},
+				git: { 'stash pop': new Error('CONFLICT (content): Merge conflict in foo.txt') },
+			});
+			assert.strictEqual(await runResumeWorkflow(h.context), 'failed');
+
+			assert.deepStrictEqual(h.errorMessages, [syncMessages.stashPopFailed]);
+			assert.deepStrictEqual(h.infoMessages, []);
+		});
+
 		test('resume with rebase in progress: reports error when continue fails with conflicts', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
