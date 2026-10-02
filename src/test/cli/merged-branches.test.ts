@@ -147,6 +147,28 @@ suite('merged branch detection (real git)', function () {
 		assert.deepStrictEqual(await detect(), {});
 	});
 
+	test('follows a remote default branch that was renamed (Git 2.48+)', async function () {
+		const [major, minor] = (/(\d+)\.(\d+)/.exec(git(['version'], fx.repo)) ?? []).slice(1).map(Number);
+		if (major < 2 || (major === 2 && minor < 48)) {
+			this.skip();
+		}
+		// The remote switches its default branch to trunk; origin/HEAD still says main.
+		git(['push', '-q', 'origin', 'main:trunk'], fx.repo);
+		git(['symbolic-ref', 'HEAD', 'refs/heads/trunk'], fx.remote);
+		makeLocalBranch('feature/on-trunk', 't.txt', ['t\n']);
+		// Merged into trunk, which then moves on (a branch at the base itself is never offered).
+		git(['checkout', '-q', '-b', 'later', 'feature/on-trunk'], fx.repo);
+		commitFile(fx.repo, 'later.txt', 'later\n', 'later');
+		git(['push', '-q', 'origin', 'later:trunk'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['branch', '-q', '-D', 'later'], fx.repo);
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['list', '--merged', '--json'], io), EXIT.ok);
+		const json = JSON.parse(io.out.join('')) as { merged: unknown[] };
+		assert.deepStrictEqual(json.merged, [{ name: 'feature/on-trunk', how: 'merged', into: 'origin/trunk' }]);
+	});
+
 	test('list skips protected, current and stale branches, and keeps the default branch out', async () => {
 		makeLocalBranch('feature/done', 'd.txt', ['d\n']);
 		makeLocalBranch('release/1', 'r.txt', ['r\n']);
