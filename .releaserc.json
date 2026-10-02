@@ -19,7 +19,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "vsce package --no-dependencies --out git-sweep-pro-${nextRelease.version}.vsix",
+        "prepareCmd": "vsce package --no-dependencies --out git-sweep-pro-${nextRelease.version}.vsix && node scripts/pack-cli.mjs ${nextRelease.version}",
         "publishCmd": "vsce publish --no-dependencies --packagePath git-sweep-pro-${nextRelease.version}.vsix && ovsx publish git-sweep-pro-${nextRelease.version}.vsix --no-dependencies"
       }
     ],
@@ -30,6 +30,10 @@
           {
             "path": "git-sweep-pro-*.vsix",
             "label": "Git Sweep Pro VSIX (${nextRelease.gitTag})"
+          },
+          {
+            "path": "git-sweep-pro-cli-*.tar.gz",
+            "label": "gsp CLI for Homebrew (${nextRelease.gitTag})"
           }
         ]
       }
@@ -37,7 +41,7 @@
     [
       "@semantic-release/git",
       {
-        "assets": ["package.json", "package-lock.json", "CHANGELOG.md"],
+        "assets": ["package.json", "package-lock.json", "CHANGELOG.md", "Formula/git-sweep-pro.rb"],
         "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
     ]
