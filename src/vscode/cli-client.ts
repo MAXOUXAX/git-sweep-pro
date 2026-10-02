@@ -18,6 +18,9 @@ function invoke<K extends CallMethod>(ui: CallHandlers, call: UiCall<K>): CallRe
 export function createCliEventHandler(ui: HostUi, respond: (response: HostResponse) => void) {
 	const openProgress = new Map<number, () => void>();
 	let errorShown = false;
+	let disposed = false;
+	let cancelPrompts!: () => void;
+	const cancelled = new Promise<undefined>((resolve) => { cancelPrompts = () => resolve(undefined); });
 
 	const handleEvent = async (event: CliEvent): Promise<void> => {
 		switch (event.type) {
@@ -29,6 +32,9 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 				invoke(ui, event);
 				return;
 			case 'progressStart': {
+				if (disposed) {
+					return;
+				}
 				// The host may invoke its task later, after progressEnd or dispose.
 				const done = new Promise<void>((resolve) => openProgress.set(event.id, resolve));
 				void ui.withProgress({ title: event.title }, () => done);
@@ -39,14 +45,19 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 				openProgress.delete(event.id);
 				return;
 			case 'request': {
+				if (disposed) {
+					return;
+				}
 				let result: CallResults[PromptMethod] | undefined;
 				try {
-					result = await invoke(ui, event);
+					result = await Promise.race([invoke(ui, event), cancelled]);
 				} catch (error) {
 					// The CLI waits for this answer: a failed prompt counts as dismissed, so nothing destructive runs.
 					ui.log(`[error] ${event.method} failed: ${toErrorMessage(error)}`);
 				}
-				respond({ type: 'response', id: event.id, result });
+				if (!disposed) {
+					respond({ type: 'response', id: event.id, result });
+				}
 				return;
 			}
 		}
@@ -66,8 +77,10 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 		},
 		/** True once the CLI reported an error to the user. */
 		errorShown: (): boolean => errorShown,
-		/** Closes any progress notification left open (e.g. the CLI crashed mid-task). */
+		/** Releases pending prompt handlers and closes progress when the CLI exits. */
 		dispose: (): void => {
+			disposed = true;
+			cancelPrompts();
 			openProgress.forEach((resolve) => resolve());
 			openProgress.clear();
 		},
@@ -122,8 +135,9 @@ export function runCliProcess(options: CliRunOptions): Promise<CliRunResult> {
 		const finish = (exitCode: number, startFailed = false): void => {
 			if (!settled) {
 				settled = true;
+				// Release pending prompts before waiting for the event queue to drain.
+				handler.dispose();
 				void queue.then(() => {
-					handler.dispose();
 					resolve({ exitCode, errorShown: startFailed || handler.errorShown() });
 				});
 			}

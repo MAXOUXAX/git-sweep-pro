@@ -155,6 +155,20 @@ suite('cli rpc bridge', () => {
 		assert.deepStrictEqual(host.rec.logs, ['[error] confirm failed: modal unavailable']);
 	});
 
+	test('disposing releases a pending prompt and ignores its later answer', async () => {
+		const host = createRecordingHostUi({});
+		let answer!: (result: boolean) => void;
+		host.confirm = () => new Promise<boolean>((resolve) => { answer = resolve; });
+		const responses: HostResponse[] = [];
+		const handler = createCliEventHandler(host, response => responses.push(response));
+		const pending = handler.handleLine(JSON.stringify({ type: 'request', id: 1, method: 'confirm', params: ['Continue?', 'Continue'] }));
+		handler.dispose();
+		await pending;
+		answer(true);
+		await new Promise<void>(resolve => setImmediate(resolve));
+		assert.deepStrictEqual(responses, []);
+	});
+
 	test('host logs non-protocol lines and closes dangling progress on dispose', async () => {
 		const host = createRecordingHostUi({});
 		const handler = createCliEventHandler(host, () => undefined);

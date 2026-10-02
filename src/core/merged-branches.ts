@@ -77,14 +77,20 @@ export async function findMergedBranches(runGit: RunGit, branches: readonly stri
 		)
 	);
 
-	// Each classification runs several git commands: check the branches concurrently.
-	const found = await Promise.all(
-		branches
-			.filter((name) => name !== base.name && !atBase.has(name))
-			.map(async (name) => {
-				const how = reachable.has(name) ? 'merged' : await classify(runGit, `refs/heads/${name}`, baseRef);
-				return how ? [{ name, how, into }] : [];
-			})
-	);
-	return found.flat();
+	// Each classification runs several Git commands; keep process usage bounded.
+	const candidates = branches.filter((name) => name !== base.name && !atBase.has(name));
+	const found: Array<MergedBranch | undefined> = new Array(candidates.length);
+	let next = 0;
+	const worker = async (): Promise<void> => {
+		while (next < candidates.length) {
+			const index = next++;
+			const name = candidates[index];
+			const how = reachable.has(name) ? 'merged' : await classify(runGit, `refs/heads/${name}`, baseRef);
+			if (how) {
+				found[index] = { name, how, into };
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, worker));
+	return found.filter((branch): branch is MergedBranch => branch !== undefined);
 }
