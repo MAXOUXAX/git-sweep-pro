@@ -69,8 +69,10 @@ async function classify(runGit: RunGit, branch: string, base: string): Promise<M
  */
 export async function findMergedBranches(runGit: RunGit, branches: readonly string[], base: DefaultBranch): Promise<MergedBranch[]> {
 	const into = base.remoteRef;
+	// Full refs: a local branch named like the remote one ("origin/main") would win otherwise.
+	const baseRef = `refs/remotes/${into}`;
 	const [reachable, atBase] = await Promise.all(
-		[`--merged=${into}`, `--points-at=${into}`].map(async (filter) =>
+		[`--merged=${baseRef}`, `--points-at=${baseRef}`].map(async (filter) =>
 			new Set(lines((await runGit(['for-each-ref', filter, '--format=%(refname:short)', 'refs/heads'])).stdout))
 		)
 	);
@@ -80,7 +82,7 @@ export async function findMergedBranches(runGit: RunGit, branches: readonly stri
 		if (name === base.name || atBase.has(name)) {
 			continue;
 		}
-		const how = reachable.has(name) ? 'merged' : await classify(runGit, name, into);
+		const how = reachable.has(name) ? 'merged' : await classify(runGit, `refs/heads/${name}`, baseRef);
 		if (how) {
 			result.push({ name, how, into });
 		}

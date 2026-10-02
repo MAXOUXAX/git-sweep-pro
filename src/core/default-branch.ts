@@ -13,15 +13,13 @@ export type DefaultBranch = {
  */
 export async function getDefaultBranch(runGit: RunGit): Promise<DefaultBranch | undefined> {
 	try {
-		const list = await runGit(['for-each-ref', '--format=%(refname)', 'refs/remotes/*/HEAD']);
-		const firstRef = list.stdout.trim().split(/\r?\n/)[0];
-		const remote = firstRef?.match(/^refs\/remotes\/([^/]+)\/HEAD$/)?.[1];
-		if (!remote) {
-			return undefined;
-		}
-		const remoteRef = (await runGit(['rev-parse', '--abbrev-ref', firstRef])).stdout.trim();
-		const prefix = `${remote}/`;
-		return remoteRef.startsWith(prefix) ? { name: remoteRef.slice(prefix.length), remoteRef } : undefined;
+		const { stdout } = await runGit(['for-each-ref', '--format=%(refname)%09%(symref)', 'refs/remotes/*/HEAD']);
+		const [headRef, target = ''] = stdout.split('\n')[0].split('\t');
+		const remote = /^refs\/remotes\/([^/]+)\/HEAD$/.exec(headRef)?.[1];
+		const prefix = `refs/remotes/${remote}/`;
+		// The full target ref: unlike a short name, it cannot be ambiguous with a local branch.
+		const name = remote && target.startsWith(prefix) ? target.slice(prefix.length) : '';
+		return name ? { name, remoteRef: `${remote}/${name}` } : undefined;
 	} catch {
 		return undefined;
 	}

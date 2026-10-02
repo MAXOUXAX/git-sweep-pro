@@ -122,6 +122,13 @@ suite('merged branch detection (real git)', function () {
 		assert.ok(io.err.join('').includes('the remote default branch is unknown'));
 	});
 
+	test('a local branch named like the remote default branch is not taken for it', async () => {
+		makeLocalBranch('feature/x', 'x.txt', ['x\n']);
+		git(['branch', 'origin/main', 'feature/x'], fx.repo);
+
+		assert.deepStrictEqual(await detect(), {});
+	});
+
 	test('a branch with no net change is not taken for a squash merge', async () => {
 		makeLocalBranch('feature/reverted', 'r.txt', ['r\n']);
 		git(['checkout', '-q', 'feature/reverted'], fx.repo);
