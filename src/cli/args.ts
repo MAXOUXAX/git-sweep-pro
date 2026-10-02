@@ -98,6 +98,10 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 	if (command === 'sync' && values.continue) {
 		command = 'resume';
 	}
+	if (command === 'restore' && (values['dry-run'] || values.force)) {
+		// Restore never overwrites a branch, so there is nothing to force or to preview.
+		throw new UsageError(`${values.force ? '--force' : '--dry-run'} cannot be used with restore.`);
+	}
 	const maxPositionals = command === 'restore' ? Infinity : command === 'post-pr' || command === 'sync' ? 1 : 0;
 	if (args.length > maxPositionals) {
 		throw new UsageError(`Unexpected argument: ${args[maxPositionals]}`);
