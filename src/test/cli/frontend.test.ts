@@ -89,15 +89,15 @@ suite('cli front ends', () => {
 			assert.strictEqual(await createPlainFrontend(io, { ...plain, yes: true }).ui.confirm('Delete?', 'Delete 2'), true);
 		});
 
-		test('pickBranches keeps the pre-selection', async () => {
+		test('pickMany keeps the pre-selection', async () => {
 			const { ui } = createPlainFrontend(createFakeIo('/repo'), plain);
-			assert.deepStrictEqual(await ui.pickBranches({ items: branchItems, title: 't' }), ['a', 'b']);
+			assert.deepStrictEqual(await ui.pickMany({ items: branchItems, title: 't' }), ['a', 'b']);
 		});
 
-		test('pickBranch falls back to the pre-picked item, or fails without one', async () => {
+		test('pickOne falls back to the pre-picked item, or fails without one', async () => {
 			const { ui } = createPlainFrontend(createFakeIo('/repo'), plain);
-			assert.strictEqual(await ui.pickBranch(pick([{ label: 'dev' }, { label: 'main', picked: true }])), 'main');
-			await assert.rejects(async () => ui.pickBranch(pick([{ label: 'dev' }])), /no default available/);
+			assert.strictEqual(await ui.pickOne(pick([{ label: 'dev' }, { label: 'main', picked: true }])), 'main');
+			await assert.rejects(async () => ui.pickOne(pick([{ label: 'dev' }])), /no default available/);
 		});
 
 	});
@@ -131,37 +131,37 @@ suite('cli front ends', () => {
 			assert.ok(io.err[0].includes('Fetching'));
 		});
 
-		test('pickBranches maps the multiselect with the pre-selection as initial values', async () => {
+		test('pickMany maps the multiselect with the pre-selection as initial values', async () => {
 			const { prompter, seen } = createFakePrompter({ multiselect: [0, 2] });
 			const { ui } = createInteractiveFrontend(interactiveIo(), plain, prompter);
-			assert.deepStrictEqual(await ui.pickBranches({ items: branchItems, title: 't' }), ['a', 'c']);
+			assert.deepStrictEqual(await ui.pickMany({ items: branchItems, title: 't' }), ['a', 'c']);
 			assert.deepStrictEqual(seen.initial, [0, 1]);
 			assert.deepStrictEqual(seen.options?.map((o) => o.label), ['a', 'b', 'c']);
 		});
 
-		test('pickBranches: cancel returns undefined, --yes skips the prompt', async () => {
+		test('pickMany: cancel returns undefined, --yes skips the prompt', async () => {
 			const cancelled = createFakePrompter();
 			assert.strictEqual(
-				await createInteractiveFrontend(interactiveIo(), plain, cancelled.prompter).ui.pickBranches({ items: branchItems, title: 't' }),
+				await createInteractiveFrontend(interactiveIo(), plain, cancelled.prompter).ui.pickMany({ items: branchItems, title: 't' }),
 				undefined
 			);
 			const yes = createFakePrompter();
 			assert.deepStrictEqual(
-				await createInteractiveFrontend(interactiveIo(), { ...plain, yes: true }, yes.prompter).ui.pickBranches({ items: branchItems, title: 't' }),
+				await createInteractiveFrontend(interactiveIo(), { ...plain, yes: true }, yes.prompter).ui.pickMany({ items: branchItems, title: 't' }),
 				['a', 'b']
 			);
 			assert.deepStrictEqual(yes.calls, []);
 		});
 
-		test('pickBranch selects with the pre-picked item as initial value', async () => {
+		test('pickOne selects with the pre-picked item as initial value', async () => {
 			const items = [{ label: 'dev', description: 'local' }, { label: 'main', picked: true }];
 			const { prompter, seen } = createFakePrompter({ select: 0 });
-			assert.strictEqual(await createInteractiveFrontend(interactiveIo(), plain, prompter).ui.pickBranch(pick(items)), 'dev');
+			assert.strictEqual(await createInteractiveFrontend(interactiveIo(), plain, prompter).ui.pickOne(pick(items)), 'dev');
 			assert.strictEqual(seen.initial, 1);
 			assert.strictEqual(seen.options?.[0].hint, 'local');
 
 			const cancelled = createFakePrompter();
-			assert.strictEqual(await createInteractiveFrontend(interactiveIo(), plain, cancelled.prompter).ui.pickBranch(pick(items)), undefined);
+			assert.strictEqual(await createInteractiveFrontend(interactiveIo(), plain, cancelled.prompter).ui.pickOne(pick(items)), undefined);
 		});
 
 		test('confirm only proceeds on an explicit yes, or with --yes', async () => {

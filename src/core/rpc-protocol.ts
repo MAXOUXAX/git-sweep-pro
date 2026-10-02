@@ -13,7 +13,7 @@ import type { WorkflowUi } from './workflow';
  */
 
 /** The {@link WorkflowUi} calls the host answers. */
-export type PromptMethod = 'pickBranch' | 'pickBranches' | 'confirm';
+export type PromptMethod = 'pickOne' | 'pickMany' | 'confirm';
 /** The {@link WorkflowUi} calls the host only displays. */
 export type NotifyMethod = 'showInformationMessage' | 'showErrorMessage';
 type HostCalls = Pick<WorkflowUi, PromptMethod | NotifyMethod>;

@@ -16,8 +16,8 @@ function createHostUi(confirmAnswer: boolean) {
 	const ui: HostUi = {
 		log: (line) => logs.push(line),
 		withProgress: (_options, task) => task(),
-		pickBranch: async () => undefined,
-		pickBranches: async ({ items }) => items.filter((item) => item.picked).map((item) => item.label),
+		pickOne: async () => undefined,
+		pickMany: async ({ items }) => items.filter((item) => item.picked).map((item) => item.label),
 		showInformationMessage: (message) => infos.push(message),
 		showErrorMessage: (message) => errors.push(message),
 		confirm: async (message) => {
