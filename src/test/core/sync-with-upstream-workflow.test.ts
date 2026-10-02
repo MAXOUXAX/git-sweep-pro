@@ -10,8 +10,8 @@ import {
 	fileExistsNoRebase,
 } from './sync-with-upstream.harness';
 
-const tempMain = tempBranchNameFor('origin/main');
-const tempDevelop = tempBranchNameFor('origin/develop');
+const tempMain = tempBranchNameFor('origin/main', '/repo/.git');
+const tempDevelop = tempBranchNameFor('origin/develop', '/repo/.git');
 
 suite('sync-with-upstream workflow', () => {
 	suite('runSyncWithUpstreamWorkflow', () => {
@@ -466,13 +466,20 @@ suite('sync-with-upstream workflow', () => {
 	suite('tempBranchNameFor', () => {
 		test('long refs sharing a 40-char prefix do not collide', () => {
 			const prefix = 'origin/feature/really-long-shared-prefix-name';
-			const a = tempBranchNameFor(`${prefix}-aaaa`);
-			const b = tempBranchNameFor(`${prefix}-bbbb`);
+			const a = tempBranchNameFor(`${prefix}-aaaa`, '/repo/.git');
+			const b = tempBranchNameFor(`${prefix}-bbbb`, '/repo/.git');
 			assert.notStrictEqual(a, b);
 		});
 
 		test('is deterministic for the same ref', () => {
-			assert.strictEqual(tempBranchNameFor('origin/main'), tempBranchNameFor('origin/main'));
+			assert.strictEqual(tempBranchNameFor('origin/main', '/repo/.git'), tempBranchNameFor('origin/main', '/repo/.git'));
+		});
+
+		test('differs between worktrees', () => {
+			assert.notStrictEqual(
+				tempBranchNameFor('origin/main', '/repo/.git'),
+				tempBranchNameFor('origin/main', '/repo/.git/worktrees/wt')
+			);
 		});
 	});
 
