@@ -7,7 +7,7 @@ import type { PickItem } from '../core/workflow';
  * all, clear all, invert selection). Resolves to the labels of the selected
  * branches, or `undefined` when the picker is dismissed without accepting.
  */
-export function pickBranchesWithActions(options: {
+export function pickManyWithActions(options: {
 	readonly items: readonly PickItem[];
 	readonly title: string;
 }): Promise<readonly string[] | undefined> {

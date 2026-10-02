@@ -46,8 +46,8 @@ export function createRpcFrontend(io: CliIo): Frontend {
 					send({ type: 'progressEnd', id });
 				}
 			},
-			pickBranch: (...params) => request({ method: 'pickBranch', params }),
-			pickBranches: (...params) => request({ method: 'pickBranches', params }),
+			pickOne: (...params) => request({ method: 'pickOne', params }),
+			pickMany: (...params) => request({ method: 'pickMany', params }),
 			showInformationMessage: (...params) => send({ type: 'notify', method: 'showInformationMessage', params }),
 			showErrorMessage: (...params) => send({ type: 'notify', method: 'showErrorMessage', params }),
 			confirm: async (...params) => (await request({ method: 'confirm', params })) === true,

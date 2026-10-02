@@ -1,3 +1,4 @@
 # Keep the CLI launchers runnable on their platform.
 bin/git-sweep-pro text eol=lf
+bin/gsp text eol=lf
 *.cmd text eol=crlf

@@ -80,6 +80,16 @@ function logStreams(outputChannel: OutputWriter, streams: { stdout?: string; std
 	}
 }
 
+export type RunGitOptions = {
+	readonly exec?: ExecFileFn;
+	/**
+	 * Exit codes that are an answer rather than a failure (e.g. 1 from
+	 * `git config --get` for an unset key): they resolve with the output
+	 * instead of throwing, and are not logged as errors.
+	 */
+	readonly expectedExitCodes?: readonly number[];
+};
+
 /**
  * Runs a git command by invoking the git executable with an arguments array.
  * No shell is invoked, so branch names and other user-controlled strings cannot
@@ -89,16 +99,19 @@ export async function runGitCommand(
 	args: readonly string[],
 	cwd: string,
 	outputChannel: OutputWriter,
-	execFn: ExecFileFn = execFileAsync
+	{ exec = execFileAsync, expectedExitCodes = [] }: RunGitOptions = {}
 ): Promise<CommandResult> {
 	outputChannel.appendLine(`$ ${buildDisplayCmd(args)}`);
 	try {
-		const { stdout, stderr } = await execFn('git', args, { cwd, env: gitEnv() });
+		const { stdout, stderr } = await exec('git', args, { cwd, env: gitEnv() });
 		logStreams(outputChannel, { stdout, stderr });
 		return { stdout, stderr };
 	} catch (error) {
-		const execError = error as Error & { stdout?: string; stderr?: string };
+		const execError = error as Error & { code?: unknown; stdout?: string; stderr?: string };
 		logStreams(outputChannel, execError);
+		if (typeof execError.code === 'number' && expectedExitCodes.includes(execError.code)) {
+			return { stdout: execError.stdout ?? '', stderr: execError.stderr ?? '' };
+		}
 		outputChannel.appendLine(`[error] ${execError.message}`);
 		throw execError;
 	}

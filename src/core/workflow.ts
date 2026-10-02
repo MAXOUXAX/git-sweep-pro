@@ -2,7 +2,7 @@ import type { DeletionLog } from './deletion-log';
 import type { RunGit } from './git-command';
 import type { SweepSettings } from './sweep-logic';
 
-/** A branch offered in a picker. Pickers resolve to the labels of the chosen items. */
+/** A choice offered in a picker (a branch, a file). Pickers resolve to the labels of the chosen items. */
 export type PickItem = {
 	readonly label: string;
 	/** Extra context shown next to the label (e.g. the worktree a branch is checked out in). */
@@ -30,17 +30,17 @@ export type NoticeOptions = {
  */
 export type WorkflowUi = {
 	withProgress: <T>(options: { readonly title: string }, task: () => Promise<T>) => PromiseLike<T>;
-	/** Single-select branch picker; resolves to the chosen label, or `undefined` when dismissed. */
-	pickBranch: (options: {
+	/** Single-select picker; resolves to the chosen label, or `undefined` when dismissed. */
+	pickOne: (options: {
 		readonly items: readonly PickItem[];
 		readonly title: string;
 		readonly placeholder: string;
 	}) => PromiseLike<string | undefined>;
 	/**
-	 * Multi-select branch picker with quick actions (select all, clear all,
+	 * Multi-select picker with quick actions (select all, clear all,
 	 * invert). Resolves to the chosen labels, or `undefined` when dismissed.
 	 */
-	pickBranches: (options: { readonly items: readonly PickItem[]; readonly title: string }) => PromiseLike<readonly string[] | undefined>;
+	pickMany: (options: { readonly items: readonly PickItem[]; readonly title: string }) => PromiseLike<readonly string[] | undefined>;
 	showInformationMessage: (message: string, options?: NoticeOptions) => void;
 	showErrorMessage: (message: string, options?: NoticeOptions) => void;
 	confirm: (message: string, confirmLabel: string) => PromiseLike<boolean>;

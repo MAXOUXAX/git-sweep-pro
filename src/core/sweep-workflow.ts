@@ -70,7 +70,7 @@ export async function runSweepWorkflow(context: WorkflowContext, mode: SweepMode
 			return { label: branch, picked: !mergedOf.has(branch) && !worktreeOf.has(branch), ...(description ? { description } : {}) };
 		});
 
-		const selected = await ui.pickBranches({
+		const selected = await ui.pickMany({
 			items: quickPickItems,
 			title: dryRun ? 'Select branches to include in dry run' : 'Select branches to delete',
 		});
@@ -171,7 +171,7 @@ export async function runSweepWorkflow(context: WorkflowContext, mode: SweepMode
 		}
 
 		if (recorder.recorded.length > 0) {
-			output.appendLine(`To restore them, run: git sweep-pro restore ${recorder.recorded.map(quoteShellArg).join(' ')}`);
+			output.appendLine(`To restore them, run: gsp restore ${recorder.recorded.map(quoteShellArg).join(' ')}`);
 		}
 
 		const outcome = formatSweepOutcome({

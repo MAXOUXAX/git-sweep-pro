@@ -36,7 +36,7 @@ function createHarness(options: { log: DeletionLog; git?: Record<string, GitEntr
 		git: options.git,
 		// By default, every recorded commit still exists.
 		gitFallback: (args) => ({ stdout: args[0] === 'rev-list' ? args.slice(3).join('\n') : '' }),
-		pickBranches: () => options.picked,
+		pickMany: () => options.picked,
 		deletionLog: options.log,
 	});
 	const restore = (requested: readonly string[]) => runRestoreWorkflow(fake.context, requested, new Date('2026-01-01T02:00:00.000Z'));
@@ -45,7 +45,7 @@ function createHarness(options: { log: DeletionLog; git?: Record<string, GitEntr
 		restore,
 		infos: fake.infoMessages,
 		errors: fake.errorMessages,
-		pickRequests: fake.pickBranchesRequests,
+		pickRequests: fake.pickManyRequests,
 		lines: fake.appendedLines,
 	};
 }

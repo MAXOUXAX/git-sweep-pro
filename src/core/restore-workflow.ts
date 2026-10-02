@@ -104,7 +104,7 @@ async function chooseDeletions(
 		ui.showInformationMessage('No deleted branches to restore.');
 		return 'ok';
 	}
-	const picked = await ui.pickBranches({
+	const picked = await ui.pickMany({
 		items: restorable.map(({ entry }) => ({ label: entry.branch, picked: false, description: describeDeletion(entry, now) })),
 		title: 'Select branches to restore',
 	});

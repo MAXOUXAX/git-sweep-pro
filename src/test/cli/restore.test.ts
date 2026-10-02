@@ -41,7 +41,7 @@ suite('restore (real git)', function () {
 		assert.ok(sweep.err.join('').includes('Force-delete them with git branch -D? You can restore them later.'));
 		assert.strictEqual(await runCli(['--yes'], sweep), EXIT.ok);
 		assert.ok(!branchExists(fx.repo, 'feature/unmerged'));
-		assert.ok(sweep.err.join('').includes('To restore them, run: git sweep-pro restore feature/unmerged'));
+		assert.ok(sweep.err.join('').includes('To restore them, run: gsp restore feature/unmerged'));
 
 		const listing = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['restore', '--json'], listing), EXIT.ok);

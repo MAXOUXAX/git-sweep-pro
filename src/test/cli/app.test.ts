@@ -26,7 +26,7 @@ suite('cli app (real git)', function () {
 	test('help, version and usage errors', async () => {
 		const help = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['--help'], help), EXIT.ok);
-		assert.ok(help.out.join('').includes('Usage: git-sweep-pro'));
+		assert.ok(help.out.join('').includes('Usage: gsp'));
 
 		const version = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['version'], version), EXIT.ok);
@@ -116,7 +116,7 @@ suite('cli app (real git)', function () {
 		assert.strictEqual(await runCli(['-C', fx.repo], io), EXIT.ok);
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 		assert.ok(!branchExists(fx.repo, 'feature/b'));
-		assert.strictEqual(calls[0], 'intro git sweep-pro sweep');
+		assert.strictEqual(calls[0], 'intro gsp sweep');
 		assert.ok(calls.includes('success Deleted 1 branch(es); 0 skipped, 0 failed.'));
 		assert.strictEqual(calls.at(-1), 'outro Done.');
 	});
@@ -175,6 +175,14 @@ suite('cli app (real git)', function () {
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['resume'], io), EXIT.ok);
 		assert.ok(io.out.join('').includes('Nothing to resume.'));
+	});
+
+	test('agents writes the instructions at the repository root, even from a subdirectory', async () => {
+		fs.mkdirSync(path.join(fx.repo, 'src'));
+		const io = createFakeIo(path.join(fx.repo, 'src'));
+		assert.strictEqual(await runCli(['agents', 'CLAUDE.md'], io), EXIT.ok);
+		assert.ok(fs.readFileSync(path.join(fx.repo, 'CLAUDE.md'), 'utf8').includes('Run `gsp help` to see its commands.'));
+		assert.deepStrictEqual(io.out, ['Created CLAUDE.md with the gsp instructions.\n']);
 	});
 
 	test('--rpc emits NDJSON events', async () => {

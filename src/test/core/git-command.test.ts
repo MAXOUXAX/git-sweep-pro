@@ -13,7 +13,7 @@ suite('git-command', () => {
 			['status'],
 			'/repo',
 			{ appendLine: (line) => lines.push(line) },
-			execFileFn
+			{ exec: execFileFn }
 		);
 
 		assert.deepStrictEqual(result, { stdout: 'hello\n', stderr: 'warn\n' });
@@ -28,7 +28,7 @@ suite('git-command', () => {
 			['rev-parse', '--show-toplevel'],
 			'/repo',
 			{ appendLine: (line) => lines.push(line) },
-			execFileFn
+			{ exec: execFileFn }
 		);
 
 		assert.deepStrictEqual(lines, ['$ git rev-parse --show-toplevel']);
@@ -46,7 +46,7 @@ suite('git-command', () => {
 
 		await assert.rejects(
 			() =>
-				runGitCommand(['fetch', '-p'], '/repo', { appendLine: (line) => lines.push(line) }, execFileFn),
+				runGitCommand(['fetch', '-p'], '/repo', { appendLine: (line) => lines.push(line) }, { exec: execFileFn }),
 			(error: unknown) => {
 				assert.strictEqual(error, thrown);
 				return true;
@@ -72,7 +72,7 @@ suite('git-command', () => {
 
 		await assert.rejects(
 			() =>
-				runGitCommand(['branch', '-vv'], '/repo', { appendLine: (line) => lines.push(line) }, execFileFn),
+				runGitCommand(['branch', '-vv'], '/repo', { appendLine: (line) => lines.push(line) }, { exec: execFileFn }),
 			/error/
 		);
 
@@ -91,7 +91,7 @@ suite('git-command', () => {
 			['branch', '-d', '; rm -rf /'],
 			'/repo',
 			{ appendLine: (line) => lines.push(line) },
-			execFileFn
+			{ exec: execFileFn }
 		);
 
 		assert.deepStrictEqual(receivedArgs, ['branch', '-d', '; rm -rf /']);
@@ -108,12 +108,25 @@ suite('git-command', () => {
 			['rebase', '--continue'],
 			'/repo',
 			{ appendLine: () => undefined },
-			execFileFn
+			{ exec: execFileFn }
 		);
 
 		assert.strictEqual(receivedEnv?.GIT_EDITOR, 'true');
 		assert.strictEqual(receivedEnv?.GIT_SEQUENCE_EDITOR, 'true');
 		assert.strictEqual(receivedEnv?.GIT_TERMINAL_PROMPT, '0');
 		assert.strictEqual(receivedEnv?.LC_ALL, 'C');
+	});
+
+	test('an expected exit code resolves with the output and logs no error', async () => {
+		const lines: string[] = [];
+		const execFileFn: ExecFileFn = async () => {
+			throw Object.assign(new Error('Command failed: git config --get-all a.b'), { code: 1, stdout: '', stderr: '' });
+		};
+		const result = await runGitCommand(['config', '--get-all', 'a.b'], '/repo', { appendLine: (line) => lines.push(line) }, {
+			exec: execFileFn,
+			expectedExitCodes: [1],
+		});
+		assert.deepStrictEqual(result, { stdout: '', stderr: '' });
+		assert.deepStrictEqual(lines, ['$ git config --get-all a.b']);
 	});
 });

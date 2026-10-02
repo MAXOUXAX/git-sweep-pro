@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { HostUi } from '../core/rpc-protocol';
 import type { NoticeOptions } from '../core/workflow';
-import { pickBranchesWithActions } from './branch-picker';
+import { pickManyWithActions } from './branch-picker';
 
 const PRODUCT = 'Git Sweep Pro';
 
@@ -21,7 +21,7 @@ export function createVscodeHostUi(outputChannel: vscode.OutputChannel): HostUi 
 				{ location: vscode.ProgressLocation.Notification, title: `${PRODUCT}: ${options.title}...`, cancellable: false },
 				task
 			),
-		pickBranch: async ({ items, title, placeholder }) => {
+		pickOne: async ({ items, title, placeholder }) => {
 			// A single-select quick pick highlights its first item: list the default first.
 			const ordered = [...items.filter((item) => item.picked), ...items.filter((item) => !item.picked)];
 			const picked = await vscode.window.showQuickPick(
@@ -30,7 +30,7 @@ export function createVscodeHostUi(outputChannel: vscode.OutputChannel): HostUi 
 			);
 			return picked?.label;
 		},
-		pickBranches: (options) => pickBranchesWithActions({ ...options, title: `${PRODUCT}: ${options.title}` }),
+		pickMany: (options) => pickManyWithActions({ ...options, title: `${PRODUCT}: ${options.title}` }),
 		showInformationMessage: (message, options) => {
 			void vscode.window.showInformationMessage(notice(message, options));
 		},

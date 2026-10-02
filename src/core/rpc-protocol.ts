@@ -1,7 +1,7 @@
 import type { WorkflowUi } from './workflow';
 
 /**
- * Wire protocol between the `git-sweep-pro` CLI running with `--rpc` and a
+ * Wire protocol between the `gsp` CLI running with `--rpc` and a
  * host (the VS Code extension) that renders its UI. Every message is derived
  * from {@link WorkflowUi}, so the protocol cannot drift from the contract.
  *
@@ -13,7 +13,7 @@ import type { WorkflowUi } from './workflow';
  */
 
 /** The {@link WorkflowUi} calls the host answers. */
-export type PromptMethod = 'pickBranch' | 'pickBranches' | 'confirm';
+export type PromptMethod = 'pickOne' | 'pickMany' | 'confirm';
 /** The {@link WorkflowUi} calls the host only displays. */
 export type NotifyMethod = 'showInformationMessage' | 'showErrorMessage';
 type HostCalls = Pick<WorkflowUi, PromptMethod | NotifyMethod>;
