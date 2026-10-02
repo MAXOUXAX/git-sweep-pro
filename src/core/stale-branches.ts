@@ -32,15 +32,14 @@ async function findMainWorktree(workspaceRoot: string, deps: SweepWorkflowDeps):
 export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkflowDeps): Promise<StaleBranches> {
 	const settings = deps.getSettings();
 	if (settings.autoFetchPrune) {
-		await deps.ui.withProgress(
-			{
-				title: 'Fetching and pruning remote references',
-			},
-			() => deps.runGitCommand(['fetch', '-p'], workspaceRoot)
+		await deps.ui.withProgress({ title: 'Fetching and pruning remote references' }, () =>
+			Promise.all([
+				deps.runGitCommand(['fetch', '-p'], workspaceRoot),
+				// Forget worktrees whose directory no longer exists: until then Git
+				// treats their branches as checked out and refuses to delete them.
+				deps.runGitCommand(['worktree', 'prune'], workspaceRoot),
+			])
 		);
-		// Forget worktrees whose directory no longer exists: until then Git
-		// treats their branches as checked out and refuses to delete them.
-		await deps.runGitCommand(['worktree', 'prune'], workspaceRoot);
 	} else {
 		deps.output.appendLine('Auto fetch/prune disabled; using local ref state.');
 	}
