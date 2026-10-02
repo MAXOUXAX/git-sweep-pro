@@ -1,7 +1,7 @@
 import { getDefaultBranch } from './default-branch';
 import { findMergedBranches, type MergedBranch } from './merged-branches';
 import { GONE_REFS_ARGS, isProtectedBranch, parseLocalBranchRefs, type LocalBranchRef, type SweepSettings } from './sweep-logic';
-import type { SweepWorkflowDeps } from './sweep-workflow';
+import type { WorkflowContext } from './workflow';
 
 /** A stale branch that a sweep run from here cannot delete, because it is checked out. */
 export type CheckedOutBranch =
@@ -28,8 +28,8 @@ export type StaleBranches = {
 };
 
 /** Path of the main worktree: the first entry of `git worktree list --porcelain`. */
-async function findMainWorktree(workspaceRoot: string, deps: SweepWorkflowDeps): Promise<string | undefined> {
-	const { stdout } = await deps.runGitCommand(['worktree', 'list', '--porcelain'], workspaceRoot);
+async function findMainWorktree({ git }: WorkflowContext): Promise<string | undefined> {
+	const { stdout } = await git(['worktree', 'list', '--porcelain']);
 	return /^worktree (.+)$/m.exec(stdout)?.[1];
 }
 
@@ -41,27 +41,27 @@ async function findMainWorktree(workspaceRoot: string, deps: SweepWorkflowDeps):
  * `includeMergedBranches`, also finds the other branches already merged into
  * the default branch.
  */
-export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkflowDeps): Promise<StaleBranches> {
-	const settings = deps.getSettings();
+export async function findStaleBranches(context: WorkflowContext): Promise<StaleBranches> {
+	const { settings, git, ui, output } = context;
 	if (settings.autoFetchPrune) {
-		await deps.ui.withProgress({ title: 'Fetching and pruning remote references' }, () =>
+		await ui.withProgress({ title: 'Fetching and pruning remote references' }, () =>
 			Promise.all([
-				deps.runGitCommand(['fetch', '-p'], workspaceRoot),
+				git(['fetch', '-p']),
 				// Forget worktrees whose directory no longer exists: until then Git
 				// treats their branches as checked out and refuses to delete them.
-				deps.runGitCommand(['worktree', 'prune'], workspaceRoot),
+				git(['worktree', 'prune']),
 			])
 		);
 	} else {
-		deps.output.appendLine('Auto fetch/prune disabled; using local ref state.');
+		output.appendLine('Auto fetch/prune disabled; using local ref state.');
 	}
 
-	const refs = parseLocalBranchRefs((await deps.runGitCommand([...GONE_REFS_ARGS], workspaceRoot)).stdout);
+	const refs = parseLocalBranchRefs((await git(GONE_REFS_ARGS)).stdout);
 	const isProtected = (ref: LocalBranchRef) => isProtectedBranch(ref.name, settings.protectedBranches);
 	const gone = refs.filter((ref) => ref.gone);
 	const deletable = refs.filter((ref) => !isProtected(ref) && (ref.gone || settings.includeMergedBranches));
 	const mainWorktree = deletable.some((ref) => ref.worktreePath && !ref.isCurrent)
-		? await findMainWorktree(workspaceRoot, deps)
+		? await findMainWorktree(context)
 		: undefined;
 	const isInMainWorktree = (worktreePath: string | undefined): worktreePath is string =>
 		worktreePath !== undefined && worktreePath === mainWorktree;
@@ -85,8 +85,7 @@ export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkfl
 	// branches, they are not reported as skipped, as their upstream still exists.
 	const { merged, skipped: mergedSkipped = false } = settings.includeMergedBranches
 		? await findMerged(
-				workspaceRoot,
-				deps,
+				context,
 				deletable.filter((ref) => !ref.gone && !ref.isCurrent && !isInMainWorktree(ref.worktreePath)).map((ref) => ref.name)
 			)
 		: { merged: [] };
@@ -104,15 +103,13 @@ export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkfl
  * `git remote set-head <remote> --auto`).
  */
 async function findMerged(
-	workspaceRoot: string,
-	deps: SweepWorkflowDeps,
+	{ git, ui, output }: WorkflowContext,
 	branches: readonly string[]
 ): Promise<{ merged: MergedBranch[]; skipped?: boolean }> {
-	const runGit = (args: string[]) => deps.runGitCommand(args, workspaceRoot);
-	const base = await getDefaultBranch(runGit);
+	const base = await getDefaultBranch(git);
 	if (!base) {
-		const [remote] = (await runGit(['remote'])).stdout.split('\n').filter(Boolean);
-		deps.output.appendLine(
+		const [remote] = (await git(['remote'])).stdout.split('\n').filter(Boolean);
+		output.appendLine(
 			remote
 				? `Merged branches were not checked: the default branch of "${remote}" is unknown. To set it, run: git remote set-head ${remote} --auto`
 				: 'Merged branches were not checked: the repository has no remote.'
@@ -122,8 +119,8 @@ async function findMerged(
 	if (branches.length === 0) {
 		return { merged: [] };
 	}
-	const merged = await deps.ui.withProgress({ title: `Looking for branches merged into ${base.remoteRef}` }, () =>
-		findMergedBranches(runGit, branches, base)
+	const merged = await ui.withProgress({ title: `Looking for branches merged into ${base.remoteRef}` }, () =>
+		findMergedBranches(git, branches, base)
 	);
 	return { merged };
 }

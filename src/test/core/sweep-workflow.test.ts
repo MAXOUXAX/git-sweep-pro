@@ -1,112 +1,33 @@
 import * as assert from 'assert';
+import { NOT_A_REPOSITORY } from '../../core/errors';
 import { findStaleBranches } from '../../core/stale-branches';
-import { runSweepWorkflow, type NoticeOptions, type QuickPickItemLike, type SweepWorkflowDeps } from '../../core/sweep-workflow';
-import { DEFAULT_SWEEP_SETTINGS, type SweepMode, type SweepSettings } from '../../core/sweep-logic';
-import type { SelectableBranch } from '../../core/sweep-selection';
+import type { SweepSettings } from '../../core/sweep-logic';
+import { runSweepWorkflow } from '../../core/sweep-workflow';
+import { createFakeContext, type GitEntry } from '../fake-context';
 
 const GONE_REFS_CMD = 'for-each-ref --format=%(refname:short)%09%(upstream:track)%09%(HEAD)%09%(worktreepath) refs/heads';
 
 type HarnessOptions = {
 	workspaceRoot?: string;
-	quickPickSelection?: readonly QuickPickItemLike[] | undefined;
-	git?: Record<string, { stdout?: string; stderr?: string } | Error>;
+	/** Branches the multi-select picker returns; `undefined` dismisses it. */
+	quickPickSelection?: readonly { label: string }[] | undefined;
+	git?: Record<string, GitEntry>;
 	settings?: Partial<SweepSettings>;
 	confirmResult?: boolean;
 };
 
-type Harness = {
-	deps: SweepWorkflowDeps;
-	outputLines: string[];
-	infoMessages: string[];
-	errorMessages: string[];
-	noticeOptions: Array<NoticeOptions | undefined>;
-	commands: string[];
-	progressTitles: string[];
-	quickPickRequests: Array<{ items: readonly SelectableBranch[]; title: string }>;
-	confirmRequests: Array<{ message: string; confirmLabel: string }>;
-};
-
-function createHarness(options: HarnessOptions = {}): Harness {
-	const outputLines: string[] = [];
-	const infoMessages: string[] = [];
-	const errorMessages: string[] = [];
-	const noticeOptions: Array<NoticeOptions | undefined> = [];
-	const commands: string[] = [];
-	const progressTitles: string[] = [];
-	const quickPickRequests: Array<{ items: readonly SelectableBranch[]; title: string }> = [];
-	const confirmRequests: Array<{ message: string; confirmLabel: string }> = [];
-
-	const settings: SweepSettings = {
-		...DEFAULT_SWEEP_SETTINGS,
-		confirmBeforeDelete: false,
-		...options.settings,
-	};
-
-	const deps: SweepWorkflowDeps = {
-		getWorkspaceRoot: () => options.workspaceRoot,
-		getSettings: () => settings,
-		output: {
-			show: () => undefined,
-			appendLine: (line) => outputLines.push(line),
-			header: (line) => outputLines.push(line),
-		},
-		runGitCommand: async (args) => {
-			const key = args.join(' ');
-			commands.push(key);
-			const entry = options.git?.[key];
-			if (entry instanceof Error) {
-				throw entry;
-			}
-			return {
-				stdout: entry?.stdout ?? '',
-				stderr: entry?.stderr ?? '',
-			};
-		},
-		ui: {
-			withProgress: async (progress, task) => {
-				progressTitles.push(progress.title);
-				return task();
-			},
-			showQuickPick: async () => undefined,
-			pickBranches: async ({ items, title }) => {
-				quickPickRequests.push({ items, title });
-				if (options.quickPickSelection === undefined) {
-					return undefined;
-				}
-				return options.quickPickSelection.map((item) => item.label);
-			},
-			showInformationMessage: (message, options) => {
-				infoMessages.push(message);
-				noticeOptions.push(options);
-			},
-			showErrorMessage: (message, options) => {
-				errorMessages.push(message);
-				noticeOptions.push(options);
-			},
-			confirm: async (message, confirmLabel) => {
-				confirmRequests.push({ message, confirmLabel });
-				return options.confirmResult ?? true;
-			},
-		},
-	};
-
-	return { deps, outputLines, infoMessages, errorMessages, noticeOptions, commands, progressTitles, quickPickRequests, confirmRequests };
+function createHarness(options: HarnessOptions = {}) {
+	const fake = createFakeContext({
+		root: options.workspaceRoot,
+		settings: options.settings,
+		git: options.git,
+		confirm: options.confirmResult,
+		pickBranches: () => options.quickPickSelection?.map((item) => item.label),
+	});
+	return { ...fake, quickPickRequests: fake.pickBranchesRequests };
 }
 
 suite('sweep workflow', () => {
-	const safeMode: SweepMode = { dryRun: false, forceDelete: false };
-	const forceMode: SweepMode = { dryRun: false, forceDelete: true };
-	const dryMode: SweepMode = { dryRun: true, forceDelete: false };
-
-	test('fails fast when no workspace is open', async () => {
-		const h = createHarness();
-		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'failed');
-
-		assert.deepStrictEqual(h.errorMessages, ['No workspace folder is open.']);
-		assert.deepStrictEqual(h.commands, []);
-		assert.deepStrictEqual(h.outputLines, []);
-	});
-
 	test('reports no stale branches and stops', async () => {
 		const h = createHarness({
 			workspaceRoot: '/repo',
@@ -116,7 +37,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
+		assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'ok');
 
 		assert.deepStrictEqual(h.infoMessages, ['No stale branches found.']);
 		assert.deepStrictEqual(h.commands, ['fetch -p', 'worktree prune', GONE_REFS_CMD]);
@@ -136,7 +57,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'cancelled');
+		assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'cancelled');
 
 		assert.deepStrictEqual(h.infoMessages, ['No branches selected.']);
 		assert.ok(h.outputLines.includes('Operation cancelled or no branches selected.'));
@@ -153,7 +74,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		await runSweepWorkflow(h.context, 'safeDelete');
 
 		assert.deepStrictEqual(h.infoMessages, ['No branches selected.']);
 	});
@@ -170,7 +91,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runSweepWorkflow(dryMode, h.deps), 'ok');
+		assert.strictEqual(await runSweepWorkflow(h.context, 'dryRun'), 'ok');
 
 		assert.deepStrictEqual(h.infoMessages, ['2 branch(es) would be deleted.']);
 		assert.deepStrictEqual(h.noticeOptions, [{ dryRun: true }]);
@@ -195,7 +116,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
+		assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'ok');
 
 		assert.deepStrictEqual(h.infoMessages, ['Deleted 2 branch(es); 0 skipped, 0 failed.']);
 		assert.ok(h.commands.includes('branch -d stale/one'));
@@ -217,7 +138,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runSweepWorkflow(forceMode, h.deps), 'failed');
+		assert.strictEqual(await runSweepWorkflow(h.context, 'forceDelete'), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, [
 			'Deleted 1 branch(es); 0 skipped, 1 failed.',
@@ -241,7 +162,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		await runSweepWorkflow(h.context, 'safeDelete');
 
 		assert.ok(h.outputLines.some((line) => line.includes('[not-fully-merged] squashed/one')));
 		assert.strictEqual(h.confirmRequests.length, 1);
@@ -262,7 +183,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
+		assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'ok');
 
 		assert.strictEqual(h.confirmRequests.length, 1);
 		assert.ok(!h.commands.includes('branch -D squashed/one'));
@@ -282,7 +203,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(forceMode, h.deps);
+		await runSweepWorkflow(h.context, 'forceDelete');
 
 		assert.strictEqual(h.confirmRequests.length, 0);
 		assert.ok(h.outputLines.some((line) => line.includes('[delete-failed] stale/one')));
@@ -296,10 +217,10 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		await runSweepWorkflow(h.context, 'safeDelete');
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'The selected workspace folder is not a Git repository.',
+			NOT_A_REPOSITORY,
 		]);
 		assert.strictEqual(h.outputLines.at(-1), '--- Git Sweep session ended ---');
 	});
@@ -312,7 +233,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		await runSweepWorkflow(h.context, 'safeDelete');
 
 		assert.deepStrictEqual(h.errorMessages, ['Git is not installed or not available in PATH.']);
 	});
@@ -325,7 +246,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'failed');
+		assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, ['mysterious failure']);
 		assert.deepStrictEqual(h.noticeOptions, [{ failed: true }]);
@@ -343,7 +264,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(dryMode, h.deps);
+		await runSweepWorkflow(h.context, 'dryRun');
 
 		const quickPick = h.quickPickRequests[0];
 		assert.ok(quickPick);
@@ -367,7 +288,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		await runSweepWorkflow(h.context, 'safeDelete');
 
 		const quickPick = h.quickPickRequests[0];
 		assert.deepStrictEqual(quickPick?.items, [{ label: 'stale/one', picked: true }]);
@@ -389,7 +310,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
+		assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'ok');
 
 		assert.deepStrictEqual(h.infoMessages, ['All 2 stale branch(es) are protected.']);
 		assert.strictEqual(h.quickPickRequests.length, 0);
@@ -404,7 +325,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(dryMode, h.deps);
+		await runSweepWorkflow(h.context, 'dryRun');
 
 		assert.ok(!h.commands.includes('fetch -p'));
 		assert.strictEqual(h.commands[0], GONE_REFS_CMD);
@@ -424,7 +345,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		await runSweepWorkflow(h.context, 'safeDelete');
 
 		assert.strictEqual(h.confirmRequests.length, 1);
 		assert.ok(h.confirmRequests[0].message.includes('git branch -d'));
@@ -444,7 +365,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'cancelled');
+		assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'cancelled');
 
 		assert.strictEqual(h.confirmRequests.length, 1);
 		assert.ok(!h.commands.includes('branch -d stale/one'));
@@ -462,7 +383,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(dryMode, h.deps);
+		await runSweepWorkflow(h.context, 'dryRun');
 
 		assert.strictEqual(h.confirmRequests.length, 0);
 		assert.deepStrictEqual(h.infoMessages, ['1 branch(es) would be deleted.']);
@@ -482,7 +403,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		await runSweepWorkflow(h.context, 'safeDelete');
 
 		assert.ok(h.outputLines.includes('Summary:'));
 		assert.ok(h.outputLines.includes('  Detected: 2 stale branch(es)'));
@@ -506,7 +427,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		await runSweepWorkflow(h.context, 'safeDelete');
 
 		assert.ok(h.outputLines.includes('  Detected: 3 stale branch(es)'));
 		assert.ok(h.outputLines.includes('  Protected (skipped): 1'));
@@ -527,7 +448,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		await runSweepWorkflow(safeMode, h.deps);
+		await runSweepWorkflow(h.context, 'safeDelete');
 
 		assert.deepStrictEqual(h.infoMessages, ['No branches selected.']);
 		assert.ok(!h.commands.some((cmd) => cmd.startsWith('branch -d')));
@@ -541,7 +462,7 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		assert.deepStrictEqual(await findStaleBranches('/repo', h.deps), {
+		assert.deepStrictEqual(await findStaleBranches(h.context), {
 			stale: ['feature/a'],
 			protected: ['release/1'],
 			checkedOut: [],
@@ -563,7 +484,7 @@ suite('sweep workflow', () => {
 				},
 			});
 
-			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
+			assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'ok');
 
 			assert.deepStrictEqual(h.quickPickRequests[0].items.map((item) => item.label), ['stale/other']);
 			assert.ok(h.outputLines.some((line) => line.startsWith('Skipped "feature/here": it is the current branch.')));
@@ -583,7 +504,7 @@ suite('sweep workflow', () => {
 				},
 			});
 
-			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
+			assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'ok');
 
 			assert.strictEqual(h.quickPickRequests.length, 0);
 			assert.ok(!h.commands.some((cmd) => cmd.startsWith('worktree remove')));
@@ -598,7 +519,7 @@ suite('sweep workflow', () => {
 				git: { [GONE_REFS_CMD]: { stdout: 'feature/here\t[gone]\t*\t/repo' } },
 			});
 
-			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
+			assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'ok');
 
 			assert.strictEqual(h.quickPickRequests.length, 0);
 			assert.deepStrictEqual(h.infoMessages, [
@@ -619,7 +540,7 @@ suite('sweep workflow', () => {
 				},
 			});
 
-			await runSweepWorkflow(safeMode, h.deps);
+			await runSweepWorkflow(h.context, 'safeDelete');
 
 			assert.deepStrictEqual(h.quickPickRequests[0].items, [
 				{ label: 'feature/wt', picked: false, description: 'checked out in worktree /work/wt' },
@@ -647,13 +568,13 @@ suite('sweep workflow', () => {
 				});
 
 			const declined = squashed(false);
-			assert.strictEqual(await runSweepWorkflow(safeMode, declined.deps), 'ok');
+			assert.strictEqual(await runSweepWorkflow(declined.context, 'safeDelete'), 'ok');
 			const isDestructive = (cmd: string) => /^(worktree remove|branch -[dD] )/.test(cmd);
 			assert.ok(!declined.commands.some(isDestructive));
 			assert.deepStrictEqual(declined.infoMessages, ['Deleted 0 branch(es); 1 skipped, 0 failed.']);
 
 			const confirmed = squashed(true);
-			assert.strictEqual(await runSweepWorkflow(safeMode, confirmed.deps), 'ok');
+			assert.strictEqual(await runSweepWorkflow(confirmed.context, 'safeDelete'), 'ok');
 			const commands = confirmed.commands.filter(isDestructive);
 			assert.deepStrictEqual(commands, ['worktree remove /work/wt', 'branch -D feature/wt']);
 		});
@@ -669,7 +590,7 @@ suite('sweep workflow', () => {
 				},
 			});
 
-			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'failed');
+			assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'failed');
 
 			assert.ok(!h.commands.includes('branch -d feature/wt'));
 			assert.ok(h.outputLines.some((line) => line.startsWith('[worktree-not-removed] feature/wt')));
@@ -685,7 +606,7 @@ suite('sweep workflow', () => {
 				git: { [GONE_REFS_CMD]: { stdout: 'feature/wt\t[gone]\t \t/work/wt' } },
 			});
 
-			await runSweepWorkflow(dryMode, h.deps);
+			await runSweepWorkflow(h.context, 'dryRun');
 
 			assert.ok(h.outputLines.includes('- feature/wt (removes worktree /work/wt)'));
 			assert.ok(!h.commands.some((cmd) => cmd.startsWith('worktree remove')));
@@ -702,7 +623,7 @@ suite('sweep workflow', () => {
 				},
 			});
 
-			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'cancelled');
+			assert.strictEqual(await runSweepWorkflow(h.context, 'safeDelete'), 'cancelled');
 			const index = h.outputLines.indexOf('Not selected (worktree kept):');
 			assert.ok(index >= 0);
 			assert.strictEqual(h.outputLines[index + 1], '- feature/wt (worktree /work/wt)');

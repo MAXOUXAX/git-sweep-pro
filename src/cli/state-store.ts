@@ -44,21 +44,6 @@ export function createFileStateStore(filePath: string): StateStore {
 	};
 }
 
-/** In-memory store for runs outside a repository (the workflow reports that error itself). */
-export function createMemoryStateStore(): StateStore {
-	const state = new Map<string, unknown>();
-	return {
-		get: <T>(key: string) => state.get(key) as T | undefined,
-		update: async (key, value) => {
-			if (value === undefined) {
-				state.delete(key);
-			} else {
-				state.set(key, value);
-			}
-		},
-	};
-}
-
 /** Location of the state file for a repository's (per-worktree) git directory. */
 export function stateFilePath(gitDir: string): string {
 	return path.join(gitDir, 'git-sweep-pro', 'state.json');

@@ -104,10 +104,10 @@ export function createDeletionRecorder(log: DeletionLog, source: DeletionSource,
 }
 
 /** True when deletions can be recorded in `log`, so they can be undone. */
-export function canRecordDeletions(log: DeletionLog | undefined): log is DeletionLog {
+export function canRecordDeletions(log: DeletionLog): boolean {
 	try {
 		// A state file that cannot be read cannot be written either.
-		return log !== undefined && Array.isArray(log.list());
+		return Array.isArray(log.list());
 	} catch {
 		return false;
 	}

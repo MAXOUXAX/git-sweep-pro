@@ -81,7 +81,7 @@ suite('git-command', () => {
 
 	test('passes branch names as separate argv elements—no shell injection', async () => {
 		const lines: string[] = [];
-		let receivedArgs: string[] = [];
+		let receivedArgs: readonly string[] = [];
 		const execFileFn: ExecFileFn = async (_file, args) => {
 			receivedArgs = args;
 			return { stdout: '', stderr: '' };

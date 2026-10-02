@@ -5,14 +5,11 @@
  * titles get their ellipsis or spinner there too.
  */
 
-export const syncMessages = {
-	noWorkspace: 'No workspace folder is open.',
-	notGitRepo: 'The selected workspace folder is not a Git repository.',
-	gitNotInstalled: 'Git is not installed or not available in PATH.',
+const RESUME = '"Sync With Upstream (Resume)"';
 
-	// runSyncFlow
+export const syncMessages = {
+	// runSyncWorkflow
 	couldNotDetermineBranch: 'Could not determine current branch (detached HEAD?).',
-	internalBranchNotFound: 'Internal error — selected branch not found.',
 	noBranchesForSync: 'No other branches available for sync.',
 	pickBranchTitle: 'Sync With Upstream: Choose branch to sync with',
 	pickBranchPlaceholder: 'Local or remote branch',
@@ -25,9 +22,9 @@ export const syncMessages = {
 	rebasing: (ref: string) => `Rebasing onto ${ref}`,
 	forcePush: 'Force push',
 	recoveringStash: 'Recovering stash',
-	rebaseConflicts: 'Rebase conflicts. Resolve them, then run "Sync With Upstream (Resume)" to continue.',
+	rebaseConflicts: `Rebase conflicts. Resolve them, then run ${RESUME} to continue.`,
 	pushFailed: (msg: string) =>
-		`Push failed: ${msg}. Run "Sync With Upstream (Resume)" to retry.`,
+		`Push failed: ${msg}. Run ${RESUME} to retry.`,
 	rebaseOkStashFailed: 'Rebase succeeded but stash pop failed. Use "git stash pop" manually.',
 	cannotSyncOntoItself: (branch: string) =>
 		`"${branch}" is the current branch. Choose a different branch to sync with.`,
@@ -38,17 +35,17 @@ export const syncMessages = {
 	syncedWith: (branch: string, upstream: string) => `${branch} synced with ${upstream}.`,
 	syncedSuccess: (branch: string) => `${branch} synced successfully.`,
 
-	// runResumeFlow
+	// runResumeWorkflow
 	noRebaseNothingToResume: 'No rebase in progress and no saved state. Nothing to resume.',
 	rebaseInOtherWorkspace: 'A rebase is in progress in another workspace. Open the correct folder.',
 	couldNotDetermineRebaseBranch: 'Could not determine branch for in-progress rebase.',
-	remainingConflicts: 'Conflicts remain. Resolve them and run "Sync With Upstream (Resume)" again.',
+	remainingConflicts: `Conflicts remain. Resolve them and run ${RESUME} again.`,
 	rebaseOkPushFailed: (msg: string) => `Rebase OK but push failed: ${msg}`,
 	rebaseContinue: 'Rebase --continue',
-	rebaseAlreadyInProgress: 'A rebase is already in progress. Use "Sync With Upstream (Resume)" to continue.',
+	rebaseAlreadyInProgress: `A rebase is already in progress. Run ${RESUME} to continue.`,
 	rebaseNotStartedByExtension: 'A rebase is in progress, but it was not started by Sync With Upstream. Finish it manually (git rebase --continue / --abort).',
 	rebaseBranchMismatch: (expected: string, actual: string) =>
-		`The rebase in progress is on "${actual}", but the paused sync was for "${expected}". Finish the current rebase manually, then run Resume again.`,
+		`The rebase in progress is on "${actual}", but the paused sync was for "${expected}". Finish the current rebase manually, then run ${RESUME} again.`,
 
 	// output panel
 	outputHeader: '--- Sync With Upstream ---',
@@ -70,9 +67,9 @@ export const syncMessages = {
 		`[info] Skipping local branch update: ${branch} exists (would discard local commits). Create manually if needed.`,
 	infoNoRebaseInProgress:
 		'[info] No rebase in progress (already completed manually?). Proceeding to push and cleanup.',
-	infoStateSavedForResume: '[info] State saved. Run "Sync With Upstream (Resume)" to retry push.',
+	infoStateSavedForResume: `[info] State saved. Run ${RESUME} to retry the push.`,
 	infoStashKeptForResume:
-		'[info] Stash not restored yet; "Sync With Upstream (Resume)" will restore it.',
+		`[info] Stash not restored yet; ${RESUME} will restore it.`,
 	infoStashUnknownRef:
 		'[info] Stash not restored and its ref could not be identified. Check "git stash list" for the "gsp-sync-with-upstream" entry.',
 	infoStashRefOnFailure: (ref: string) =>

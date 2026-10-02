@@ -5,7 +5,7 @@ import {
 	resolveWorkspaceRoot,
 	type RepoFolder,
 	type WorkspaceFolderLike,
-} from '../../core/workspace';
+} from '../../vscode/workspace';
 
 suite('workspace resolver', () => {
 	test('returns active editor workspace when available', () => {

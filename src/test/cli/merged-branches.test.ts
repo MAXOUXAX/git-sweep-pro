@@ -4,7 +4,8 @@ import { EXIT, parseArgs, settingsToCliArgs } from '../../cli/args';
 import { runGitCommand } from '../../core/git-command';
 import { getDefaultBranch } from '../../core/default-branch';
 import { describeMergedBranch, findMergedBranches } from '../../core/merged-branches';
-import { DEFAULT_SWEEP_SETTINGS, GONE_REFS_ARGS, parseLocalBranchRefs } from '../../core/sweep-logic';
+import { GONE_REFS_ARGS, parseLocalBranchRefs } from '../../core/sweep-logic';
+import { DEFAULT_SETTINGS } from '../fake-context';
 import { createFakePrompter } from './fake-prompter';
 import { branchExists, commitFile, createFakeIo, createRepoFixture, git, type RepoFixture } from './git-fixture';
 
@@ -21,11 +22,11 @@ suite('merged branch detection (real git)', function () {
 	});
 
 	const detect = async () => {
-		const runGit = (args: string[]) => runGitCommand(args, fx.repo, { appendLine: () => undefined });
+		const runGit = (args: readonly string[]) => runGitCommand(args, fx.repo, { appendLine: () => undefined });
 		git(['fetch', '-q'], fx.repo);
 		const base = await getDefaultBranch(runGit);
 		assert.ok(base, 'origin/HEAD is set by the fixture');
-		const branches = parseLocalBranchRefs((await runGit([...GONE_REFS_ARGS])).stdout).map((ref) => ref.name);
+		const branches = parseLocalBranchRefs((await runGit(GONE_REFS_ARGS)).stdout).map((ref) => ref.name);
 		const merged = await findMergedBranches(runGit, branches, base);
 		return Object.fromEntries(merged.map((branch) => [branch.name, describeMergedBranch(branch)]));
 	};
@@ -186,7 +187,7 @@ suite('merged branch detection (real git)', function () {
 		assert.strictEqual(parseArgs(['-m']).merged, true);
 		assert.strictEqual(parseArgs([]).merged, false);
 		assert.strictEqual(parseArgs(['--merged']).merged, true);
-		assert.deepStrictEqual(settingsToCliArgs({ ...DEFAULT_SWEEP_SETTINGS, includeMergedBranches: true }), ['--merged']);
-		assert.deepStrictEqual(settingsToCliArgs(DEFAULT_SWEEP_SETTINGS), []);
+		assert.deepStrictEqual(settingsToCliArgs({ ...DEFAULT_SETTINGS, includeMergedBranches: true }), ['--merged']);
+		assert.deepStrictEqual(settingsToCliArgs(DEFAULT_SETTINGS), []);
 	});
 });

@@ -1,102 +1,30 @@
 import * as assert from 'assert';
+import { NOT_A_REPOSITORY } from '../../core/errors';
 import { runPostPullRequestWorkflow } from '../../core/post-pull-request-workflow';
-import type { QuickPickItemLike, SweepWorkflowDeps } from '../../core/sweep-workflow';
-import { DEFAULT_SWEEP_SETTINGS, type SweepSettings } from '../../core/sweep-logic';
+import type { SweepSettings } from '../../core/sweep-logic';
+import { createFakeContext, type GitEntry } from '../fake-context';
 
 const GONE_REFS_CMD = 'for-each-ref --format=%(refname:short)%09%(upstream:track)%09%(HEAD)%09%(worktreepath) refs/heads';
 
-type GitEntry = { stdout?: string; stderr?: string } | Error;
-
 type HarnessOptions = {
 	workspaceRoot?: string;
-	quickPickSelection?: QuickPickItemLike | undefined;
-	/** Per-call quick-pick answers (post-PR pick, then sweep multi-select). Takes precedence over quickPickSelection. */
-	quickPickSelections?: Array<QuickPickItemLike | QuickPickItemLike[] | undefined>;
-	/** Git commands: value or array (for repeated calls, e.g. git branch -vv) */
+	/** Branch the single-select picker returns; `undefined` dismisses it. */
+	quickPickSelection?: { label: string } | undefined;
+	/** Git commands: value or array (for repeated calls, e.g. the gone refs). */
 	git?: Record<string, GitEntry | GitEntry[]>;
 	settings?: Partial<SweepSettings>;
 };
 
-type Harness = {
-	deps: SweepWorkflowDeps;
-	outputLines: string[];
-	infoMessages: string[];
-	errorMessages: string[];
-	commands: string[];
-	progressTitles: string[];
-	quickPickRequests: Array<{ items: QuickPickItemLike[]; title: string }>;
-};
-
-function createHarness(options: HarnessOptions = {}): Harness {
-	const outputLines: string[] = [];
-	const infoMessages: string[] = [];
-	const errorMessages: string[] = [];
-	const commands: string[] = [];
-	const progressTitles: string[] = [];
-	const quickPickRequests: Array<{ items: QuickPickItemLike[]; title: string }> = [];
-	const callCount: Record<string, number> = {};
-
-	const resolveGitEntry = (command: string): GitEntry | undefined => {
-		const entry = options.git?.[command];
-		if (entry === undefined) {
-			return undefined;
-		}
-		if (Array.isArray(entry)) {
-			const idx = callCount[command] ?? 0;
-			callCount[command] = idx + 1;
-			return entry[idx] ?? entry[entry.length - 1];
-		}
-		return entry;
-	};
-
-	const deps: SweepWorkflowDeps = {
-		getWorkspaceRoot: () => options.workspaceRoot,
-		getSettings: () => ({
-			...DEFAULT_SWEEP_SETTINGS,
-			confirmBeforeDelete: false,
-			...options.settings,
-		}),
-		output: {
-			show: () => undefined,
-			appendLine: (line) => outputLines.push(line),
-			header: (line) => outputLines.push(line),
-		},
-		runGitCommand: async (args) => {
-			const key = args.join(' ');
-			commands.push(key);
-			const entry = resolveGitEntry(key);
-			if (entry instanceof Error) {
-				throw entry;
-			}
-			return {
-				stdout: entry?.stdout ?? '',
-				stderr: entry?.stderr ?? '',
-			};
-		},
-		ui: {
-			withProgress: async (progress, task) => {
-				progressTitles.push(progress.title);
-				return task();
-			},
-			showQuickPick: async (items, config) => {
-				quickPickRequests.push({ items, title: config.title });
-				if (options.quickPickSelections) {
-					return options.quickPickSelections[quickPickRequests.length - 1];
-				}
-				return options.quickPickSelection;
-			},
-			pickBranches: async ({ items }) => items.map((item) => item.label),
-			showInformationMessage: (message) => {
-				infoMessages.push(message);
-			},
-			showErrorMessage: (message) => {
-				errorMessages.push(message);
-			},
-			confirm: async () => true,
-		},
-	};
-
-	return { deps, outputLines, infoMessages, errorMessages, commands, progressTitles, quickPickRequests };
+/** The sweep that follows accepts every branch it offers. */
+function createHarness(options: HarnessOptions = {}) {
+	const fake = createFakeContext({
+		root: options.workspaceRoot,
+		settings: options.settings,
+		git: options.git,
+		pick: [options.quickPickSelection?.label],
+		pickBranches: (items) => items.map((item) => item.label),
+	});
+	return { ...fake, quickPickRequests: fake.pickRequests };
 }
 
 const baseBranchList = [
@@ -117,15 +45,6 @@ const baseGit = {
 };
 
 suite('post-pull-request workflow', () => {
-	test('fails fast when no workspace is open', async () => {
-		const h = createHarness();
-		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
-
-		assert.deepStrictEqual(h.errorMessages, ['No workspace folder is open.']);
-		assert.strictEqual(h.commands.length, 0);
-		assert.ok(!h.outputLines.includes('--- Post Pull Request session started ---'));
-	});
-
 	test('handles detached HEAD (current branch is HEAD)', async () => {
 		const h = createHarness({
 			workspaceRoot: '/repo',
@@ -135,7 +54,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		await runPostPullRequestWorkflow(h.context);
 
 		assert.deepStrictEqual(h.errorMessages, [
 			'Could not determine current branch (detached HEAD?).',
@@ -152,7 +71,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		await runPostPullRequestWorkflow(h.context);
 
 		assert.deepStrictEqual(h.errorMessages, [
 			'Could not determine current branch (detached HEAD?).',
@@ -170,7 +89,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		await runPostPullRequestWorkflow(h.context);
 
 		assert.deepStrictEqual(h.infoMessages, ['No other branches available to checkout.']);
 		assert.strictEqual(h.quickPickRequests.length, 0);
@@ -183,7 +102,7 @@ suite('post-pull-request workflow', () => {
 			git: baseGit,
 		});
 
-		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'cancelled');
+		assert.strictEqual(await runPostPullRequestWorkflow(h.context), 'cancelled');
 
 		assert.strictEqual(h.quickPickRequests.length, 1);
 		assert.strictEqual(h.quickPickRequests[0]?.title, 'Post Pull Request: Branch to switch to');
@@ -203,7 +122,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'ok');
+		assert.strictEqual(await runPostPullRequestWorkflow(h.context), 'ok');
 
 		assert.ok(h.commands.includes('checkout main'));
 		assert.ok(h.commands.includes('branch -D feature/merged'));
@@ -232,12 +151,40 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		await runPostPullRequestWorkflow(h.context);
 
 		assert.ok(h.commands.includes('checkout main'), 'Should try local checkout first');
 		assert.ok(h.commands.includes('checkout -b main --track origin/main'), 'Should fall back to creating tracking branch');
 		assert.ok(h.outputLines.includes('Checked out: main'));
 		assert.ok(h.outputLines.includes('Deleted branch: feature/merged'));
+	});
+
+	test('switches to the requested branch without asking', async () => {
+		const h = createHarness({
+			git: {
+				...baseGit,
+				[GONE_REFS_CMD]: [{ stdout: 'feature/merged\t[gone]' }, { stdout: '' }],
+				'checkout develop': { stdout: '' },
+				'branch -D feature/merged': { stdout: '' },
+				'pull': { stdout: '' },
+			},
+		});
+
+		assert.strictEqual(await runPostPullRequestWorkflow(h.context, 'develop'), 'ok');
+
+		assert.strictEqual(h.quickPickRequests.length, 0);
+		assert.ok(h.commands.includes('checkout develop'));
+		assert.ok(h.infoMessages.includes('Switched to develop and pulled.'));
+	});
+
+	test('fails before touching anything when the requested branch does not exist', async () => {
+		const h = createHarness({ git: baseGit });
+
+		assert.strictEqual(await runPostPullRequestWorkflow(h.context, 'nope'), 'failed');
+
+		assert.strictEqual(h.errorMessages.length, 1);
+		assert.match(h.errorMessages[0], /^Branch "nope" is not available\. Choose one of: main, develop, origin\/main \(remote\), origin\/develop \(remote\)$/);
+		assert.ok(!h.commands.some((command) => command.startsWith('checkout') || command.startsWith('branch -D')));
 	});
 
 	test('pre-selects default branch in quick-pick when current is gone', async () => {
@@ -253,7 +200,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		await runPostPullRequestWorkflow(h.context);
 
 		const quickPick = h.quickPickRequests[0];
 		assert.ok(quickPick);
@@ -275,7 +222,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
+		assert.strictEqual(await runPostPullRequestWorkflow(h.context), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, [
 			'Checkout failed: fatal: pathspec main did not match any file(s) known to git',
@@ -299,10 +246,10 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
+		assert.strictEqual(await runPostPullRequestWorkflow(h.context), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, [
-			"Could not delete branch \"feature/merged\". You can delete it manually with: git branch -D 'feature/merged'",
+			"Could not delete branch \"feature/merged\". You can delete it manually with: git branch -D feature/merged",
 		]);
 		assert.ok(h.commands.includes('pull'));
 		assert.ok(h.outputLines.includes('Checked out: main'));
@@ -334,7 +281,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		await runPostPullRequestWorkflow(h.context);
 
 		assert.deepStrictEqual(h.errorMessages, []);
 		assert.deepStrictEqual(h.infoMessages, [
@@ -358,7 +305,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runPostPullRequestWorkflow(h.deps), 'failed');
+		assert.strictEqual(await runPostPullRequestWorkflow(h.context), 'failed');
 
 		assert.deepStrictEqual(h.errorMessages, [
 			'error: Your local changes would be overwritten by merge.',
@@ -369,7 +316,7 @@ suite('post-pull-request workflow', () => {
 	test('invokes sweep workflow after checkout and delete', async () => {
 		const h = createHarness({
 			workspaceRoot: '/repo',
-			quickPickSelections: [{ label: 'main' }, [{ label: 'stale' }]],
+			quickPickSelection: { label: 'main' },
 			git: {
 				...baseGit,
 				[GONE_REFS_CMD]: [{ stdout: 'feature/merged\t[gone]' }, { stdout: 'stale\t[gone]' }],
@@ -380,7 +327,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		await runPostPullRequestWorkflow(h.context);
 
 		const fetchCount = h.commands.filter((c) => c === 'fetch -p').length;
 		assert.ok(fetchCount >= 2, 'Should fetch at least twice (post-PR + sweep)');
@@ -397,10 +344,10 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		await runPostPullRequestWorkflow(h.context);
 
 		assert.deepStrictEqual(h.errorMessages, [
-			'The selected workspace folder is not a Git repository.',
+			NOT_A_REPOSITORY,
 		]);
 		assert.ok(h.outputLines.some((l) => l.includes('--- Post Pull Request session ended ---')));
 	});
@@ -413,7 +360,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		await runPostPullRequestWorkflow(h.context);
 
 		assert.deepStrictEqual(h.errorMessages, [
 			'Git is not installed or not available in PATH.',
@@ -437,7 +384,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		await runPostPullRequestWorkflow(h.context);
 
 		const quickPick = h.quickPickRequests[0];
 		const mainItem = quickPick?.items.find((i) => i.label === 'main');
@@ -465,7 +412,7 @@ suite('post-pull-request workflow', () => {
 			},
 		});
 
-		await runPostPullRequestWorkflow(h.deps);
+		await runPostPullRequestWorkflow(h.context);
 
 		assert.ok(h.commands.includes('checkout feature/auth/oauth'));
 		assert.ok(h.commands.includes('branch -D team/subteam/merged-pr'));
@@ -480,13 +427,12 @@ suite('post-pull-request workflow', () => {
 		test('pre-selects the remote default when the local one is in another worktree', async () => {
 			const h = createHarness({ workspaceRoot: '/repo/wt', quickPickSelection: undefined, git: worktreeGit });
 
-			await runPostPullRequestWorkflow(h.deps);
+			await runPostPullRequestWorkflow(h.context);
 
 			const items = h.quickPickRequests[0].items;
 			assert.deepStrictEqual(items.find((i) => i.label === 'main'), {
 				label: 'main',
 				description: 'default, checked out in another worktree',
-				picked: false,
 			});
 			assert.strictEqual(items.find((i) => i.label === 'origin/main (remote)')?.picked, true);
 		});
@@ -503,7 +449,7 @@ suite('post-pull-request workflow', () => {
 				},
 			});
 
-			await runPostPullRequestWorkflow(h.deps);
+			await runPostPullRequestWorkflow(h.context);
 
 			const picked = h.quickPickRequests[0].items.filter((item) => item.picked).map((item) => item.label);
 			assert.deepStrictEqual(picked, ['origin/main (remote)']);
@@ -516,7 +462,7 @@ suite('post-pull-request workflow', () => {
 				git: worktreeGit,
 			});
 
-			await runPostPullRequestWorkflow(h.deps);
+			await runPostPullRequestWorkflow(h.context);
 
 			assert.ok(h.commands.includes('checkout --detach origin/main'));
 			assert.ok(h.progressTitles.includes('Checking out origin/main as a detached HEAD'));

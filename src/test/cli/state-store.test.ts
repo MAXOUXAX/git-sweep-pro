@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createFileStateStore, createMemoryStateStore, stateFilePath } from '../../cli/state-store';
+import { createFileStateStore, stateFilePath } from '../../cli/state-store';
 
 suite('cli state store', () => {
 	let dir: string;
@@ -42,11 +42,4 @@ suite('cli state store', () => {
 		assert.throws(() => createFileStateStore(file).get('k'), SyntaxError);
 	});
 
-	test('memory store behaves like the file store', async () => {
-		const store = createMemoryStateStore();
-		await store.update('k', 1);
-		assert.strictEqual(store.get('k'), 1);
-		await store.update('k', undefined);
-		assert.strictEqual(store.get('k'), undefined);
-	});
 });

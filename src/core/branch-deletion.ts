@@ -1,16 +1,17 @@
 import type { Deletion } from './deletion-log';
 import { toErrorMessage } from './errors';
+import type { RunGit } from './git-command';
 import { isNotFullyMergedError } from './sweep-logic';
 
 export type DeleteResult = 'deleted' | 'not-fully-merged' | 'failed';
 
 type BranchDeleterDeps = {
-	readonly runGit: (args: string[]) => Promise<{ stdout: string }>;
+	readonly git: RunGit;
 	readonly log: (line: string) => void;
 	/** Worktree path of each branch checked out in a linked worktree. */
 	readonly worktrees: ReadonlyMap<string, string>;
-	/** Called after each deletion with the commit the branch pointed to (e.g. to record it for undo). */
-	readonly onDeleted?: (deletion: Deletion) => Promise<unknown>;
+	/** Called after each deletion with the commit the branch pointed to, to record it for undo. */
+	readonly onDeleted: (deletion: Deletion) => Promise<unknown>;
 };
 
 /**
@@ -19,7 +20,7 @@ type BranchDeleterDeps = {
  * branch is merged before it removes the worktree, so a refused delete never
  * leaves a branch without its worktree.
  */
-export function createBranchDeleter({ runGit, log, worktrees, onDeleted }: BranchDeleterDeps) {
+export function createBranchDeleter({ git, log, worktrees, onDeleted }: BranchDeleterDeps) {
 	const removed = new Set<string>();
 
 	/** `git branch -d` refuses a branch whose upstream is gone unless HEAD contains it. */
@@ -27,7 +28,7 @@ export function createBranchDeleter({ runGit, log, worktrees, onDeleted }: Branc
 		try {
 			// Lists the branch only when HEAD contains it, and succeeds either way:
 			// unlike merge-base --is-ancestor, no expected failure is logged as an error.
-			const { stdout } = await runGit(['branch', '--format=%(refname:short)', '--merged', 'HEAD', '--list', branch]);
+			const { stdout } = await git(['branch', '--format=%(refname:short)', '--merged', 'HEAD', '--list', branch]);
 			return stdout.trim() === branch;
 		} catch {
 			return false;
@@ -44,7 +45,7 @@ export function createBranchDeleter({ runGit, log, worktrees, onDeleted }: Branc
 		const ref = `refs/heads/${branch}`;
 		try {
 			// A pattern also matches the refs below it ("a" matches "a/b"): keep the exact ref.
-			const { stdout } = await runGit(['for-each-ref', '--format=%(refname)%09%(objectname)%09%(upstream)', ref]);
+			const { stdout } = await git(['for-each-ref', '--format=%(refname)%09%(objectname)%09%(upstream)', ref]);
 			const [, sha, upstream] = stdout.split('\n').map((line) => line.split('\t')).find(([name]) => name === ref) ?? [];
 			return sha ? { sha, ...(upstream ? { upstream } : {}) } : undefined;
 		} catch {
@@ -60,7 +61,7 @@ export function createBranchDeleter({ runGit, log, worktrees, onDeleted }: Branc
 			}
 			try {
 				// Without --force, Git refuses when the worktree has changes or is locked.
-				await runGit(['worktree', 'remove', worktree]);
+				await git(['worktree', 'remove', worktree]);
 				removed.add(branch);
 				log(`Removed worktree ${worktree}`);
 			} catch (error) {
@@ -68,9 +69,9 @@ export function createBranchDeleter({ runGit, log, worktrees, onDeleted }: Branc
 				return 'failed';
 			}
 		}
-		const tip = onDeleted ? await readBranch(branch) : undefined;
+		const tip = await readBranch(branch);
 		try {
-			await runGit(['branch', flag, branch]);
+			await git(['branch', flag, branch]);
 		} catch (error) {
 			const message = toErrorMessage(error);
 			if (flag === '-d' && isNotFullyMergedError(message)) {
@@ -79,9 +80,9 @@ export function createBranchDeleter({ runGit, log, worktrees, onDeleted }: Branc
 			log(`[delete-failed] ${branch}: ${message}`);
 			return 'failed';
 		}
-		if (onDeleted && tip) {
+		if (tip) {
 			await onDeleted({ branch, ...tip, ...(removed.has(branch) ? { worktree } : {}) });
-		} else if (onDeleted) {
+		} else {
 			log(`[warning] Could not read the last commit of ${branch}, so it cannot be restored.`);
 		}
 		return 'deleted';

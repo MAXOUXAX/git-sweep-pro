@@ -3,11 +3,9 @@ import {
 	branchMatchesPattern,
 	isNotFullyMergedError,
 	isProtectedBranch,
-	orderModeActions,
 	parseGoneBranchRefs,
-	resolveModeFromSetting,
-	resolveSweepModeAction,
 } from '../core/sweep-logic';
+import { orderModeActions, resolveSweepModeAction } from '../vscode/sweep-mode';
 
 suite('Extension Test Suite', () => {
 	test('parseGoneBranchRefs returns empty list for empty output', () => {
@@ -79,24 +77,15 @@ suite('Extension Test Suite', () => {
 	});
 
 	test('resolveSweepModeAction maps Dry Run action', () => {
-		assert.deepStrictEqual(resolveSweepModeAction('Dry Run'), {
-			dryRun: true,
-			forceDelete: false,
-		});
+		assert.strictEqual(resolveSweepModeAction('Dry Run'), 'dryRun');
 	});
 
 	test('resolveSweepModeAction maps safe delete action', () => {
-		assert.deepStrictEqual(resolveSweepModeAction('Delete (safe -d)'), {
-			dryRun: false,
-			forceDelete: false,
-		});
+		assert.strictEqual(resolveSweepModeAction('Delete (safe -d)'), 'safeDelete');
 	});
 
 	test('resolveSweepModeAction maps force delete action', () => {
-		assert.deepStrictEqual(resolveSweepModeAction('Delete (force -D)'), {
-			dryRun: false,
-			forceDelete: true,
-		});
+		assert.strictEqual(resolveSweepModeAction('Delete (force -D)'), 'forceDelete');
 	});
 
 	test('resolveSweepModeAction returns undefined for cancel/unknown values', () => {
@@ -107,12 +96,6 @@ suite('Extension Test Suite', () => {
 	test('resolveSweepModeAction is strict about exact labels', () => {
 		assert.strictEqual(resolveSweepModeAction('dry run'), undefined);
 		assert.strictEqual(resolveSweepModeAction(' Delete (safe -d) '), undefined);
-	});
-
-	test('resolveModeFromSetting maps every setting value', () => {
-		assert.deepStrictEqual(resolveModeFromSetting('dryRun'), { dryRun: true, forceDelete: false });
-		assert.deepStrictEqual(resolveModeFromSetting('safeDelete'), { dryRun: false, forceDelete: false });
-		assert.deepStrictEqual(resolveModeFromSetting('forceDelete'), { dryRun: false, forceDelete: true });
 	});
 
 	test('orderModeActions puts the configured default first', () => {
