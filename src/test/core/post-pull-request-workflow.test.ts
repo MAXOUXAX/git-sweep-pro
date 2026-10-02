@@ -493,6 +493,24 @@ suite('post-pull-request workflow', () => {
 			assert.strictEqual(items.find((i) => i.label === 'origin/main (remote)')?.picked, true);
 		});
 
+		test('pre-selects the default remote, not the first remote with the same branch', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo/wt',
+				quickPickSelection: undefined,
+				git: {
+					...worktreeGit,
+					'branch --no-column -a': {
+						stdout: ['* feature/merged', '+ main', '  remotes/fork/main', '  remotes/origin/HEAD -> origin/main', '  remotes/origin/main'].join('\n'),
+					},
+				},
+			});
+
+			await runPostPullRequestWorkflow(h.deps);
+
+			const picked = h.quickPickRequests[0].items.filter((item) => item.picked).map((item) => item.label);
+			assert.deepStrictEqual(picked, ['origin/main (remote)']);
+		});
+
 		test('switches to a detached HEAD, deletes the merged branch and skips the pull', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo/wt',
