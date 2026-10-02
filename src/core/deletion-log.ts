@@ -60,20 +60,20 @@ function isDeletedBranch(value: unknown): value is DeletedBranch {
 
 /** The deletion log, kept in `store` under {@link DELETION_LOG_KEY}. Malformed entries are dropped on the next write. */
 export function createDeletionLog(store: StateStore, now: () => Date = () => new Date()): DeletionLog {
-	const list = (): DeletedBranch[] => {
-		const stored = store.get<unknown>(DELETION_LOG_KEY);
-		return Array.isArray(stored) ? stored.filter(isDeletedBranch) : [];
-	};
+	const valid = (stored: unknown): DeletedBranch[] => (Array.isArray(stored) ? stored.filter(isDeletedBranch) : []);
 	return {
-		list,
+		list: () => valid(store.get<unknown>(DELETION_LOG_KEY)),
+		// Both edit the log as it is when written, so a deletion recorded meanwhile by another gsp run is kept.
 		record: async (entry) => {
 			const recorded: DeletedBranch = { ...entry, deletedAt: now().toISOString() };
-			await store.update(DELETION_LOG_KEY, [recorded, ...list()].slice(0, MAX_DELETION_LOG_ENTRIES));
+			await store.update<unknown>(DELETION_LOG_KEY, (stored) => [recorded, ...valid(stored)].slice(0, MAX_DELETION_LOG_ENTRIES));
 		},
 		forget: async (branch) => {
-			const remaining = list().filter((entry) => entry.branch !== branch);
-			// An empty log removes its key, and the state file once nothing else is in it.
-			await store.update(DELETION_LOG_KEY, remaining.length > 0 ? remaining : undefined);
+			await store.update<unknown>(DELETION_LOG_KEY, (stored) => {
+				const remaining = valid(stored).filter((entry) => entry.branch !== branch);
+				// An empty log removes its key, and the state file once nothing else is in it.
+				return remaining.length > 0 ? remaining : undefined;
+			});
 		},
 	};
 }
