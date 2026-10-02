@@ -38,8 +38,14 @@ export function createFileStateStore(filePath: string): StateStore {
 			// Write a temporary file, then rename it over the state file: an
 			// interrupted run never leaves a truncated file (rename is atomic).
 			const temporary = `${filePath}.${process.pid}.tmp`;
-			fs.writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`);
-			fs.renameSync(temporary, filePath);
+			try {
+				fs.writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`);
+				fs.renameSync(temporary, filePath);
+			} catch (error) {
+				// A failed write (ENOSPC) or rename (EPERM on Windows) must not leave it behind.
+				fs.rmSync(temporary, { force: true });
+				throw error;
+			}
 		},
 	};
 }

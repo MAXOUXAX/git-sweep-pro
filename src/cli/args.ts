@@ -42,7 +42,7 @@ const OPTIONS = {
 	yes: { type: 'boolean', short: 'y', default: false },
 	merged: { type: 'boolean', short: 'm', default: false },
 	protect: { type: 'string', short: 'p', multiple: true, default: [] },
-	// Declared explicitly: `allowNegative` needs Node 22.4, and VS Code 1.85 runs Node 18.
+	// Declared explicitly: `allowNegative` needs Node 22.4, and VS Code 1.92 runs Node 20.14.
 	'no-fetch': { type: 'boolean', default: false },
 	'no-confirm': { type: 'boolean', default: false },
 	json: { type: 'boolean', default: false },
