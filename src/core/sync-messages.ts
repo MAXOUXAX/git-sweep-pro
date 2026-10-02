@@ -5,7 +5,8 @@
  * titles get their ellipsis or spinner there too.
  */
 
-const RESUME = '"Sync With Upstream (Resume)"';
+/** How to resume a paused sync, in the editor and in a terminal. */
+const RESUME = '"Resume Sync With Upstream" (git sweep-pro resume)';
 
 export const syncMessages = {
 	// runSyncWorkflow
