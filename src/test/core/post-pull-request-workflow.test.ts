@@ -112,8 +112,7 @@ const baseGit = {
 	'fetch -p': { stdout: '' },
 	'rev-parse --abbrev-ref HEAD': { stdout: 'feature/merged' },
 	'branch --no-column -a': { stdout: baseBranchList },
-	'for-each-ref --format=%(refname) refs/remotes/*/HEAD': { stdout: 'refs/remotes/origin/HEAD' },
-	'rev-parse --abbrev-ref refs/remotes/origin/HEAD': { stdout: 'origin/main' },
+	'for-each-ref --format=%(refname)%09%(symref) refs/remotes/*/HEAD': { stdout: 'refs/remotes/origin/HEAD\trefs/remotes/origin/main' },
 	[GONE_REFS_CMD]: [{ stdout: 'feature/merged\t[gone]' }, { stdout: '' }],
 };
 
@@ -427,8 +426,7 @@ suite('post-pull-request workflow', () => {
 			quickPickSelection: { label: 'main' },
 			git: {
 				...baseGit,
-				'for-each-ref --format=%(refname) refs/remotes/*/HEAD': { stdout: 'refs/remotes/upstream/HEAD' },
-				'rev-parse --abbrev-ref refs/remotes/upstream/HEAD': { stdout: 'upstream/main' },
+				'for-each-ref --format=%(refname)%09%(symref) refs/remotes/*/HEAD': { stdout: 'refs/remotes/upstream/HEAD\trefs/remotes/upstream/main' },
 				'branch --no-column -a': {
 					stdout: '* feature/merged\n  main\n  remotes/upstream/HEAD -> upstream/main\n  remotes/upstream/main\n  remotes/upstream/develop',
 				},
@@ -444,7 +442,7 @@ suite('post-pull-request workflow', () => {
 		const quickPick = h.quickPickRequests[0];
 		const mainItem = quickPick?.items.find((i) => i.label === 'main');
 		assert.ok(mainItem?.picked, 'Default branch (main) from upstream should be pre-selected');
-		assert.ok(h.commands.includes('rev-parse --abbrev-ref refs/remotes/upstream/HEAD'));
+		assert.ok(h.commands.includes('for-each-ref --format=%(refname)%09%(symref) refs/remotes/*/HEAD'));
 	});
 
 	test('handles branch name with slashes in checkout and delete', async () => {

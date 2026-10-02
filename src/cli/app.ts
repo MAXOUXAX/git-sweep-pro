@@ -5,7 +5,8 @@ import { describeGitFailure, NOT_A_REPOSITORY, toErrorMessage } from '../core/er
 import { runGitCommand, type CommandResult } from '../core/git-command';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import { inspectDeletions, runRestoreWorkflow } from '../core/restore-workflow';
-import { findStaleBranches } from '../core/stale-branches';
+import { describeMergedBranch } from '../core/merged-branches';
+import { findStaleBranches, noBranchesFound } from '../core/stale-branches';
 import type { SweepSettings } from '../core/sweep-logic';
 import { runSweepWorkflow, type SweepWorkflowDeps, type WorkflowOutcome } from '../core/sweep-workflow';
 import type { StateStore } from '../core/state-store';
@@ -98,6 +99,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 		protectedBranches: [...options.protect, ...configProtected.split('\n').filter((line) => line.trim())],
 		autoFetchPrune: options.fetch,
 		confirmBeforeDelete: options.confirm,
+		includeMergedBranches: options.merged,
 	};
 
 	const deps: SweepWorkflowDeps = {
@@ -152,18 +154,22 @@ async function runCommand(
 /** `list`: prints stale branches without touching them (`--json` for scripts). */
 async function runList(root: string, deps: SweepWorkflowDeps, options: CliOptions, io: CliIo): Promise<WorkflowOutcome> {
 	try {
-		const { stale, protected: protectedStale, checkedOut, worktrees } = await findStaleBranches(root, deps);
+		const found = await findStaleBranches(root, deps);
+		const { stale, protected: protectedStale, checkedOut, merged, worktrees } = found;
+		const withWorktree = (branch: string, note?: string) => {
+			const worktree = worktrees.get(branch);
+			const notes = [note, worktree && `worktree ${worktree}`].filter(Boolean);
+			return notes.length > 0 ? `${branch} (${notes.join(', ')})\n` : `${branch}\n`;
+		};
 
 		if (options.json) {
-			const json = { stale, protected: protectedStale, checkedOut, worktrees: Object.fromEntries(worktrees) };
+			const json = { stale, protected: protectedStale, checkedOut, merged, worktrees: Object.fromEntries(worktrees) };
 			io.stdout(`${JSON.stringify(json, null, 2)}\n`);
-		} else if (stale.length === 0 && protectedStale.length === 0 && checkedOut.length === 0) {
-			io.stderr('No stale branches found.\n');
+		} else if (stale.length === 0 && protectedStale.length === 0 && checkedOut.length === 0 && merged.length === 0) {
+			io.stderr(`${noBranchesFound(deps.getSettings(), found)}\n`);
 		} else {
-			stale.forEach((branch) => {
-				const worktree = worktrees.get(branch);
-				io.stdout(worktree ? `${branch} (worktree ${worktree})\n` : `${branch}\n`);
-			});
+			stale.forEach((branch) => io.stdout(withWorktree(branch)));
+			merged.forEach((branch) => io.stdout(withWorktree(branch.name, describeMergedBranch(branch))));
 			checkedOut.forEach((branch) =>
 				io.stdout(branch.where === 'current' ? `${branch.name} (current branch)\n` : `${branch.name} (main worktree ${branch.worktreePath})\n`)
 			);

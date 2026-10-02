@@ -10,6 +10,8 @@ export type SweepSettings = {
 	readonly protectedBranches: readonly string[];
 	readonly autoFetchPrune: boolean;
 	readonly confirmBeforeDelete: boolean;
+	/** Also offer branches already merged into the default branch whose upstream is not gone. */
+	readonly includeMergedBranches: boolean;
 };
 
 export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
@@ -17,6 +19,7 @@ export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
 	protectedBranches: [],
 	autoFetchPrune: true,
 	confirmBeforeDelete: true,
+	includeMergedBranches: false,
 };
 
 /** Maps a configured default-mode setting to a concrete {@link SweepMode}. */

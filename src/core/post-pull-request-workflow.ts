@@ -3,42 +3,11 @@ import { branchPickLabel, findBranchByPickLabel, findOtherWorktreeBranch, localB
 import { createDeletionRecorder } from './deletion-log';
 import { describeGitFailure, isNoUpstreamError, toErrorMessage } from './errors';
 import { escapeForShell } from './git-command';
+import { getDefaultBranch } from './default-branch';
 import { GONE_REFS_ARGS, isProtectedBranch, parseGoneBranchRefs } from './sweep-logic';
 import { runSweepWorkflow, singlePick, type SweepWorkflowDeps, type WorkflowOutcome } from './sweep-workflow';
 
 export type PostPullRequestDeps = SweepWorkflowDeps;
-
-type DefaultBranch = {
-	/** Local name, e.g. "main". */
-	readonly name: string;
-	/** Remote-tracking ref the remote HEAD points to, e.g. "origin/main". */
-	readonly remoteRef: string;
-};
-
-/**
- * Returns the default branch from the first remote's HEAD ref, or undefined.
- * Discovers the remote dynamically via refs/remotes/<remote>/HEAD; does not assume "origin".
- */
-async function getDefaultBranch(runGit: (args: string[]) => Promise<{ stdout: string; stderr: string }>): Promise<DefaultBranch | undefined> {
-	try {
-		const list = await runGit(['for-each-ref', '--format=%(refname)', 'refs/remotes/*/HEAD']);
-		const firstRef = list.stdout.trim().split(/\r?\n/)[0];
-		if (!firstRef) {
-			return undefined;
-		}
-		const match = firstRef.match(/^refs\/remotes\/([^/]+)\/HEAD$/);
-		if (!match) {
-			return undefined;
-		}
-		const remoteName = match[1];
-		const r = await runGit(['rev-parse', '--abbrev-ref', firstRef]);
-		const out = r.stdout.trim();
-		const prefix = `${remoteName}/`;
-		return out.startsWith(prefix) ? { name: out.slice(prefix.length), remoteRef: out } : undefined;
-	} catch {
-		return undefined;
-	}
-}
 
 export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Promise<WorkflowOutcome> {
 	const workspaceRoot = deps.getWorkspaceRoot();
