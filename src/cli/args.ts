@@ -14,6 +14,8 @@ export type CliOptions = {
 	/** `--dry-run`, `--force`, or a safe delete by default. */
 	readonly mode: SweepMode;
 	readonly yes: boolean;
+	/** Never load terminal widgets, even when an agent uses a pseudo-terminal. */
+	readonly nonInteractive: boolean;
 	readonly fetch: boolean;
 	readonly confirm: boolean;
 	/** Also offer branches already merged into the default branch whose upstream is not gone. */
@@ -34,12 +36,15 @@ export const EXIT = {
 	usage: 2,
 	/** A sync stopped on rebase conflicts; run `resume` once they are resolved. */
 	paused: 3,
+	/** Explicit non-interactive runs distinguish cancellation from success. */
+	cancelled: 4,
 } as const;
 
 const OPTIONS = {
 	'dry-run': { type: 'boolean', short: 'n', default: false },
 	force: { type: 'boolean', short: 'f', default: false },
 	yes: { type: 'boolean', short: 'y', default: false },
+	'non-interactive': { type: 'boolean', default: false },
 	merged: { type: 'boolean', short: 'm', default: false },
 	protect: { type: 'string', short: 'p', multiple: true, default: [] },
 	// Declared explicitly: `allowNegative` needs Node 22.4, and VS Code 1.92 runs Node 20.14.
@@ -102,6 +107,12 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 	if (command === 'sync' && values.continue) {
 		command = 'resume';
 	}
+	if (values.rpc && values['non-interactive']) {
+		throw new UsageError('--non-interactive cannot be combined with --rpc.');
+	}
+	if (values.json && command !== 'help' && command !== 'list' && !(command === 'restore' && args.length === 0)) {
+		throw new UsageError('--json requires list or restore without branch arguments.');
+	}
 	if (command === 'restore' && (values['dry-run'] || values.force)) {
 		// Restore never overwrites a branch, so there is nothing to force or to preview.
 		throw new UsageError(`${values.force ? '--force' : '--dry-run'} cannot be used with restore.`);
@@ -121,6 +132,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 		cwd: values.cwd,
 		mode: values.force ? 'forceDelete' : values['dry-run'] ? 'dryRun' : 'safeDelete',
 		yes: values.yes,
+		nonInteractive: values['non-interactive'],
 		fetch: !values['no-fetch'],
 		confirm: !values['no-confirm'],
 		merged: values.merged,
@@ -176,12 +188,17 @@ Options:
   -m, --merged       Also offer local branches already merged into the default
                      branch, even squash-merged ones; never pre-selected
   -y, --yes          Accept pre-selected branches and confirm every prompt
+                     (including the force-delete fallback for unmerged branches)
+      --non-interactive
+                     Never prompt, even in a terminal; use safe defaults and
+                     refuse confirmations unless --yes is given
   -p, --protect <glob>
                      Never delete branches matching <glob> (repeatable; also read
                      from "git config --get-all git-sweep-pro.protected")
       --no-fetch     Skip "git fetch -p" and use local ref state
       --no-confirm   Do not ask before deleting
-      --json         Machine-readable output (list, restore)
+      --json         JSON output without terminal widgets (list, or restore
+                     without branch arguments); diagnostics go to stderr
   -C <path>          Run as if started in <path>
   -v, --verbose      Echo every git command and its output
   -h, --help         Show this help
@@ -189,6 +206,8 @@ Options:
 Without a terminal (scripts, coding agents), prompts take their defaults and
 confirmations are refused unless --yes is given:
   gsp list --json           See what a sweep would offer, without deleting
+  gsp --non-interactive --yes
+                            Run without terminal widgets, including in a PTY
   gsp --yes                 Delete the pre-selected stale branches (never the
                             merged ones or those checked out in a worktree)
   gsp post-pr main --yes    After a merged PR: switch to main, clean up, pull
@@ -196,4 +215,5 @@ confirmations are refused unless --yes is given:
   gsp restore <branch>      Undo a deletion
 
 Exit codes: 0 done (or nothing to do), 1 failed, 2 invalid arguments,
-3 sync paused on conflicts (resolve them, then run "gsp resume").`;
+3 sync paused on conflicts (resolve them, then run "gsp resume"),
+4 cancelled when --non-interactive is given (otherwise cancellation exits 0).`;

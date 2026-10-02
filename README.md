@@ -40,19 +40,45 @@ Codex, Claude Code, Cursor, GitHub Copilot and OpenCode can clean up the workspa
 gsp agents
 ```
 
-It asks which instruction files to update, `AGENTS.md` (Codex, Cursor, GitHub Copilot, OpenCode) and/or `CLAUDE.md` (Claude Code), and adds this note:
+It asks which instruction files to update, `AGENTS.md` (Codex, Cursor, GitHub Copilot, OpenCode) and/or `CLAUDE.md` (Claude Code). The instructions cover discovery, authorized deletion, recovery and exit codes. Running it again updates its own block and leaves the rest of the file alone.
 
-```md
-<!-- BEGIN:git-sweep-pro -->
-## Git cleanup
+To set up both files without a picker:
 
-Use the `gsp` CLI to clean up the Git workspace. Run `gsp help` to see its commands.
-<!-- END:git-sweep-pro -->
+```sh
+gsp agents AGENTS.md CLAUDE.md --non-interactive
 ```
 
-Running it again updates the note in place and leaves the rest of the file alone. `gsp agents AGENTS.md CLAUDE.md` skips the question.
+Agents can use `--non-interactive` to avoid prompts and terminal widgets even when their shell allocates a pseudo-terminal. It keeps the safe picker defaults and refuses confirmations unless `--yes` is passed. Without a terminal, these defaults also apply automatically.
 
-Without a terminal, as when an agent runs it, every prompt takes its safe default and confirmations are refused unless `--yes` is passed. `gsp --yes` deletes the pre-selected stale branches only. Exit codes: `0` done, `1` failed, `2` invalid arguments, `3` sync paused on conflicts.
+Inspect candidates before authorizing deletion:
+
+```sh
+gsp list --json                               # fetch/prune, then list candidates
+gsp list --json --no-fetch                    # inspect local refs without fetching
+gsp sweep --non-interactive --dry-run         # preview the default selection
+gsp sweep --non-interactive --yes             # delete when authorized
+gsp restore --json                           # list recoverable deletions
+gsp restore feature/x --non-interactive       # recreate a deleted branch
+```
+
+`--yes` selects only stale branches outside worktrees. It accepts every confirmation, including the force-delete fallback for branches Git considers unmerged, such as after squash or rebase merges. Protected branches, merged candidates whose upstream still exists, and branches in other worktrees are never pre-selected. `--non-interactive` alone does not grant permission to delete.
+
+`--json` supports `list` and `restore` without branch arguments. These commands write a single JSON value to stdout and diagnostics to stderr, without terminal widgets. Unsupported uses of `--json` exit with code 2 before running a workflow. Parse stdout only when the command exits with code 0.
+
+| Command | JSON value |
+| --- | --- |
+| `gsp list --json` | Object with `stale` and `protected` branch-name arrays, `checkedOut` and `merged` detail arrays, and a `worktrees` map of branch names to paths |
+| `gsp restore --json` | Array of recoverable deletion records, including `branch`, `sha`, `deletedAt` and `source` |
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Completed or nothing to do. Cancellation also exits 0 unless `--non-interactive` is given. |
+| 1 | Failed |
+| 2 | Invalid arguments |
+| 3 | Sync paused on conflicts. Resolve conflicts, stage the resolved files, then run `gsp resume --non-interactive`. |
+| 4 | Cancelled with `--non-interactive`, including a refused confirmation or no branches selected |
+
+`sync` rebases and force-pushes with a lease. `post-pr` switches branches, deletes the old branch, sweeps and pulls. Agents should run these commands only when authorized.
 
 ## Safety
 

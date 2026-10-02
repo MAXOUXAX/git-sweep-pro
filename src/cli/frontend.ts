@@ -33,7 +33,7 @@ export async function createFrontend(options: CliOptions, io: CliIo): Promise<Fr
 		return createRpcFrontend(io);
 	}
 	const terminal: TerminalOptions = { yes: options.yes, verbose: options.verbose };
-	if (io.interactive && io.loadPrompter) {
+	if (io.interactive && io.loadPrompter && !options.nonInteractive && !options.json) {
 		return createInteractiveFrontend(io, terminal, await io.loadPrompter());
 	}
 	return createPlainFrontend(io, terminal);
@@ -108,7 +108,7 @@ export function createPlainFrontend(io: CliIo, options: TerminalOptions): Fronte
 					return true;
 				}
 				io.stderr(`${message}\n`);
-				io.stderr(`${pc.yellow('Not confirmed:')} "${confirmLabel}" needs --yes when not running in a terminal.\n`);
+				io.stderr(`${pc.yellow('Not confirmed:')} "${confirmLabel}" needs --yes in non-interactive mode.\n`);
 				return false;
 			},
 		},

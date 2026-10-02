@@ -95,6 +95,9 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	frontend.intro?.(`gsp ${options.command}`);
 	const outcome = await runCommand(options, requestedDir, frontend, io);
 	frontend.outro?.(outcome);
+	if (options.nonInteractive && outcome === 'cancelled') {
+		return EXIT.cancelled;
+	}
 	return EXIT_CODES[outcome];
 }
 

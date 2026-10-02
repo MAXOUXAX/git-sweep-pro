@@ -94,6 +94,33 @@ suite('cli app (real git)', function () {
 		assert.ok(io.out.join('').includes('Dry run: 1 branch(es) would be deleted.'));
 	});
 
+	test('explicit agent mode distinguishes refused deletion from success on a TTY', async () => {
+		makeGoneBranch(fx.repo, 'feature/agent');
+		const io = {
+			...createFakeIo(fx.repo, { interactive: true }),
+			loadPrompter: async () => { throw new Error('Widgets must not load'); },
+		};
+		assert.strictEqual(await runCli(['--non-interactive'], io), EXIT.cancelled);
+		assert.ok(branchExists(fx.repo, 'feature/agent'));
+		assert.strictEqual(await runCli(['--non-interactive', '--dry-run'], io), EXIT.ok);
+		assert.ok(branchExists(fx.repo, 'feature/agent'));
+		assert.strictEqual(await runCli(['--non-interactive', '--yes'], io), EXIT.ok);
+		assert.ok(!branchExists(fx.repo, 'feature/agent'));
+		assert.strictEqual(await runCli(['--non-interactive'], io), EXIT.ok, 'nothing to do is success');
+	});
+
+	test('JSON discovery stays parseable on a TTY and invalid JSON mutations do nothing', async () => {
+		makeGoneBranch(fx.repo, 'feature/json');
+		const io = {
+			...createFakeIo(fx.repo, { interactive: true }),
+			loadPrompter: async () => { throw new Error('Widgets must not load'); },
+		};
+		assert.strictEqual(await runCli(['list', '--json'], io), EXIT.ok);
+		assert.deepStrictEqual(JSON.parse(io.out.join('')).stale, ['feature/json']);
+		assert.strictEqual(await runCli(['--json', '--yes'], createFakeIo(fx.repo)), EXIT.usage);
+		assert.ok(branchExists(fx.repo, 'feature/json'));
+	});
+
 	test('protected globs come from flags and git config', async () => {
 		makeGoneBranch(fx.repo, 'release/1');
 		makeGoneBranch(fx.repo, 'keep/me');

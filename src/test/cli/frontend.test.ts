@@ -20,6 +20,21 @@ const plain: TerminalOptions = { yes: false, verbose: false };
 
 suite('cli front ends', () => {
 	suite('createFrontend', () => {
+		test('agent and JSON modes never load widgets or read stdin, even on a TTY', async () => {
+			for (const args of [['--non-interactive'], ['--non-interactive', '--yes'], ['list', '--json'], ['restore', '--json']]) {
+				const io = {
+					...createFakeIo('/repo', { interactive: true }),
+					loadPrompter: async () => { throw new Error('Widgets must not load'); },
+					readLine: async () => { throw new Error('stdin must not be read'); },
+				};
+				const frontend = await createFrontend(parseArgs(args), io);
+				assert.strictEqual(frontend.canPrompt, false);
+				assert.strictEqual(frontend.intro, undefined);
+				assert.deepStrictEqual(await frontend.ui.pickMany({ items: branchItems, title: 't' }), ['a', 'b']);
+				assert.strictEqual(await frontend.ui.confirm('Delete?', 'Delete'), args.includes('--yes'));
+			}
+		});
+
 		test('--rpc forwards everything to the host as NDJSON', async () => {
 			const io = createFakeIo('/repo', { interactive: true });
 			const frontend = await createFrontend(parseArgs(['--rpc']), io);
