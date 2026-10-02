@@ -152,6 +152,11 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		});
 
 		const branchNames = [...(selected ?? [])];
+		const keptWorktreeBranches = [...worktreeOf.keys()].filter((branch) => !branchNames.includes(branch));
+		if (selected !== undefined && keptWorktreeBranches.length > 0) {
+			deps.output.appendLine('Not selected, so their worktree is kept:');
+			keptWorktreeBranches.forEach((branch) => deps.output.appendLine(`- ${branch} (worktree ${worktreeOf.get(branch)})`));
+		}
 		if (branchNames.length === 0) {
 			deps.output.appendLine('Operation cancelled or no branches selected.');
 			deps.ui.showInformationMessage('No branches selected.');

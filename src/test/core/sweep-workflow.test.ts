@@ -683,6 +683,23 @@ suite('sweep workflow', () => {
 
 			assert.ok(h.outputLines.includes('- feature/wt (removes worktree /work/wt)'));
 			assert.ok(!h.commands.some((cmd) => cmd.startsWith('worktree remove')));
+			assert.ok(!h.outputLines.includes('Not selected, so their worktree is kept:'));
+		});
+
+		test('lists the worktree branches left unselected', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				quickPickSelection: [],
+				git: {
+					[GONE_REFS_CMD]: { stdout: 'feature/wt\t[gone]\t \t/work/wt' },
+					'worktree list --porcelain': { stdout: 'worktree /repo\n' },
+				},
+			});
+
+			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'cancelled');
+			const index = h.outputLines.indexOf('Not selected, so their worktree is kept:');
+			assert.ok(index >= 0);
+			assert.strictEqual(h.outputLines[index + 1], '- feature/wt (worktree /work/wt)');
 		});
 	});
 });
