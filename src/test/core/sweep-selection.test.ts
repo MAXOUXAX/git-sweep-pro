@@ -62,11 +62,13 @@ suite('sweep selection helpers', () => {
 		assert.strictEqual(describeSweepMode({ dryRun: true, forceDelete: true }), 'dry run');
 	});
 
-	test('formatSweepSummary omits the protected line when none are protected', () => {
+	test('formatSweepSummary omits the zero-count lines', () => {
 		const summary = formatSweepSummary({
 			totalDetected: 3,
 			protectedCount: 0,
+			checkedOutCount: 0,
 			selectedCount: 2,
+			worktreeCount: 0,
 			mode: { dryRun: false, forceDelete: false },
 		});
 		assert.strictEqual(
@@ -75,11 +77,13 @@ suite('sweep selection helpers', () => {
 		);
 	});
 
-	test('formatSweepSummary includes the protected line when some are protected', () => {
+	test('formatSweepSummary includes the protected, checked-out and worktree lines', () => {
 		const summary = formatSweepSummary({
 			totalDetected: 5,
 			protectedCount: 2,
+			checkedOutCount: 1,
 			selectedCount: 3,
+			worktreeCount: 1,
 			mode: { dryRun: true, forceDelete: false },
 		});
 		assert.strictEqual(
@@ -87,7 +91,9 @@ suite('sweep selection helpers', () => {
 			[
 				'Detected: 5 stale branch(es)',
 				'Protected (skipped): 2',
+				'Checked out (skipped): 1',
 				'Selected: 3',
+				'Worktrees to remove: 1',
 				'Mode: dry run',
 			].join('\n')
 		);

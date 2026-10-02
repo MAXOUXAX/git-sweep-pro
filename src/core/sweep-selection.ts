@@ -38,10 +38,10 @@ export type SweepSummary = {
 	readonly totalDetected: number;
 	readonly protectedCount: number;
 	/** Stale branches skipped because they are checked out here or in the main worktree. */
-	readonly checkedOutCount?: number;
+	readonly checkedOutCount: number;
 	readonly selectedCount: number;
 	/** Selected branches checked out in another worktree (removed before deletion). */
-	readonly worktreeCount?: number;
+	readonly worktreeCount: number;
 	readonly mode: SweepMode;
 };
 
@@ -55,11 +55,11 @@ export function formatSweepSummary(summary: SweepSummary): string {
 	if (summary.protectedCount > 0) {
 		lines.push(`Protected (skipped): ${summary.protectedCount}`);
 	}
-	if (summary.checkedOutCount) {
+	if (summary.checkedOutCount > 0) {
 		lines.push(`Checked out (skipped): ${summary.checkedOutCount}`);
 	}
 	lines.push(`Selected: ${summary.selectedCount}`);
-	if (summary.worktreeCount) {
+	if (summary.worktreeCount > 0) {
 		lines.push(`Worktrees to remove: ${summary.worktreeCount}`);
 	}
 	lines.push(`Mode: ${describeSweepMode(summary.mode)}`);
