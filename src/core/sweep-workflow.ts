@@ -1,5 +1,5 @@
 import { createBranchDeleter } from './branch-deletion';
-import { createDeletionRecorder, type DeletionLog } from './deletion-log';
+import { canRecordDeletions, createDeletionRecorder, type DeletionLog } from './deletion-log';
 import { describeGitFailure, toErrorMessage } from './errors';
 import { quoteShellArg } from './git-command';
 import { describeCheckedOutBranch, findStaleBranches } from './stale-branches';
@@ -92,7 +92,7 @@ function describeDeleteFlag(mode: SweepMode): '-d' | '-D' {
 
 /** Ends a deletion prompt: whether the user can take the deletion back. */
 function undoNote(deps: SweepWorkflowDeps): string {
-	return deps.deletionLog ? 'You can restore them later.' : 'This cannot be undone.';
+	return canRecordDeletions(deps.deletionLog) ? 'You can restore them later.' : 'This cannot be undone.';
 }
 
 export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps): Promise<WorkflowOutcome> {

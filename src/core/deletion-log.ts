@@ -101,6 +101,16 @@ export function createDeletionRecorder(log: DeletionLog, source: DeletionSource,
 	};
 }
 
+/** True when deletions can be recorded in `log`, so they can be undone. */
+export function canRecordDeletions(log: DeletionLog | undefined): log is DeletionLog {
+	try {
+		// A state file that cannot be read cannot be written either.
+		return log !== undefined && Array.isArray(log.list());
+	} catch {
+		return false;
+	}
+}
+
 /** Newest deletion of each branch name (a name can be deleted, recreated and deleted again). */
 export function latestDeletions(entries: readonly DeletedBranch[]): DeletedBranch[] {
 	const seen = new Set<string>();

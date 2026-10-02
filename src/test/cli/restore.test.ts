@@ -37,6 +37,8 @@ suite('restore (real git)', function () {
 		const sha = makeGoneBranchWithCommit('feature/unmerged');
 
 		const sweep = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['--no-confirm'], sweep), EXIT.ok, 'the force-delete offer is refused without --yes');
+		assert.ok(sweep.err.join('').includes('Force-delete them with git branch -D? You can restore them later.'));
 		assert.strictEqual(await runCli(['--yes'], sweep), EXIT.ok);
 		assert.ok(!branchExists(fx.repo, 'feature/unmerged'));
 		assert.ok(sweep.err.join('').includes('To restore them, run: git sweep-pro restore feature/unmerged'));

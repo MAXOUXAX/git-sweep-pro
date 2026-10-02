@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { createBranchDeleter } from '../../core/branch-deletion';
 import {
+	canRecordDeletions,
 	createDeletionLog,
 	createDeletionRecorder,
 	DELETION_LOG_KEY,
@@ -175,6 +176,18 @@ suite('deletion log', () => {
 			{ branch: 'wt', sha: SHA_B, upstream: 'refs/remotes/origin/wt', worktree: '/repo-wt' },
 			{ branch: 'plain', sha: SHA_A },
 		]);
+	});
+
+	test('deletions can be recorded only when the log can be read', () => {
+		assert.strictEqual(canRecordDeletions(undefined), false);
+		assert.strictEqual(canRecordDeletions(logWith([]).log), true);
+		const corrupt: StateStore = {
+			get: () => {
+				throw new SyntaxError('Unexpected end of JSON input');
+			},
+			update: async () => undefined,
+		};
+		assert.strictEqual(canRecordDeletions(createDeletionLog(corrupt)), false);
 	});
 
 	test('latestDeletions keeps the newest entry per branch', () => {
