@@ -22,8 +22,10 @@ export function createVscodeHostUi(outputChannel: vscode.OutputChannel): HostUi 
 				task
 			),
 		pickBranch: async ({ items, title, placeholder }) => {
+			// A single-select quick pick highlights its first item: list the default first.
+			const ordered = [...items.filter((item) => item.picked), ...items.filter((item) => !item.picked)];
 			const picked = await vscode.window.showQuickPick(
-				items.map(({ label, description }) => ({ label, description })),
+				ordered.map(({ label, description }) => ({ label, description })),
 				{ title, placeHolder: placeholder, ignoreFocusOut: true, matchOnDescription: true }
 			);
 			return picked?.label;
