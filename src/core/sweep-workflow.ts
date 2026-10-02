@@ -155,7 +155,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		// directory, and a merged branch may still be in use: its upstream exists.
 		const quickPickItems: SelectableBranch[] = candidateBranches.map((branch) => {
 			const description = describeBranch(branch, 'checked out in worktree');
-			return description ? { label: branch, picked: false, description } : { label: branch, picked: true };
+			return { label: branch, picked: !mergedOf.has(branch) && !worktreeOf.has(branch), ...(description ? { description } : {}) };
 		});
 
 		const selected = await deps.ui.pickBranches({
