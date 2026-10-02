@@ -86,7 +86,7 @@ Every command runs the same CLI, rendered with VS Code pickers and dialogs. Open
 
 Every git command and its output goes to the **Git Sweep** output channel.
 
-Requires Git 2.23 or newer.
+Requires VS Code 1.92 or newer, and Git 2.23 or newer.
 
 ## License
 
