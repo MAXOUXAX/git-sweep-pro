@@ -3,7 +3,7 @@ import { branchPickLabel, findBranchByPickLabel, findOtherWorktreeBranch, localB
 import { createDeletionRecorder } from './deletion-log';
 import { describeGitFailure, isNoUpstreamError, toErrorMessage } from './errors';
 import { escapeForShell } from './git-command';
-import { getDefaultBranch } from './merged-branches';
+import { getDefaultBranch } from './default-branch';
 import { GONE_REFS_ARGS, isProtectedBranch, parseGoneBranchRefs } from './sweep-logic';
 import { runSweepWorkflow, singlePick, type SweepWorkflowDeps, type WorkflowOutcome } from './sweep-workflow';
 

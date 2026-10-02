@@ -1,4 +1,5 @@
-import { findMergedBranches, getDefaultBranch, type MergedBranch } from './merged-branches';
+import { getDefaultBranch } from './default-branch';
+import { findMergedBranches, type MergedBranch } from './merged-branches';
 import { GONE_REFS_ARGS, isProtectedBranch, parseLocalBranchRefs, type LocalBranchRef, type SweepSettings } from './sweep-logic';
 import type { SweepWorkflowDeps } from './sweep-workflow';
 
