@@ -30,6 +30,7 @@ suite('cli front ends', () => {
 			frontend.ui.showInformationMessage('done');
 			assert.deepStrictEqual(io.out.map((line) => JSON.parse(line).type), ['log', 'notify']);
 			assert.strictEqual(frontend.intro, undefined);
+			assert.strictEqual(frontend.canPrompt, true);
 		});
 
 		test('a terminal with a prompter gets the interactive widgets', async () => {
@@ -38,12 +39,15 @@ suite('cli front ends', () => {
 			const frontend = await createFrontend(parseArgs([]), io);
 			frontend.intro?.('git sweep-pro sweep');
 			assert.deepStrictEqual(calls, ['intro git sweep-pro sweep']);
+			assert.strictEqual(frontend.canPrompt, true);
+			assert.strictEqual((await createFrontend(parseArgs(['--yes']), io)).canPrompt, false, '--yes answers every prompt');
 		});
 
 		test('without a prompter, even an interactive terminal stays on safe defaults', async () => {
 			const frontend = await createFrontend(parseArgs([]), createFakeIo('/repo', { interactive: true }));
 			assert.strictEqual(await frontend.ui.confirm('Delete?', 'Delete'), false);
 			assert.strictEqual(frontend.intro, undefined);
+			assert.strictEqual(frontend.canPrompt, false);
 		});
 	});
 

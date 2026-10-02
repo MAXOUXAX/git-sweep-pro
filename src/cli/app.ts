@@ -194,7 +194,7 @@ async function runRestore(
 		return 'failed';
 	}
 	const restoreDeps = { ...deps, deletionLog };
-	if (options.positionals.length > 0 || (frontend.canPrompt && !options.yes && !options.json)) {
+	if (options.positionals.length > 0 || (frontend.canPrompt && !options.json)) {
 		return runRestoreWorkflow(restoreDeps, options.positionals);
 	}
 
