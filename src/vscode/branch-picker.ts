@@ -18,7 +18,7 @@ export function pickBranchesWithActions(options: {
 		quickPick.title = options.title;
 		quickPick.placeholder = options.items.every((item) => item.picked)
 			? 'All stale tracked branches are pre-selected. Use the title-bar actions to select all, clear, or invert.'
-			: 'Branches checked out in another worktree are not pre-selected. Selecting one also removes its worktree.';
+			: 'Branches checked out in another worktree are not pre-selected; selecting one removes its worktree. Use the title-bar actions to select all, clear, or invert.';
 
 		const selectAllButton: vscode.QuickInputButton = {
 			iconPath: new vscode.ThemeIcon('check-all'),
