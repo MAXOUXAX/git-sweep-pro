@@ -613,6 +613,7 @@ suite('sweep workflow', () => {
 					[GONE_REFS_CMD]: {
 						stdout: ['feature/wt\t[gone]\t \t/work/wt', 'stale/plain\t[gone]\t \t', 'main\t\t*\t/repo'].join('\n'),
 					},
+					'branch --format=%(refname:short) --merged HEAD --list feature/wt': { stdout: 'feature/wt\n' },
 				},
 			});
 
@@ -639,18 +640,19 @@ suite('sweep workflow', () => {
 					git: {
 						[GONE_REFS_CMD]: { stdout: 'feature/wt\t[gone]\t \t/work/wt' },
 						'worktree list --porcelain': { stdout: 'worktree /repo\n' },
-						'merge-base --is-ancestor feature/wt HEAD': new Error('exit code 1'),
+						'branch --format=%(refname:short) --merged HEAD --list feature/wt': { stdout: '' },
 					},
 				});
 
 			const declined = squashed(false);
 			assert.strictEqual(await runSweepWorkflow(safeMode, declined.deps), 'ok');
-			assert.ok(!declined.commands.some((cmd) => cmd.startsWith('worktree remove') || cmd.startsWith('branch -')));
+			const isDestructive = (cmd: string) => /^(worktree remove|branch -[dD] )/.test(cmd);
+			assert.ok(!declined.commands.some(isDestructive));
 			assert.deepStrictEqual(declined.infoMessages, ['Deleted 0 branch(es); 1 skipped, 0 failed.']);
 
 			const confirmed = squashed(true);
 			assert.strictEqual(await runSweepWorkflow(safeMode, confirmed.deps), 'ok');
-			const commands = confirmed.commands.filter((cmd) => cmd.startsWith('worktree remove') || cmd.startsWith('branch -'));
+			const commands = confirmed.commands.filter(isDestructive);
 			assert.deepStrictEqual(commands, ['worktree remove /work/wt', 'branch -D feature/wt']);
 		});
 
@@ -660,6 +662,7 @@ suite('sweep workflow', () => {
 				quickPickSelection: [{ label: 'feature/wt' }],
 				git: {
 					[GONE_REFS_CMD]: { stdout: 'feature/wt\t[gone]\t \t/work/wt' },
+					'branch --format=%(refname:short) --merged HEAD --list feature/wt': { stdout: 'feature/wt\n' },
 					'worktree remove /work/wt': new Error("fatal: '/work/wt' contains modified or untracked files, use --force to delete it"),
 				},
 			});
@@ -670,6 +673,7 @@ suite('sweep workflow', () => {
 			assert.ok(h.outputLines.some((line) => line.startsWith('[worktree-not-removed] feature/wt')));
 			assert.deepStrictEqual(h.errorMessages, ['Deleted 0 branch(es); 0 skipped, 1 failed.']);
 			assert.deepStrictEqual(h.noticeOptions, [{ seeOutput: true }]);
+			assert.strictEqual(h.confirmRequests.length, 0, 'no force-delete offer');
 		});
 
 		test('dry run lists the worktree that would be removed without touching it', async () => {

@@ -4,7 +4,7 @@ import { isNotFullyMergedError } from './sweep-logic';
 export type DeleteResult = 'deleted' | 'not-fully-merged' | 'failed';
 
 type BranchDeleterDeps = {
-	readonly runGit: (args: string[]) => Promise<unknown>;
+	readonly runGit: (args: string[]) => Promise<{ stdout: string }>;
 	readonly log: (line: string) => void;
 	/** Worktree path of each branch checked out in a linked worktree. */
 	readonly worktrees: ReadonlyMap<string, string>;
@@ -22,8 +22,10 @@ export function createBranchDeleter({ runGit, log, worktrees }: BranchDeleterDep
 	/** `git branch -d` refuses a branch whose upstream is gone unless HEAD contains it. */
 	const isMergedIntoHead = async (branch: string): Promise<boolean> => {
 		try {
-			await runGit(['merge-base', '--is-ancestor', branch, 'HEAD']);
-			return true;
+			// Lists the branch only when HEAD contains it, and succeeds either way:
+			// unlike merge-base --is-ancestor, no expected failure is logged as an error.
+			const { stdout } = await runGit(['branch', '--format=%(refname:short)', '--merged', 'HEAD', '--list', branch]);
+			return stdout.trim() === branch;
 		} catch {
 			return false;
 		}
