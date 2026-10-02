@@ -24,7 +24,7 @@ export function parseBranches(branchOutput: string): BranchItem[] {
 		const isCurrent = line.startsWith('*');
 		const inOtherWorktree = line.startsWith('+');
 		const name = line.replace(/^[*+]\s+/, '').trim();
-		if (!name || name === 'HEAD' || name.startsWith('(')) {
+		if (!name || name === 'HEAD') {
 			continue;
 		}
 
