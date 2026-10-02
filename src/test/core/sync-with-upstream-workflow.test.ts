@@ -10,8 +10,8 @@ import {
 	fileExistsNoRebase,
 } from './sync-with-upstream.harness';
 
-const tempMain = tempBranchNameFor('origin/main');
-const tempDevelop = tempBranchNameFor('origin/develop');
+const tempMain = tempBranchNameFor('origin/main', '/repo/.git');
+const tempDevelop = tempBranchNameFor('origin/develop', '/repo/.git');
 
 suite('sync-with-upstream workflow', () => {
 	suite('runSyncWithUpstreamWorkflow', () => {
@@ -466,13 +466,46 @@ suite('sync-with-upstream workflow', () => {
 	suite('tempBranchNameFor', () => {
 		test('long refs sharing a 40-char prefix do not collide', () => {
 			const prefix = 'origin/feature/really-long-shared-prefix-name';
-			const a = tempBranchNameFor(`${prefix}-aaaa`);
-			const b = tempBranchNameFor(`${prefix}-bbbb`);
+			const a = tempBranchNameFor(`${prefix}-aaaa`, '/repo/.git');
+			const b = tempBranchNameFor(`${prefix}-bbbb`, '/repo/.git');
 			assert.notStrictEqual(a, b);
 		});
 
 		test('is deterministic for the same ref', () => {
-			assert.strictEqual(tempBranchNameFor('origin/main'), tempBranchNameFor('origin/main'));
+			assert.strictEqual(tempBranchNameFor('origin/main', '/repo/.git'), tempBranchNameFor('origin/main', '/repo/.git'));
+		});
+
+		test('differs between worktrees', () => {
+			assert.notStrictEqual(
+				tempBranchNameFor('origin/main', '/repo/.git'),
+				tempBranchNameFor('origin/main', '/repo/.git/worktrees/wt')
+			);
+		});
+	});
+
+	suite('worktrees', () => {
+		test('rebases onto a local upstream checked out in another worktree without checking it out', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo/wt',
+				fileExists: fileExistsNoRebase,
+				quickPickSelection: { label: 'main' },
+				git: {
+					...baseGitForSync,
+					'branch --no-column -a': { stdout: ['* feature/my-branch', '+ main', '  remotes/origin/main'].join('\n') },
+				},
+			});
+
+			await runSyncWithUpstreamWorkflow(h.deps);
+
+			assert.strictEqual(
+				h.quickPickRequests[0].items.find((item) => item.label === 'main')?.description,
+				'local, checked out in another worktree (used as is)'
+			);
+			assert.ok(!h.commands.includes('checkout main'), 'main cannot be checked out in this worktree');
+			assert.ok(!h.commands.some((cmd) => cmd.startsWith('pull')));
+			assert.ok(h.commands.includes('rebase main'));
+			assert.ok(h.outputLines.includes(syncMessages.infoUpstreamInOtherWorktree('main')));
+			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedWith('feature/my-branch', 'main')]);
 		});
 	});
 });

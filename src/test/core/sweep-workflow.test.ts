@@ -1,9 +1,10 @@
 import * as assert from 'assert';
-import { findStaleBranches, runSweepWorkflow, type NoticeOptions, type QuickPickItemLike, type SweepWorkflowDeps } from '../../core/sweep-workflow';
+import { findStaleBranches } from '../../core/stale-branches';
+import { runSweepWorkflow, type NoticeOptions, type QuickPickItemLike, type SweepWorkflowDeps } from '../../core/sweep-workflow';
 import { DEFAULT_SWEEP_SETTINGS, type SweepMode, type SweepSettings } from '../../core/sweep-logic';
 import type { SelectableBranch } from '../../core/sweep-selection';
 
-const GONE_REFS_CMD = 'for-each-ref --format=%(refname:short)%09%(upstream:track) refs/heads';
+const GONE_REFS_CMD = 'for-each-ref --format=%(refname:short)%09%(upstream:track)%09%(HEAD)%09%(worktreepath) refs/heads';
 
 type HarnessOptions = {
 	workspaceRoot?: string;
@@ -118,7 +119,7 @@ suite('sweep workflow', () => {
 		assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
 
 		assert.deepStrictEqual(h.infoMessages, ['No stale branches found.']);
-		assert.deepStrictEqual(h.commands, ['fetch -p', GONE_REFS_CMD]);
+		assert.deepStrictEqual(h.commands, ['fetch -p', 'worktree prune', GONE_REFS_CMD]);
 		assert.ok(h.outputLines.includes('No stale tracked branches found.'));
 		assert.strictEqual(h.quickPickRequests.length, 0);
 		assert.strictEqual(h.progressTitles[0], 'Fetching and pruning remote references');
@@ -173,7 +174,7 @@ suite('sweep workflow', () => {
 
 		assert.deepStrictEqual(h.infoMessages, ['2 branch(es) would be deleted.']);
 		assert.deepStrictEqual(h.noticeOptions, [{ dryRun: true }]);
-		assert.deepStrictEqual(h.commands, ['fetch -p', GONE_REFS_CMD]);
+		assert.deepStrictEqual(h.commands, ['fetch -p', 'worktree prune', GONE_REFS_CMD]);
 		assert.ok(h.outputLines.includes('[DRY RUN] Selected branches:'));
 		assert.ok(h.outputLines.includes('- stale/one'));
 		assert.ok(h.outputLines.includes('- stale/two'));
@@ -540,8 +541,169 @@ suite('sweep workflow', () => {
 			},
 		});
 
-		assert.deepStrictEqual(await findStaleBranches('/repo', h.deps), { stale: ['feature/a'], protected: ['release/1'] });
-		assert.deepStrictEqual(h.commands, ['fetch -p', GONE_REFS_CMD]);
+		assert.deepStrictEqual(await findStaleBranches('/repo', h.deps), {
+			stale: ['feature/a'],
+			protected: ['release/1'],
+			checkedOut: [],
+			worktrees: new Map(),
+		});
+		assert.deepStrictEqual(h.commands, ['fetch -p', 'worktree prune', GONE_REFS_CMD]);
 		assert.strictEqual(h.progressTitles.length, 1);
+	});
+
+	suite('worktrees', () => {
+		test('skips the stale branch checked out in the current worktree', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				quickPickSelection: [{ label: 'stale/other' }],
+				git: {
+					[GONE_REFS_CMD]: { stdout: ['feature/here\t[gone]\t*\t/repo', 'stale/other\t[gone]\t \t'].join('\n') },
+				},
+			});
+
+			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
+
+			assert.deepStrictEqual(h.quickPickRequests[0].items.map((item) => item.label), ['stale/other']);
+			assert.ok(h.outputLines.some((line) => line.startsWith('Skipped "feature/here": it is the current branch.')));
+			assert.ok(!h.commands.includes('branch -d feature/here'));
+			assert.ok(h.commands.includes('branch -d stale/other'));
+		});
+
+		test('skips a stale branch checked out in the main worktree', async () => {
+			const h = createHarness({
+				workspaceRoot: '/work/wt',
+				settings: { protectedBranches: ['release/*'] },
+				git: {
+					[GONE_REFS_CMD]: {
+						stdout: ['feature/main-wt\t[gone]\t \t/repo', 'release/1\t[gone]\t \t', 'feature/wt\t\t*\t/work/wt'].join('\n'),
+					},
+					'worktree list --porcelain': { stdout: 'worktree /repo\nHEAD abc\nbranch refs/heads/feature/main-wt\n\nworktree /work/wt\n' },
+				},
+			});
+
+			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
+
+			assert.strictEqual(h.quickPickRequests.length, 0);
+			assert.ok(!h.commands.some((cmd) => cmd.startsWith('worktree remove')));
+			assert.deepStrictEqual(h.infoMessages, [
+				'Skipped "feature/main-wt": it is checked out in the main worktree (/repo). Switch branches there to delete it. 1 other stale branch(es) are protected.',
+			]);
+		});
+
+		test('explains when the only stale branch is the current one', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				git: { [GONE_REFS_CMD]: { stdout: 'feature/here\t[gone]\t*\t/repo' } },
+			});
+
+			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
+
+			assert.strictEqual(h.quickPickRequests.length, 0);
+			assert.deepStrictEqual(h.infoMessages, [
+				'Skipped "feature/here": it is the current branch. Switch to another branch to delete it.',
+			]);
+		});
+
+		test('offers branches from other worktrees unselected and removes the worktree before deleting', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				settings: { confirmBeforeDelete: true },
+				quickPickSelection: [{ label: 'feature/wt' }, { label: 'stale/plain' }],
+				git: {
+					[GONE_REFS_CMD]: {
+						stdout: ['feature/wt\t[gone]\t \t/work/wt', 'stale/plain\t[gone]\t \t', 'main\t\t*\t/repo'].join('\n'),
+					},
+					'branch --format=%(refname:short) --merged HEAD --list feature/wt': { stdout: 'feature/wt\n' },
+				},
+			});
+
+			await runSweepWorkflow(safeMode, h.deps);
+
+			assert.deepStrictEqual(h.quickPickRequests[0].items, [
+				{ label: 'feature/wt', picked: false, description: 'checked out in worktree /work/wt' },
+				{ label: 'stale/plain', picked: true },
+			]);
+			assert.ok(h.confirmRequests[0].message.includes('Worktrees to remove: 1'));
+			assert.ok(h.commands.includes('worktree list --porcelain'));
+			assert.ok(h.outputLines.includes('- feature/wt (removes worktree /work/wt)'));
+			const removeIndex = h.commands.indexOf('worktree remove /work/wt');
+			assert.ok(removeIndex >= 0 && removeIndex < h.commands.indexOf('branch -d feature/wt'));
+			assert.deepStrictEqual(h.infoMessages, ['Deleted 2 branch(es); 0 skipped, 0 failed.']);
+		});
+
+		test('keeps the worktree of a squash-merged branch until its force-delete is confirmed', async () => {
+			const squashed = (confirmResult: boolean) =>
+				createHarness({
+					workspaceRoot: '/repo',
+					confirmResult,
+					quickPickSelection: [{ label: 'feature/wt' }],
+					git: {
+						[GONE_REFS_CMD]: { stdout: 'feature/wt\t[gone]\t \t/work/wt' },
+						'worktree list --porcelain': { stdout: 'worktree /repo\n' },
+						'branch --format=%(refname:short) --merged HEAD --list feature/wt': { stdout: '' },
+					},
+				});
+
+			const declined = squashed(false);
+			assert.strictEqual(await runSweepWorkflow(safeMode, declined.deps), 'ok');
+			const isDestructive = (cmd: string) => /^(worktree remove|branch -[dD] )/.test(cmd);
+			assert.ok(!declined.commands.some(isDestructive));
+			assert.deepStrictEqual(declined.infoMessages, ['Deleted 0 branch(es); 1 skipped, 0 failed.']);
+
+			const confirmed = squashed(true);
+			assert.strictEqual(await runSweepWorkflow(safeMode, confirmed.deps), 'ok');
+			const commands = confirmed.commands.filter(isDestructive);
+			assert.deepStrictEqual(commands, ['worktree remove /work/wt', 'branch -D feature/wt']);
+		});
+
+		test('keeps the branch when its worktree cannot be removed', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				quickPickSelection: [{ label: 'feature/wt' }],
+				git: {
+					[GONE_REFS_CMD]: { stdout: 'feature/wt\t[gone]\t \t/work/wt' },
+					'branch --format=%(refname:short) --merged HEAD --list feature/wt': { stdout: 'feature/wt\n' },
+					'worktree remove /work/wt': new Error("fatal: '/work/wt' contains modified or untracked files, use --force to delete it"),
+				},
+			});
+
+			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'failed');
+
+			assert.ok(!h.commands.includes('branch -d feature/wt'));
+			assert.ok(h.outputLines.some((line) => line.startsWith('[worktree-not-removed] feature/wt')));
+			assert.deepStrictEqual(h.errorMessages, ['Deleted 0 branch(es); 0 skipped, 1 failed.']);
+			assert.deepStrictEqual(h.noticeOptions, [{ seeOutput: true }]);
+			assert.strictEqual(h.confirmRequests.length, 0, 'no force-delete offer');
+		});
+
+		test('dry run lists the worktree that would be removed without touching it', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				quickPickSelection: [{ label: 'feature/wt' }],
+				git: { [GONE_REFS_CMD]: { stdout: 'feature/wt\t[gone]\t \t/work/wt' } },
+			});
+
+			await runSweepWorkflow(dryMode, h.deps);
+
+			assert.ok(h.outputLines.includes('- feature/wt (removes worktree /work/wt)'));
+			assert.ok(!h.commands.some((cmd) => cmd.startsWith('worktree remove')));
+			assert.ok(!h.outputLines.includes('Not selected (worktree kept):'));
+		});
+
+		test('lists the worktree branches left unselected', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo',
+				quickPickSelection: [],
+				git: {
+					[GONE_REFS_CMD]: { stdout: 'feature/wt\t[gone]\t \t/work/wt' },
+					'worktree list --porcelain': { stdout: 'worktree /repo\n' },
+				},
+			});
+
+			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'cancelled');
+			const index = h.outputLines.indexOf('Not selected (worktree kept):');
+			assert.ok(index >= 0);
+			assert.strictEqual(h.outputLines[index + 1], '- feature/wt (worktree /work/wt)');
+		});
 	});
 });

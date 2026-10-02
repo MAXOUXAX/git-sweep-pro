@@ -1,4 +1,4 @@
-import { branchPickLabel, findBranchByPickLabel, localBranchName, parseBranches } from './branch-list';
+import { branchPickLabel, findBranchByPickLabel, findOtherWorktreeBranch, localBranchName, parseBranches, type BranchItem } from './branch-list';
 import { describeGitFailure, isNoUpstreamError, toErrorMessage } from './errors';
 import { escapeForShell } from './git-command';
 import { GONE_REFS_ARGS, isProtectedBranch, parseGoneBranchRefs } from './sweep-logic';
@@ -6,11 +6,18 @@ import { runSweepWorkflow, singlePick, type SweepWorkflowDeps, type WorkflowOutc
 
 export type PostPullRequestDeps = SweepWorkflowDeps;
 
+type DefaultBranch = {
+	/** Local name, e.g. "main". */
+	readonly name: string;
+	/** Remote-tracking ref the remote HEAD points to, e.g. "origin/main". */
+	readonly remoteRef: string;
+};
+
 /**
- * Returns the default branch name (e.g. "main") from the first remote's HEAD ref, or undefined.
+ * Returns the default branch from the first remote's HEAD ref, or undefined.
  * Discovers the remote dynamically via refs/remotes/<remote>/HEAD; does not assume "origin".
  */
-async function getDefaultBranchName(runGit: (args: string[]) => Promise<{ stdout: string; stderr: string }>): Promise<string | undefined> {
+async function getDefaultBranch(runGit: (args: string[]) => Promise<{ stdout: string; stderr: string }>): Promise<DefaultBranch | undefined> {
 	try {
 		const list = await runGit(['for-each-ref', '--format=%(refname)', 'refs/remotes/*/HEAD']);
 		const firstRef = list.stdout.trim().split(/\r?\n/)[0];
@@ -25,7 +32,7 @@ async function getDefaultBranchName(runGit: (args: string[]) => Promise<{ stdout
 		const r = await runGit(['rev-parse', '--abbrev-ref', firstRef]);
 		const out = r.stdout.trim();
 		const prefix = `${remoteName}/`;
-		return out.startsWith(prefix) ? out.slice(prefix.length) : undefined;
+		return out.startsWith(prefix) ? { name: out.slice(prefix.length), remoteRef: out } : undefined;
 	} catch {
 		return undefined;
 	}
@@ -68,19 +75,28 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			return 'cancelled';
 		}
 
-		const defaultBranch = await getDefaultBranchName(runGit);
+		const defaultBranch = await getDefaultBranch(runGit);
 		const isGone = parseGoneBranchRefs(goneRefsResult.stdout).includes(currentBranch);
 
-		const quickPickItems = branchItems.map((b) => {
-			const isDefault = Boolean(defaultBranch && localBranchName(b) === defaultBranch);
-			return {
-				label: branchPickLabel(b),
-				description: [b.isRemote ? 'remote' : undefined, isDefault ? 'default' : undefined]
-					.filter(Boolean)
-					.join(', ') || undefined,
-				picked: isDefault,
-			};
-		});
+		// Pre-select the default branch; when it is checked out in another
+		// worktree, prefer the default remote's ref (it can only be used detached here).
+		const isDefault = (b: BranchItem) => localBranchName(b) === defaultBranch?.name;
+		const preferred =
+			branchItems.find((b) => isDefault(b) && !b.isRemote && !b.inOtherWorktree) ??
+			branchItems.find((b) => b.isRemote && b.ref === defaultBranch?.remoteRef) ??
+			branchItems.find(isDefault);
+
+		const quickPickItems = branchItems.map((b) => ({
+			label: branchPickLabel(b),
+			description: [
+				b.isRemote ? 'remote' : undefined,
+				isDefault(b) ? 'default' : undefined,
+				b.inOtherWorktree ? 'checked out in another worktree' : undefined,
+			]
+				.filter(Boolean)
+				.join(', ') || undefined,
+			picked: b === preferred,
+		}));
 
 		const selected = await deps.ui.showQuickPick(quickPickItems, {
 			canPickMany: false,
@@ -88,7 +104,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			matchOnDescription: true,
 			title: 'Post Pull Request: Branch to switch to',
 			placeHolder: isGone && defaultBranch
-				? `Branch merged. Switch to ${defaultBranch}?`
+				? `Branch merged. Switch to ${defaultBranch.name}?`
 				: 'Choose a branch (local preferred for pull)',
 		});
 
@@ -109,11 +125,17 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		const targetRef = targetItem.ref;
 		const localTarget = localBranchName(targetItem);
 
+		// A branch checked out in another worktree cannot be checked out here
+		// too: switch to a detached HEAD at the same commit instead.
+		const detached = findOtherWorktreeBranch(branchItems, targetItem) !== undefined;
+
 		try {
 			await deps.ui.withProgress(
-				{ title: `Checking out ${localTarget}` },
+				{ title: detached ? `Checking out ${targetRef} as a detached HEAD` : `Checking out ${localTarget}` },
 				async () => {
-					if (targetItem.isRemote) {
+					if (detached) {
+						await runGit(['checkout', '--detach', targetRef]);
+					} else if (targetItem.isRemote) {
 						// Attempt to switch to an existing local branch first to preserve
 						// any local commits; only create a new tracking branch if it doesn't exist.
 						try {
@@ -134,7 +156,11 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 			return 'failed';
 		}
 
-		deps.output.appendLine(`Checked out: ${localTarget}`);
+		deps.output.appendLine(
+			detached
+				? `Checked out ${targetRef} as a detached HEAD ("${localTarget}" is checked out in another worktree).`
+				: `Checked out: ${localTarget}`
+		);
 		let outcome: WorkflowOutcome = 'ok';
 
 		if (isProtectedBranch(currentBranch, deps.getSettings().protectedBranches)) {
@@ -158,6 +184,14 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		// runSweepWorkflow is not given forceDelete to avoid -D on other gone branches.
 		if ((await runSweepWorkflow({ dryRun: false, forceDelete: false }, deps)) === 'failed') {
 			outcome = 'failed';
+		}
+
+		if (detached) {
+			deps.output.header('--- Post Pull Request session ended ---');
+			deps.ui.showInformationMessage(
+				`Switched to a detached HEAD at ${targetRef} because "${localTarget}" is checked out in another worktree. Pull skipped.`
+			);
+			return outcome;
 		}
 
 		let pulled = false;

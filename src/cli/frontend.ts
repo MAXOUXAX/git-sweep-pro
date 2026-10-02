@@ -165,7 +165,7 @@ export function createInteractiveFrontend(io: CliIo, options: TerminalOptions, p
 				}
 				const values = await prompter.multiselect(
 					`${title} ${pc.dim('(space: toggle, a: all, enter: confirm)')}`,
-					items.map((item, value) => ({ value, label: item.label })),
+					items.map((item, value) => ({ value, label: item.label, hint: item.description })),
 					items.flatMap((item, index) => (item.picked ? [index] : []))
 				);
 				return values?.map((index) => items[index].label);

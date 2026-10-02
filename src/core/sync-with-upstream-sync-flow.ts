@@ -14,13 +14,19 @@ import { singlePick, type WorkflowOutcome } from './sweep-workflow';
 
 type RunGit = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 
-export function tempBranchNameFor(upstreamRef: string): string {
+/**
+ * Name of the temporary branch a sync onto the remote `upstreamRef` uses.
+ * Worktrees share branches, so the name also depends on the worktree's own
+ * Git directory: syncs from two worktrees must not reset each other's branch.
+ */
+export function tempBranchNameFor(upstreamRef: string, gitDir: string): string {
 	const safeSuffix = upstreamRef.replace(/[/\s]/g, '_').slice(0, 40);
-	// djb2 hash of the full ref: refs sharing a 40-char prefix must not
-	// collide, or sync/cleanup could delete the wrong temp branch.
+	// djb2 hash of the full ref and Git directory: refs sharing a 40-char
+	// prefix must not collide, or sync/cleanup could delete the wrong temp branch.
+	const key = `${gitDir}\n${upstreamRef}`;
 	let hash = 5381;
-	for (let i = 0; i < upstreamRef.length; i++) {
-		hash = ((hash << 5) + hash + upstreamRef.charCodeAt(i)) >>> 0;
+	for (let i = 0; i < key.length; i++) {
+		hash = ((hash << 5) + hash + key.charCodeAt(i)) >>> 0;
 	}
 	return `${TEMP_BRANCH_PREFIX}${safeSuffix}_${hash.toString(16)}`;
 }
@@ -45,6 +51,12 @@ async function prepareUpstreamForRebase(
 		);
 
 		return tempBranch;
+	}
+
+	if (targetItem.inOtherWorktree) {
+		// It cannot be checked out (and so pulled) here: rebase onto it as it is.
+		deps.output.appendLine(syncMessages.infoUpstreamInOtherWorktree(upstreamRef));
+		return upstreamRef;
 	}
 
 	await deps.ui.withProgress(
@@ -204,7 +216,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<WorkflowO
 
 		const quickPickItems = branchItems.map((b) => ({
 			label: branchPickLabel(b),
-			description: b.isRemote ? undefined : 'local',
+			description: b.isRemote ? undefined : b.inOtherWorktree ? 'local, checked out in another worktree (used as is)' : 'local',
 		}));
 
 		const selected = await deps.ui.showQuickPick(quickPickItems, {
@@ -252,7 +264,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<WorkflowO
 		// Register the temp branch for cleanup before creating it, so a failure
 		// inside prepareUpstreamForRebase (e.g. pull error) still cleans it up.
 		if (isRemote) {
-			tempBranchToCleanup = tempBranchNameFor(upstreamRef);
+			tempBranchToCleanup = tempBranchNameFor(upstreamRef, gitDir);
 		}
 		const branchToRebaseOnto = await prepareUpstreamForRebase(
 			deps,

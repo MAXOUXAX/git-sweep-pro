@@ -10,6 +10,7 @@ After a pull request is merged and its remote branch is deleted, the matching lo
 - **You stay in control** — every candidate appears in a multi-select list with quick actions to select all, clear all, or invert your selection; before anything is deleted you get a summary (detected, selected, mode) and a confirmation.
 - **Clear outcomes** — after a run you see exactly how many branches were deleted, skipped, and failed.
 - **Handles squash & rebase merges** — detection is based on the remote branch being gone, not on commit reachability, so branches merged via squash or rebase are still found. When a safe delete refuses them (their commits were rewritten), Git Sweep Pro offers a one-click force-delete for exactly those branches.
+- **Worktree aware** — branches checked out in another `git worktree` are shown with their worktree and left unselected; picking one removes that worktree first (only if it has no uncommitted changes). Worktrees whose folder was deleted are pruned automatically.
 - **Multi-root aware** — when several open folders are Git repositories, it asks which one to operate on and remembers your choice for the session.
 - **Transparent** — every git command it runs and its output is written to the `Git Sweep` output channel, so there are no surprises.
 - **Scriptable** — the same engine is available as the `git sweep-pro` command line, with safe defaults for unattended runs.
@@ -64,6 +65,16 @@ Without a terminal attached (CI, scripts), prompts keep their defaults and confi
 
 Run `git sweep-pro --help` for every option. A sync paused on conflicts is recorded in the repository's Git directory, so it can be resumed from either the terminal or the editor.
 
+## Worktrees
+
+Git Sweep Pro understands [`git worktree`](https://git-scm.com/docs/git-worktree):
+
+- **Sweep** never tries to delete the branch checked out in the worktree you run it from, or in the main worktree; it tells you which stale branches it skipped for that reason. Stale branches checked out in *other* worktrees are listed with their location but not pre-selected; selecting one runs `git worktree remove` (which refuses if the worktree has uncommitted changes or is locked) before deleting the branch. `--yes` never selects them for you.
+- **`list`** shows the worktree of each stale branch, and marks the stale branches that are checked out here or in the main worktree. With `--json`, `worktrees` maps each branch to its worktree path, and `checkedOut` lists the branches that a sweep from here skips.
+- Worktrees whose directory was deleted are pruned (`git worktree prune`) along with `git fetch -p`, so their branches become sweepable again.
+- **Post Pull Request Cleanup** in a linked worktree: when the branch to switch to (typically `main`) is checked out in another worktree, it switches to a detached HEAD at the same commit instead, then deletes the merged branch and sweeps.
+- **Sync With Upstream** can rebase onto a local branch checked out in another worktree (it is used as is, without pulling; pick its remote branch for the latest version). A paused sync is tracked per worktree.
+
 ## Safety model
 
 Git Sweep Pro is built to make destructive operations feel trustworthy. It never deletes a branch you didn't approve.
@@ -86,7 +97,7 @@ Git Sweep Pro is built to make destructive operations feel trustworthy. It never
 
 ## Requirements
 
-- Git must be installed and available on your `PATH`.
+- Git 2.23 or newer must be installed and available on your `PATH`.
 - The open workspace folder must be a Git repository.
 
 ## Troubleshooting
