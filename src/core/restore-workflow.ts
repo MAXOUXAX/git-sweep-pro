@@ -1,14 +1,7 @@
-import { describeDeletion, latestDeletions, type DeletedBranch, type DeletionLog } from './deletion-log';
+import { describeDeletion, latestDeletions, type DeletedBranch } from './deletion-log';
 import { describeGitFailure, toErrorMessage } from './errors';
 import { quoteShellArg } from './git-command';
-import type { SweepWorkflowDeps, WorkflowOutcome } from './sweep-workflow';
-
-export type RestoreDeps = SweepWorkflowDeps & {
-	readonly deletionLog: DeletionLog;
-	readonly now?: () => Date;
-};
-
-type RunGit = (args: string[]) => Promise<{ stdout: string }>;
+import type { WorkflowContext, WorkflowOutcome } from './workflow';
 
 /** A recorded deletion, checked against the repository. */
 export type RestoreCandidate = {
@@ -27,16 +20,15 @@ const lineSet = (stdout: string) => new Set(stdout.split('\n').map((line) => lin
  * commit that Git garbage-collected cannot come back, and an upstream that
  * was deleted is not tracked again (the next sweep would delete the branch).
  */
-export async function inspectDeletions(deps: RestoreDeps, workspaceRoot: string): Promise<RestoreCandidate[]> {
-	const entries = latestDeletions(deps.deletionLog.list());
+export async function inspectDeletions({ deletionLog, git }: WorkflowContext): Promise<RestoreCandidate[]> {
+	const entries = latestDeletions(deletionLog.list());
 	if (entries.length === 0) {
 		return [];
 	}
-	const runGit: RunGit = (args) => deps.runGitCommand(args, workspaceRoot);
 	const [refs, commits] = await Promise.all([
-		runGit(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes']),
+		git(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes']),
 		// Prints the commits that still exist, and skips the others.
-		runGit(['rev-list', '--no-walk', '--ignore-missing', ...new Set(entries.map((entry) => entry.sha))]),
+		git(['rev-list', '--no-walk', '--ignore-missing', ...new Set(entries.map((entry) => entry.sha))]),
 	]);
 	const existingRefs = lineSet(refs.stdout);
 	const availableCommits = lineSet(commits.stdout);
@@ -53,8 +45,7 @@ export async function inspectDeletions(deps: RestoreDeps, workspaceRoot: string)
 
 /** Recreates one branch at its recorded commit; resolves to why it could not, if it could not. */
 async function restoreBranch(
-	deps: RestoreDeps,
-	runGit: RunGit,
+	{ git, output, deletionLog }: WorkflowContext,
 	{ entry, blocker, upstream }: RestoreCandidate
 ): Promise<string | undefined> {
 	if (blocker) {
@@ -62,44 +53,45 @@ async function restoreBranch(
 	}
 	try {
 		// Fails instead of overwriting a branch created since the inspection.
-		await runGit(['branch', entry.branch, entry.sha]);
+		await git(['branch', entry.branch, entry.sha]);
 	} catch (error) {
 		return toErrorMessage(error);
 	}
-	deps.output.appendLine(`Restored ${entry.branch} at ${entry.sha.slice(0, 7)}.`);
+	output.appendLine(`Restored ${entry.branch} at ${entry.sha.slice(0, 7)}.`);
 	if (upstream) {
 		const name = upstream.replace(/^refs\/(?:remotes|heads)\//, '');
 		try {
-			await runGit(['branch', `--set-upstream-to=${upstream}`, entry.branch]);
-			deps.output.appendLine(`It tracks ${name} again.`);
+			await git(['branch', `--set-upstream-to=${upstream}`, entry.branch]);
+			output.appendLine(`It tracks ${name} again.`);
 		} catch (error) {
-			deps.output.appendLine(`[warning] Could not set ${name} as the upstream of ${entry.branch}: ${toErrorMessage(error)}`);
+			output.appendLine(`[warning] Could not set ${name} as the upstream of ${entry.branch}: ${toErrorMessage(error)}`);
 		}
 	}
 	if (entry.worktree) {
-		deps.output.appendLine(
+		output.appendLine(
 			`Its worktree was removed. To recreate it, run: git worktree add ${quoteShellArg(entry.worktree)} ${quoteShellArg(entry.branch)}`
 		);
 	}
 	try {
-		await deps.deletionLog.forget(entry.branch);
+		await deletionLog.forget(entry.branch);
 	} catch (error) {
-		deps.output.appendLine(`[warning] Could not remove ${entry.branch} from the deleted-branch log: ${toErrorMessage(error)}`);
+		output.appendLine(`[warning] Could not remove ${entry.branch} from the deleted-branch log: ${toErrorMessage(error)}`);
 	}
 	return undefined;
 }
 
 /** The deletions to restore: the ones named, or the ones the user picks; otherwise how the workflow ends. */
 async function chooseDeletions(
-	deps: RestoreDeps,
+	{ output, ui }: WorkflowContext,
 	requested: readonly string[],
-	candidates: readonly RestoreCandidate[]
+	candidates: readonly RestoreCandidate[],
+	now: Date
 ): Promise<readonly RestoreCandidate[] | WorkflowOutcome> {
 	const named = (name: string) => candidates.filter(({ entry }) => entry.branch === name);
 	if (requested.length > 0) {
 		const unknown = requested.filter((name) => named(name).length === 0);
 		if (unknown.length > 0) {
-			deps.ui.showErrorMessage(`No recorded deletion for: ${unknown.join(', ')}.`);
+			ui.showErrorMessage(`No recorded deletion for: ${unknown.join(', ')}.`);
 			return 'failed';
 		}
 		// In the order given, once each.
@@ -108,19 +100,18 @@ async function chooseDeletions(
 
 	const restorable = candidates.filter((candidate) => !candidate.blocker);
 	if (restorable.length === 0) {
-		deps.output.appendLine('No deleted branches to restore.');
-		deps.ui.showInformationMessage('No deleted branches to restore.');
+		output.appendLine('No deleted branches to restore.');
+		ui.showInformationMessage('No deleted branches to restore.');
 		return 'ok';
 	}
-	const now = deps.now?.() ?? new Date();
-	const picked = await deps.ui.pickBranches({
+	const picked = await ui.pickBranches({
 		items: restorable.map(({ entry }) => ({ label: entry.branch, picked: false, description: describeDeletion(entry, now) })),
 		title: 'Select branches to restore',
 	});
 	const chosen = restorable.filter(({ entry }) => picked?.includes(entry.branch));
 	if (chosen.length === 0) {
-		deps.output.appendLine('Operation cancelled or no branches selected.');
-		deps.ui.showInformationMessage('No branches selected.');
+		output.appendLine('Operation cancelled or no branches selected.');
+		ui.showInformationMessage('No branches selected.');
 		return 'cancelled';
 	}
 	return chosen;
@@ -133,19 +124,16 @@ async function chooseDeletions(
  * Restoring works while the commits still exist, i.e. until `git gc` prunes
  * them (by default two weeks after they became unreachable).
  */
-export async function runRestoreWorkflow(deps: RestoreDeps, requested: readonly string[]): Promise<WorkflowOutcome> {
-	const workspaceRoot = deps.getWorkspaceRoot();
-	if (!workspaceRoot) {
-		deps.ui.showErrorMessage('No workspace folder is open.');
-		return 'failed';
-	}
-	const runGit: RunGit = (args) => deps.runGitCommand(args, workspaceRoot);
-
-	deps.output.show(true);
-	deps.output.header('--- Restore session started ---');
-	deps.output.header(`Workspace: ${workspaceRoot}`);
+export async function runRestoreWorkflow(
+	context: WorkflowContext,
+	requested: readonly string[],
+	now: Date = new Date()
+): Promise<WorkflowOutcome> {
+	const { output, ui } = context;
+	output.header('--- Restore session started ---');
+	output.header(`Workspace: ${context.root}`);
 	try {
-		const chosen = await chooseDeletions(deps, requested, await inspectDeletions(deps, workspaceRoot));
+		const chosen = await chooseDeletions(context, requested, await inspectDeletions(context), now);
 		if (typeof chosen === 'string') {
 			return chosen;
 		}
@@ -154,25 +142,25 @@ export async function runRestoreWorkflow(deps: RestoreDeps, requested: readonly 
 		const failed: string[] = [];
 		for (const candidate of chosen) {
 			const { branch } = candidate.entry;
-			const reason = await restoreBranch(deps, runGit, candidate);
+			const reason = await restoreBranch(context, candidate);
 			if (reason === undefined) {
 				restored.push(branch);
 			} else {
-				deps.output.appendLine(`[restore-failed] ${branch}: ${reason}`);
+				output.appendLine(`[restore-failed] ${branch}: ${reason}`);
 				failed.push(`${branch} (${reason})`);
 			}
 		}
 
 		if (failed.length > 0) {
-			deps.ui.showErrorMessage(`Restored ${restored.length} of ${chosen.length} branch(es). Could not restore ${failed.join('; ')}.`);
+			ui.showErrorMessage(`Restored ${restored.length} of ${chosen.length} branch(es). Could not restore ${failed.join('; ')}.`);
 			return 'failed';
 		}
-		deps.ui.showInformationMessage(`Restored ${restored.length} branch(es): ${restored.join(', ')}.`);
+		ui.showInformationMessage(`Restored ${restored.length} branch(es): ${restored.join(', ')}.`);
 		return 'ok';
 	} catch (error) {
-		deps.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
+		ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	} finally {
-		deps.output.header('--- Restore session ended ---');
+		output.header('--- Restore session ended ---');
 	}
 }

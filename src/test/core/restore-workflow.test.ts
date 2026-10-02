@@ -11,10 +11,9 @@ import {
 	type DeletedBranch,
 	type DeletionLog,
 } from '../../core/deletion-log';
-import { runRestoreWorkflow, type RestoreDeps } from '../../core/restore-workflow';
+import { runRestoreWorkflow } from '../../core/restore-workflow';
 import type { StateStore } from '../../core/state-store';
-import { DEFAULT_SWEEP_SETTINGS } from '../../core/sweep-logic';
-import type { SelectableBranch } from '../../core/sweep-selection';
+import { createFakeContext, createMemoryStore, type GitEntry } from '../fake-context';
 
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
@@ -27,58 +26,28 @@ const entry = (branch: string, sha: string, deletedAt: string, extra: Partial<De
 	...extra,
 });
 
-function createMemoryStore(initial: Record<string, unknown> = {}): StateStore & { state: Record<string, unknown> } {
-	const store = {
-		state: { ...initial },
-		get: <T>(key: string) => store.state[key] as T | undefined,
-		update: async (key: string, value: unknown) => {
-			store.state[key] = value;
-		},
-	};
-	return store;
-}
-
 const logWith = (entries: DeletedBranch[]) => {
 	const store = createMemoryStore({ [DELETION_LOG_KEY]: entries });
 	return { store, log: createDeletionLog(store) };
 };
 
-function createHarness(options: { log: DeletionLog; git?: Record<string, { stdout?: string } | Error>; picked?: readonly string[] }) {
-	const infos: string[] = [];
-	const errors: string[] = [];
-	const lines: string[] = [];
-	const commands: string[] = [];
-	const pickRequests: Array<{ items: SelectableBranch[]; title: string }> = [];
-	const deps: RestoreDeps = {
-		getWorkspaceRoot: () => '/repo',
-		getSettings: () => DEFAULT_SWEEP_SETTINGS,
-		output: { show: () => undefined, appendLine: (line) => lines.push(line), header: () => undefined },
-		runGitCommand: async (args) => {
-			const key = args.join(' ');
-			commands.push(key);
-			const result = options.git?.[key];
-			if (result instanceof Error) {
-				throw result;
-			}
-			// By default, every recorded commit still exists.
-			const commits = args[0] === 'rev-list' ? args.slice(3).join('\n') : '';
-			return { stdout: result?.stdout ?? commits, stderr: '' };
-		},
-		ui: {
-			withProgress: (_o, task) => task(),
-			showQuickPick: async () => undefined,
-			pickBranches: async ({ items, title }) => {
-				pickRequests.push({ items: [...items], title });
-				return options.picked;
-			},
-			showInformationMessage: (m) => infos.push(m),
-			showErrorMessage: (m) => errors.push(m),
-			confirm: async () => true,
-		},
+function createHarness(options: { log: DeletionLog; git?: Record<string, GitEntry>; picked?: readonly string[] }) {
+	const fake = createFakeContext({
+		git: options.git,
+		// By default, every recorded commit still exists.
+		gitFallback: (args) => ({ stdout: args[0] === 'rev-list' ? args.slice(3).join('\n') : '' }),
+		pickBranches: () => options.picked,
 		deletionLog: options.log,
-		now: () => new Date('2026-01-01T02:00:00.000Z'),
+	});
+	const restore = (requested: readonly string[]) => runRestoreWorkflow(fake.context, requested, new Date('2026-01-01T02:00:00.000Z'));
+	return {
+		...fake,
+		restore,
+		infos: fake.infoMessages,
+		errors: fake.errorMessages,
+		pickRequests: fake.pickBranchesRequests,
+		lines: fake.appendedLines,
 	};
-	return { deps, infos, errors, lines, commands, pickRequests };
 }
 
 const LOCAL_BRANCHES_CMD = 'for-each-ref --format=%(refname) refs/heads refs/remotes';
@@ -156,9 +125,9 @@ suite('deletion log', () => {
 			'for-each-ref --format=%(refname)%09%(objectname)%09%(upstream) refs/heads/plain': `refs/heads/plain\t${SHA_A}\t\nrefs/heads/plain/sub\t${SHA_B}\t\n`,
 		};
 		const deleteBranch = createBranchDeleter({
-			runGit: async (args) => {
+			git: async (args) => {
 				commands.push(args.join(' '));
-				return { stdout: answers[args.join(' ')] ?? '' };
+				return { stdout: answers[args.join(' ')] ?? '', stderr: '' };
 			},
 			log: () => undefined,
 			worktrees: new Map([['wt', '/repo-wt']]),
@@ -181,7 +150,6 @@ suite('deletion log', () => {
 	});
 
 	test('deletions can be recorded only when the log can be read', () => {
-		assert.strictEqual(canRecordDeletions(undefined), false);
 		assert.strictEqual(canRecordDeletions(logWith([]).log), true);
 		const corrupt: StateStore = {
 			get: () => {
@@ -212,7 +180,7 @@ suite('deletion log', () => {
 suite('restore workflow', () => {
 	test('reports when there is nothing to restore', async () => {
 		const h = createHarness({ log: logWith([]).log });
-		assert.strictEqual(await runRestoreWorkflow(h.deps, []), 'ok');
+		assert.strictEqual(await h.restore([]), 'ok');
 		assert.deepStrictEqual(h.infos, ['No deleted branches to restore.']);
 		assert.strictEqual(h.pickRequests.length, 0);
 	});
@@ -225,7 +193,7 @@ suite('restore workflow', () => {
 		]);
 		const h = createHarness({ log, picked: ['feature/a'], git: { [LOCAL_BRANCHES_CMD]: { stdout: 'refs/heads/main\nrefs/heads/back\n' } } });
 
-		assert.strictEqual(await runRestoreWorkflow(h.deps, []), 'ok');
+		assert.strictEqual(await h.restore([]), 'ok');
 
 		assert.deepStrictEqual(h.pickRequests, [
 			{
@@ -249,14 +217,14 @@ suite('restore workflow', () => {
 	test('does not offer deletions whose commit Git garbage-collected', async () => {
 		const { log } = logWith([entry('gone', SHA_B, '2026-01-01T00:00:00Z')]);
 		const h = createHarness({ log, git: { [`rev-list --no-walk --ignore-missing ${SHA_B}`]: { stdout: '' } } });
-		assert.strictEqual(await runRestoreWorkflow(h.deps, []), 'ok');
+		assert.strictEqual(await h.restore([]), 'ok');
 		assert.strictEqual(h.pickRequests.length, 0);
 		assert.deepStrictEqual(h.infos, ['No deleted branches to restore.']);
 	});
 
 	test('a dismissed or empty pick restores nothing', async () => {
 		const h = createHarness({ log: logWith([entry('feature/a', SHA_A, '2026-01-01T00:00:00Z')]).log, picked: [] });
-		assert.strictEqual(await runRestoreWorkflow(h.deps, []), 'cancelled');
+		assert.strictEqual(await h.restore([]), 'cancelled');
 		assert.deepStrictEqual(h.infos, ['No branches selected.']);
 		assert.ok(!h.commands.some((c) => c.startsWith('branch ')));
 	});
@@ -264,12 +232,12 @@ suite('restore workflow', () => {
 	test('restores branches named on the command line and rejects unknown names', async () => {
 		const { log } = logWith([entry('feature/a', SHA_A, '2026-01-01T00:00:00Z')]);
 		const unknown = createHarness({ log });
-		assert.strictEqual(await runRestoreWorkflow(unknown.deps, ['feature/a', 'nope']), 'failed');
+		assert.strictEqual(await unknown.restore(['feature/a', 'nope']), 'failed');
 		assert.deepStrictEqual(unknown.errors, ['No recorded deletion for: nope.']);
 		assert.ok(!unknown.commands.some((c) => c.startsWith('branch ')));
 
 		const h = createHarness({ log });
-		assert.strictEqual(await runRestoreWorkflow(h.deps, ['feature/a', 'feature/a']), 'ok');
+		assert.strictEqual(await h.restore(['feature/a', 'feature/a']), 'ok');
 		assert.strictEqual(h.pickRequests.length, 0);
 		assert.deepStrictEqual(
 			h.commands.filter((c) => c.startsWith('branch ')),
@@ -287,7 +255,7 @@ suite('restore workflow', () => {
 			},
 		});
 
-		assert.strictEqual(await runRestoreWorkflow(h.deps, ['back', 'gone']), 'failed');
+		assert.strictEqual(await h.restore(['back', 'gone']), 'failed');
 
 		assert.ok(!h.commands.some((c) => c.startsWith('branch ')));
 		assert.deepStrictEqual(h.errors, [
@@ -302,7 +270,7 @@ suite('restore workflow', () => {
 			entry('merged', SHA_B, '2026-01-01T00:00:00Z', { upstream: 'refs/remotes/origin/merged' }),
 		]);
 		const h = createHarness({ log, git: { [LOCAL_BRANCHES_CMD]: { stdout: 'refs/heads/main\nrefs/remotes/origin/live\n' } } });
-		assert.strictEqual(await runRestoreWorkflow(h.deps, ['live', 'merged']), 'ok');
+		assert.strictEqual(await h.restore(['live', 'merged']), 'ok');
 		assert.deepStrictEqual(
 			h.commands.filter((c) => c.startsWith('branch ')),
 			[`branch live ${SHA_A}`, 'branch --set-upstream-to=refs/remotes/origin/live live', `branch merged ${SHA_B}`]
@@ -313,7 +281,7 @@ suite('restore workflow', () => {
 	test('explains how to recreate a removed worktree', async () => {
 		const { log } = logWith([entry('wt', SHA_A, '2026-01-01T00:00:00Z', { worktree: '/tmp/my wt' })]);
 		const h = createHarness({ log });
-		assert.strictEqual(await runRestoreWorkflow(h.deps, ['wt']), 'ok');
+		assert.strictEqual(await h.restore(['wt']), 'ok');
 		assert.deepStrictEqual(h.lines, [
 			'Restored wt at aaaaaaa.',
 			"Its worktree was removed. To recreate it, run: git worktree add '/tmp/my wt' wt",

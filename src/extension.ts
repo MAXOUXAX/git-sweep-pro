@@ -1,12 +1,13 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { EXIT, settingsToCliArgs } from './cli/args';
+import { EXIT, modeToCliArgs, settingsToCliArgs } from './cli/args';
 import { runGitCommand } from './core/git-command';
-import { orderModeActions, resolveSweepModeAction, type SweepModeSetting, type SweepSettings } from './core/sweep-logic';
-import { resolveTargetRepository, resolveWorkspaceRoot, type RepositoryResolution } from './core/workspace';
+import type { SweepMode, SweepSettings } from './core/sweep-logic';
 import { runCliProcess } from './vscode/cli-client';
 import { createVscodeHostUi } from './vscode/host-ui';
+import { orderModeActions, resolveSweepModeAction } from './vscode/sweep-mode';
 import { applyTerminalPath } from './vscode/terminal-path';
+import { resolveTargetRepository, resolveWorkspaceRoot, type RepositoryResolution } from './vscode/workspace';
 
 const OUTPUT_CHANNEL_NAME = 'Git Sweep';
 const LAST_REPO_STATE_KEY = 'gitSweepPro.lastSelectedRepo';
@@ -14,14 +15,15 @@ const SHOW_OUTPUT = 'Show output';
 /** Compiled CLI entry point, next to this file in both out/ and dist/. */
 const CLI_PATH = path.join(__dirname, 'cli', 'main.js');
 
+const config = () => vscode.workspace.getConfiguration('gitSweepPro');
+
 function getSweepSettings(): SweepSettings {
-	const config = vscode.workspace.getConfiguration('gitSweepPro');
+	const settings = config();
 	return {
-		defaultMode: config.get<SweepModeSetting>('defaultMode', 'safeDelete'),
-		protectedBranches: config.get<string[]>('protectedBranches', []),
-		autoFetchPrune: config.get<boolean>('autoFetchPrune', true),
-		confirmBeforeDelete: config.get<boolean>('confirmBeforeDelete', true),
-		includeMergedBranches: config.get<boolean>('includeMergedBranches', false),
+		protectedBranches: settings.get<string[]>('protectedBranches', []),
+		autoFetchPrune: settings.get<boolean>('autoFetchPrune', true),
+		confirmBeforeDelete: settings.get<boolean>('confirmBeforeDelete', true),
+		includeMergedBranches: settings.get<boolean>('includeMergedBranches', false),
 	};
 }
 
@@ -80,6 +82,7 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 		const cliArgs = [...args, ...settingsToCliArgs(getSweepSettings())];
+		outputChannel.show(true);
 		outputChannel.appendLine(`> git-sweep-pro ${cliArgs.join(' ')}`);
 		const { exitCode, errorShown } = await runCliProcess({
 			nodePath: process.execPath,
@@ -125,11 +128,11 @@ export function activate(context: vscode.ExtensionContext) {
 			const action = await vscode.window.showInformationMessage(
 				'Git Sweep Pro: Choose execution mode',
 				{ modal: true },
-				...orderModeActions(getSweepSettings().defaultMode)
+				...orderModeActions(config().get<SweepMode>('defaultMode', 'safeDelete'))
 			);
 			const mode = resolveSweepModeAction(action);
 			if (mode) {
-				await runCli(root, ['sweep', ...(mode.dryRun ? ['--dry-run'] : mode.forceDelete ? ['--force'] : [])]);
+				await runCli(root, ['sweep', ...modeToCliArgs(mode)]);
 			}
 		}),
 		registerRepoCommand('git-sweep-pro.dryRun', (root) => runCli(root, ['sweep', '--dry-run'])),

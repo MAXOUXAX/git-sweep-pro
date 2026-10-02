@@ -1,3 +1,5 @@
+import type { WorkflowUi } from './workflow';
+
 export type BranchItem = {
 	readonly label: string;
 	readonly ref: string;
@@ -74,9 +76,47 @@ export function branchPickLabel(item: BranchItem): string {
 	return item.isRemote ? `${item.label} (remote)` : item.label;
 }
 
-/** Finds the branch whose {@link branchPickLabel} matches a picked label. */
-export function findBranchByPickLabel(items: readonly BranchItem[], label: string): BranchItem | undefined {
-	return items.find((item) => branchPickLabel(item) === label);
+export type ChooseBranchOptions = {
+	/** Branch named on the command line: a local branch, or a remote-tracking ref such as "origin/main". */
+	readonly requested: string | undefined;
+	readonly title: string;
+	readonly placeholder: string;
+	readonly describe: (branch: BranchItem) => string | undefined;
+	/** The default choice. */
+	readonly preferred?: BranchItem;
+};
+
+/**
+ * The branch to switch to or sync with: the one requested, otherwise the one
+ * picked. Resolves to `undefined` when the picker is dismissed, and throws
+ * when the requested branch does not exist.
+ */
+export async function chooseBranch(
+	ui: WorkflowUi,
+	branches: readonly BranchItem[],
+	{ requested, title, placeholder, describe, preferred }: ChooseBranchOptions
+): Promise<BranchItem | undefined> {
+	if (requested !== undefined) {
+		const named = branches.find((branch) => branch.ref === requested);
+		if (!named) {
+			throw new Error(`Branch "${requested}" is not available. Choose one of: ${branches.map(branchPickLabel).join(', ')}`);
+		}
+		return named;
+	}
+
+	const items = branches.map((branch) => {
+		const description = describe(branch);
+		return { label: branchPickLabel(branch), ...(description && { description }), ...(branch === preferred && { picked: true }) };
+	});
+	const label = await ui.pickBranch({ items, title, placeholder });
+	if (label === undefined) {
+		return undefined;
+	}
+	const picked = branches.find((branch) => branchPickLabel(branch) === label);
+	if (!picked) {
+		throw new Error(`Unknown branch picked: ${label}`);
+	}
+	return picked;
 }
 
 /**

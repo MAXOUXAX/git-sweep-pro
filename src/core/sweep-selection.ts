@@ -1,25 +1,18 @@
 import type { SweepMode } from './sweep-logic';
-
-/** A branch entry in the multi-select picker together with its checked state. */
-export type SelectableBranch = {
-	readonly label: string;
-	readonly picked: boolean;
-	/** Extra context shown next to the branch (e.g. the worktree it is checked out in). */
-	readonly description?: string;
-};
+import type { PickItem } from './workflow';
 
 /** Marks every branch as selected. */
-export function selectAll(items: readonly SelectableBranch[]): SelectableBranch[] {
+export function selectAll(items: readonly PickItem[]): PickItem[] {
 	return items.map((item) => ({ ...item, picked: true }));
 }
 
 /** Clears the selection so no branch is checked. */
-export function clearAll(items: readonly SelectableBranch[]): SelectableBranch[] {
+export function clearAll(items: readonly PickItem[]): PickItem[] {
 	return items.map((item) => ({ ...item, picked: false }));
 }
 
 /** Toggles each branch's checked state. */
-export function invertSelection(items: readonly SelectableBranch[]): SelectableBranch[] {
+export function invertSelection(items: readonly PickItem[]): PickItem[] {
 	return items.map((item) => ({ ...item, picked: !item.picked }));
 }
 
@@ -28,10 +21,7 @@ export function invertSelection(items: readonly SelectableBranch[]): SelectableB
  * in Git: `dry run`, `safe delete (-d)`, or `force delete (-D)`.
  */
 export function describeSweepMode(mode: SweepMode): string {
-	if (mode.dryRun) {
-		return 'dry run';
-	}
-	return mode.forceDelete ? 'force delete (-D)' : 'safe delete (-d)';
+	return { dryRun: 'dry run', safeDelete: 'safe delete (-d)', forceDelete: 'force delete (-D)' }[mode];
 }
 
 export type SweepSummary = {

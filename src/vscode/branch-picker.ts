@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { clearAll, invertSelection, selectAll, type SelectableBranch } from '../core/sweep-selection';
+import { clearAll, invertSelection, selectAll } from '../core/sweep-selection';
+import type { PickItem } from '../core/workflow';
 
 /**
  * Presents a multi-select branch picker with title-bar quick actions (select
@@ -7,7 +8,7 @@ import { clearAll, invertSelection, selectAll, type SelectableBranch } from '../
  * branches, or `undefined` when the picker is dismissed without accepting.
  */
 export function pickBranchesWithActions(options: {
-	readonly items: readonly SelectableBranch[];
+	readonly items: readonly PickItem[];
 	readonly title: string;
 }): Promise<readonly string[] | undefined> {
 	return new Promise((resolve) => {
@@ -16,9 +17,7 @@ export function pickBranchesWithActions(options: {
 		quickPick.ignoreFocusOut = true;
 		quickPick.matchOnDescription = true;
 		quickPick.title = options.title;
-		quickPick.placeholder = options.items.every((item) => item.picked)
-			? 'All stale tracked branches are pre-selected. Use the title-bar actions to select all, clear, or invert.'
-			: 'Branches checked out in another worktree are not pre-selected; selecting one removes its worktree. Use the title-bar actions to select all, clear, or invert.';
+		quickPick.placeholder = 'Use the title-bar actions to select all, clear, or invert.';
 
 		const selectAllButton: vscode.QuickInputButton = {
 			iconPath: new vscode.ThemeIcon('check-all'),
@@ -34,7 +33,7 @@ export function pickBranchesWithActions(options: {
 		};
 		quickPick.buttons = [selectAllButton, clearAllButton, invertButton];
 
-		const applySelection = (next: readonly SelectableBranch[]): void => {
+		const applySelection = (next: readonly PickItem[]): void => {
 			const pickedLabels = new Set(next.filter((entry) => entry.picked).map((entry) => entry.label));
 			quickPick.selectedItems = quickPick.items.filter((item) => pickedLabels.has(item.label));
 		};
@@ -42,7 +41,7 @@ export function pickBranchesWithActions(options: {
 		quickPick.items = options.items.map((item) => ({ label: item.label, description: item.description }));
 		applySelection(options.items);
 
-		const currentSelection = (): SelectableBranch[] => {
+		const currentSelection = (): PickItem[] => {
 			const selectedLabels = new Set(quickPick.selectedItems.map((item) => item.label));
 			return quickPick.items.map((item) => ({ label: item.label, picked: selectedLabels.has(item.label) }));
 		};

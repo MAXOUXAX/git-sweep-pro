@@ -33,7 +33,6 @@ export function createRpcFrontend(io: CliIo): Frontend {
 		canPrompt: true,
 		trace: log,
 		output: {
-			show: (preserveFocus) => send({ type: 'showOutput', preserveFocus }),
 			appendLine: log,
 			header: log,
 		},
@@ -47,7 +46,7 @@ export function createRpcFrontend(io: CliIo): Frontend {
 					send({ type: 'progressEnd', id });
 				}
 			},
-			showQuickPick: (...params) => request({ method: 'showQuickPick', params }),
+			pickBranch: (...params) => request({ method: 'pickBranch', params }),
 			pickBranches: (...params) => request({ method: 'pickBranches', params }),
 			showInformationMessage: (...params) => send({ type: 'notify', method: 'showInformationMessage', params }),
 			showErrorMessage: (...params) => send({ type: 'notify', method: 'showErrorMessage', params }),

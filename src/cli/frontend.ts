@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import type { NoticeOptions, QuickPickItemLike, SweepWorkflowDeps, WorkflowOutcome, WorkflowUi } from '../core/sweep-workflow';
+import type { NoticeOptions, WorkflowOutcome, WorkflowOutput, WorkflowUi } from '../core/workflow';
 import type { CliOptions } from './args';
 import type { CliIo } from './io';
 import type { Prompter } from './prompter';
@@ -10,8 +10,7 @@ export type Frontend = {
 	readonly ui: WorkflowUi;
 	/** True when someone answers the prompts; otherwise (pipes, --yes) they take their defaults. */
 	readonly canPrompt: boolean;
-	/** Workflow output: the "Git Sweep" output channel in VS Code. */
-	readonly output: SweepWorkflowDeps['output'];
+	readonly output: WorkflowOutput;
 	/** Every git command and its output. */
 	readonly trace: (line: string) => void;
 	readonly intro?: (title: string) => void;
@@ -21,12 +20,6 @@ export type Frontend = {
 export type TerminalOptions = {
 	/** Accept pre-selected branches and answer yes to every confirmation. */
 	readonly yes: boolean;
-	/**
-	 * Answer for the (single) branch picker, given on the command line
-	 * (`post-pr main`, `sync origin/main`). Matches a local branch label or a
-	 * remote one shown as "<ref> (remote)".
-	 */
-	readonly presetPick: string | undefined;
 	/** Show git traces and session headers, without spinners so traces are not interleaved with them. */
 	readonly verbose: boolean;
 };
@@ -39,7 +32,7 @@ export async function createFrontend(options: CliOptions, io: CliIo): Promise<Fr
 	if (options.rpc) {
 		return createRpcFrontend(io);
 	}
-	const terminal: TerminalOptions = { yes: options.yes, presetPick: options.positionals[0], verbose: options.verbose };
+	const terminal: TerminalOptions = { yes: options.yes, verbose: options.verbose };
 	if (io.interactive && io.loadPrompter) {
 		return createInteractiveFrontend(io, terminal, await io.loadPrompter());
 	}
@@ -70,15 +63,6 @@ function notice(message: string, options?: NoticeOptions): string {
 	return options?.dryRun ? `Dry run: ${message}` : message;
 }
 
-/** The picker item named on the command line; failing to find it fails the workflow. */
-function findPresetPick(items: readonly QuickPickItemLike[], preset: string): QuickPickItemLike {
-	const match = items.find((item) => item.label === preset || item.label === `${preset} (remote)`);
-	if (!match) {
-		throw new Error(`Branch "${preset}" is not available. Choose one of: ${items.map((i) => i.label).join(', ')}`);
-	}
-	return match;
-}
-
 /**
  * Plain text for pipes and CI. Every prompt takes a safe default so the CLI
  * never blocks: pickers keep their pre-selection and confirmations are
@@ -89,7 +73,6 @@ export function createPlainFrontend(io: CliIo, options: TerminalOptions): Fronte
 		canPrompt: false,
 		trace: traceTo(io, options),
 		output: {
-			show: () => undefined,
 			appendLine: (line) => io.stderr(`${pc.dim(line)}\n`),
 			header: (line) => {
 				if (options.verbose) {
@@ -102,15 +85,12 @@ export function createPlainFrontend(io: CliIo, options: TerminalOptions): Fronte
 				printProgress(io, progress.title);
 				return task();
 			},
-			showQuickPick: async (items, pickOptions) => {
-				if (options.presetPick !== undefined) {
-					return findPresetPick(items, options.presetPick);
-				}
+			pickBranch: async ({ items, title }) => {
 				const preselected = items.find((item) => item.picked);
 				if (!preselected) {
-					throw new Error(`${pickOptions.title}: no default available; pass the branch as an argument.`);
+					throw new Error(`${title}: no default available; pass the branch as an argument.`);
 				}
-				return preselected;
+				return preselected.label;
 			},
 			pickBranches: async ({ items }) => items.filter((item) => item.picked).map((item) => item.label),
 			showInformationMessage: (message, notification) => io.stdout(`${notice(message, notification)}\n`),
@@ -133,7 +113,6 @@ export function createInteractiveFrontend(io: CliIo, options: TerminalOptions, p
 		canPrompt: !options.yes,
 		trace: traceTo(io, options),
 		output: {
-			show: () => undefined,
 			appendLine: (line) => prompter.detail(line),
 			header: (line) => {
 				if (options.verbose) {
@@ -151,17 +130,14 @@ export function createInteractiveFrontend(io: CliIo, options: TerminalOptions, p
 				}
 				return prompter.spin(progress.title, task);
 			},
-			showQuickPick: async (items, pickOptions) => {
-				if (options.presetPick !== undefined) {
-					return findPresetPick(items, options.presetPick);
-				}
+			pickBranch: async ({ items, title }) => {
 				const defaultIndex = items.findIndex((item) => item.picked);
 				const index = await prompter.select(
-					pickOptions.title,
+					title,
 					items.map((item, value) => ({ value, label: item.label, hint: item.description })),
 					defaultIndex >= 0 ? defaultIndex : undefined
 				);
-				return index === undefined ? undefined : items[index];
+				return index === undefined ? undefined : items[index].label;
 			},
 			pickBranches: async ({ items, title }) => {
 				if (options.yes) {

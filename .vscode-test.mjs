@@ -37,7 +37,7 @@ fs.writeFileSync(
 export default defineConfig([
 	{
 		label: 'unit',
-		files: ['out/test/*.test.js', 'out/test/core/**/*.test.js', 'out/test/cli/**/*.test.js'],
+		files: ['out/test/*.test.js', 'out/test/core/**/*.test.js', 'out/test/cli/**/*.test.js', 'out/test/vscode/**/*.test.js'],
 		launchArgs: [
 			`--user-data-dir=${userDataDir}`,
 			`--extensions-dir=${extensionsDir}`,

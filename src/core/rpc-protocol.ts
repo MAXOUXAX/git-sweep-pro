@@ -1,4 +1,4 @@
-import type { WorkflowUi } from './sweep-workflow';
+import type { WorkflowUi } from './workflow';
 
 /**
  * Wire protocol between the `git-sweep-pro` CLI running with `--rpc` and a
@@ -13,7 +13,7 @@ import type { WorkflowUi } from './sweep-workflow';
  */
 
 /** The {@link WorkflowUi} calls the host answers. */
-export type PromptMethod = 'showQuickPick' | 'pickBranches' | 'confirm';
+export type PromptMethod = 'pickBranch' | 'pickBranches' | 'confirm';
 /** The {@link WorkflowUi} calls the host only displays. */
 export type NotifyMethod = 'showInformationMessage' | 'showErrorMessage';
 type HostCalls = Pick<WorkflowUi, PromptMethod | NotifyMethod>;
@@ -28,7 +28,6 @@ export type UiCall<K extends CallMethod = CallMethod> = {
 
 export type CliEvent =
 	| { readonly type: 'log'; readonly line: string }
-	| { readonly type: 'showOutput'; readonly preserveFocus: boolean }
 	| { readonly type: 'progressStart'; readonly id: number; readonly title: string }
 	| { readonly type: 'progressEnd'; readonly id: number }
 	| ({ readonly type: 'notify' } & UiCall<NotifyMethod>)
@@ -44,5 +43,4 @@ export type HostResponse<K extends PromptMethod = PromptMethod> = {
 /** The UI a host provides to a CLI run: the workflow prompts plus the output channel. */
 export type HostUi = WorkflowUi & {
 	readonly log: (line: string) => void;
-	readonly showOutput: (preserveFocus: boolean) => void;
 };

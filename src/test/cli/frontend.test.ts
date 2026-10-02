@@ -1,17 +1,14 @@
 import * as assert from 'assert';
 import { parseArgs } from '../../cli/args';
 import { createFrontend, createInteractiveFrontend, createPlainFrontend, type TerminalOptions } from '../../cli/frontend';
-import type { QuickPickOptionsLike } from '../../core/sweep-workflow';
 import { createFakePrompter } from './fake-prompter';
 import { createFakeIo } from './git-fixture';
 
-const pickOptions: QuickPickOptionsLike = {
-	canPickMany: false,
-	ignoreFocusOut: true,
-	matchOnDescription: true,
+const pick = (items: readonly { label: string; description?: string; picked?: boolean }[]) => ({
+	items,
 	title: 'Choose a branch',
-	placeHolder: '',
-};
+	placeholder: '',
+});
 
 const branchItems = [
 	{ label: 'a', picked: true },
@@ -19,7 +16,7 @@ const branchItems = [
 	{ label: 'c', picked: false },
 ];
 
-const plain: TerminalOptions = { yes: false, presetPick: undefined, verbose: false };
+const plain: TerminalOptions = { yes: false, verbose: false };
 
 suite('cli front ends', () => {
 	suite('createFrontend', () => {
@@ -97,21 +94,12 @@ suite('cli front ends', () => {
 			assert.deepStrictEqual(await ui.pickBranches({ items: branchItems, title: 't' }), ['a', 'b']);
 		});
 
-		test('showQuickPick falls back to the pre-picked item, or fails without one', async () => {
+		test('pickBranch falls back to the pre-picked item, or fails without one', async () => {
 			const { ui } = createPlainFrontend(createFakeIo('/repo'), plain);
-			const items = [{ label: 'dev' }, { label: 'main', picked: true }];
-			assert.deepStrictEqual(await ui.showQuickPick(items, pickOptions), items[1]);
-			await assert.rejects(async () => ui.showQuickPick([{ label: 'dev' }], pickOptions), /no default available/);
+			assert.strictEqual(await ui.pickBranch(pick([{ label: 'dev' }, { label: 'main', picked: true }])), 'main');
+			await assert.rejects(async () => ui.pickBranch(pick([{ label: 'dev' }])), /no default available/);
 		});
 
-		test('showQuickPick uses the preset branch, matching remote labels too', async () => {
-			const items = [{ label: 'main' }, { label: 'origin/dev (remote)' }];
-			const io = createFakeIo('/repo');
-			assert.deepStrictEqual(await createPlainFrontend(io, { ...plain, presetPick: 'origin/dev' }).ui.showQuickPick(items, pickOptions), items[1]);
-
-			const missing = createPlainFrontend(io, { ...plain, presetPick: 'nope' });
-			await assert.rejects(async () => missing.ui.showQuickPick(items, pickOptions), /Branch "nope" is not available/);
-		});
 	});
 
 	suite('interactive (prompter)', () => {
@@ -165,15 +153,15 @@ suite('cli front ends', () => {
 			assert.deepStrictEqual(yes.calls, []);
 		});
 
-		test('showQuickPick selects with the pre-picked item as initial value', async () => {
+		test('pickBranch selects with the pre-picked item as initial value', async () => {
 			const items = [{ label: 'dev', description: 'local' }, { label: 'main', picked: true }];
 			const { prompter, seen } = createFakePrompter({ select: 0 });
-			assert.deepStrictEqual(await createInteractiveFrontend(interactiveIo(), plain, prompter).ui.showQuickPick(items, pickOptions), items[0]);
+			assert.strictEqual(await createInteractiveFrontend(interactiveIo(), plain, prompter).ui.pickBranch(pick(items)), 'dev');
 			assert.strictEqual(seen.initial, 1);
 			assert.strictEqual(seen.options?.[0].hint, 'local');
 
 			const cancelled = createFakePrompter();
-			assert.strictEqual(await createInteractiveFrontend(interactiveIo(), plain, cancelled.prompter).ui.showQuickPick(items, pickOptions), undefined);
+			assert.strictEqual(await createInteractiveFrontend(interactiveIo(), plain, cancelled.prompter).ui.pickBranch(pick(items)), undefined);
 		});
 
 		test('confirm only proceeds on an explicit yes, or with --yes', async () => {

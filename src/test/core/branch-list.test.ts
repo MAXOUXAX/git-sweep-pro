@@ -1,5 +1,6 @@
 import * as assert from 'assert';
-import { branchPickLabel, findBranchByPickLabel, findOtherWorktreeBranch, localBranchName, parseBranches, splitRemoteRef, type BranchItem } from '../../core/branch-list';
+import { branchPickLabel, chooseBranch, findOtherWorktreeBranch, localBranchName, parseBranches, splitRemoteRef, type BranchItem } from '../../core/branch-list';
+import { createFakeContext } from '../fake-context';
 
 suite('branch-list parseBranches', () => {
 	test('parses local branches', () => {
@@ -198,11 +199,53 @@ suite('branch helpers', () => {
 		assert.strictEqual(localBranchName(remote), 'feature/x');
 	});
 
-	test('branchPickLabel and findBranchByPickLabel round-trip', () => {
+	test('branchPickLabel marks remote refs', () => {
 		assert.strictEqual(branchPickLabel(local), 'feature/x');
 		assert.strictEqual(branchPickLabel(remote), 'origin/feature/x (remote)');
-		assert.strictEqual(findBranchByPickLabel([local, remote], 'origin/feature/x (remote)'), remote);
-		assert.strictEqual(findBranchByPickLabel([local, remote], 'nope'), undefined);
+	});
+});
+
+suite('branch-list chooseBranch', () => {
+	const main: BranchItem = { label: 'main', ref: 'main', isRemote: false };
+	const originMain: BranchItem = { label: 'origin/main', ref: 'origin/main', isRemote: true };
+	const branches = [main, originMain];
+	const choose = (pick: string | undefined, requested?: string) => {
+		const fake = createFakeContext({ pick: [pick] });
+		const choice = chooseBranch(fake.context.ui, branches, {
+			requested,
+			title: 'Switch to',
+			placeholder: 'Pick one',
+			describe: (branch) => (branch.isRemote ? 'remote' : undefined),
+			preferred: originMain,
+		});
+		return { choice, fake };
+	};
+
+	test('offers every branch, with its description and the preferred one picked', async () => {
+		const { choice, fake } = choose('origin/main (remote)');
+		assert.strictEqual(await choice, originMain);
+		assert.deepStrictEqual(fake.pickRequests, [
+			{
+				items: [{ label: 'main' }, { label: 'origin/main (remote)', description: 'remote', picked: true }],
+				title: 'Switch to',
+				placeholder: 'Pick one',
+			},
+		]);
+	});
+
+	test('a dismissed picker chooses nothing', async () => {
+		assert.strictEqual(await choose(undefined).choice, undefined);
+	});
+
+	test('a requested branch skips the picker, local or remote', async () => {
+		const local = choose(undefined, 'main');
+		assert.strictEqual(await local.choice, main);
+		assert.strictEqual(await choose(undefined, 'origin/main').choice, originMain);
+		assert.deepStrictEqual(local.fake.pickRequests, []);
+	});
+
+	test('an unknown requested branch fails, listing the available ones', async () => {
+		await assert.rejects(choose(undefined, 'nope').choice, /Branch "nope" is not available\. Choose one of: main, origin\/main \(remote\)/);
 	});
 });
 

@@ -1,5 +1,5 @@
 import { parseArgs as parseArgv, type ParseArgsOptionsConfig } from 'node:util';
-import type { SweepSettings } from '../core/sweep-logic';
+import type { SweepMode, SweepSettings } from '../core/sweep-logic';
 
 export const COMMANDS = ['sweep', 'list', 'post-pr', 'sync', 'resume', 'restore', 'help', 'version'] as const;
 export type CommandName = (typeof COMMANDS)[number];
@@ -10,8 +10,8 @@ export type CliOptions = {
 	readonly positionals: readonly string[];
 	/** Repository directory (`-C <path>`); defaults to the current directory. */
 	readonly cwd: string | undefined;
-	readonly dryRun: boolean;
-	readonly force: boolean;
+	/** `--dry-run`, `--force`, or a safe delete by default. */
+	readonly mode: SweepMode;
 	readonly yes: boolean;
 	readonly fetch: boolean;
 	readonly confirm: boolean;
@@ -114,8 +114,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 		command,
 		positionals: args,
 		cwd: values.cwd,
-		dryRun: values['dry-run'],
-		force: values.force,
+		mode: values.force ? 'forceDelete' : values['dry-run'] ? 'dryRun' : 'safeDelete',
 		yes: values.yes,
 		fetch: !values['no-fetch'],
 		confirm: !values['no-confirm'],
@@ -125,6 +124,13 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 		verbose: values.verbose,
 		rpc: values.rpc,
 	};
+}
+
+const MODE_FLAGS: Record<SweepMode, readonly string[]> = { dryRun: ['--dry-run'], safeDelete: [], forceDelete: ['--force'] };
+
+/** The CLI flags selecting a sweep mode. */
+export function modeToCliArgs(mode: SweepMode): string[] {
+	return [...MODE_FLAGS[mode]];
 }
 
 /** Translates sweep settings (e.g. the VS Code configuration) into CLI flags. */

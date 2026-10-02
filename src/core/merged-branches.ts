@@ -1,6 +1,6 @@
 import type { DefaultBranch } from './default-branch';
+import type { RunGit } from './git-command';
 
-type RunGit = (args: string[]) => Promise<{ stdout: string }>;
 
 /**
  * How a branch's work reached the default branch:

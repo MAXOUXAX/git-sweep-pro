@@ -6,10 +6,10 @@ import {
 	formatSweepSummary,
 	invertSelection,
 	selectAll,
-	type SelectableBranch,
 } from '../../core/sweep-selection';
+import type { PickItem } from '../../core/workflow';
 
-const items = (): SelectableBranch[] => [
+const items = (): PickItem[] => [
 	{ label: 'feature/one', picked: true },
 	{ label: 'feature/two', picked: false },
 	{ label: 'hotfix/three', picked: true },
@@ -55,11 +55,9 @@ suite('sweep selection helpers', () => {
 	});
 
 	test('describeSweepMode reports the git flags the user sees', () => {
-		assert.strictEqual(describeSweepMode({ dryRun: true, forceDelete: false }), 'dry run');
-		assert.strictEqual(describeSweepMode({ dryRun: false, forceDelete: false }), 'safe delete (-d)');
-		assert.strictEqual(describeSweepMode({ dryRun: false, forceDelete: true }), 'force delete (-D)');
-		// dryRun wins over forceDelete when both are set.
-		assert.strictEqual(describeSweepMode({ dryRun: true, forceDelete: true }), 'dry run');
+		assert.strictEqual(describeSweepMode('dryRun'), 'dry run');
+		assert.strictEqual(describeSweepMode('safeDelete'), 'safe delete (-d)');
+		assert.strictEqual(describeSweepMode('forceDelete'), 'force delete (-D)');
 	});
 
 	test('formatSweepSummary omits the zero-count lines', () => {
@@ -70,7 +68,7 @@ suite('sweep selection helpers', () => {
 			checkedOutCount: 0,
 			selectedCount: 2,
 			worktreeCount: 0,
-			mode: { dryRun: false, forceDelete: false },
+			mode: 'safeDelete',
 		});
 		assert.strictEqual(
 			summary,
@@ -86,7 +84,7 @@ suite('sweep selection helpers', () => {
 			checkedOutCount: 1,
 			selectedCount: 3,
 			worktreeCount: 1,
-			mode: { dryRun: true, forceDelete: false },
+			mode: 'dryRun',
 		});
 		assert.strictEqual(
 			summary,
