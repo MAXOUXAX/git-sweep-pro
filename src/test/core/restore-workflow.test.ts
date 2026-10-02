@@ -59,7 +59,9 @@ function createHarness(options: { log: DeletionLog; git?: Record<string, { stdou
 			if (result instanceof Error) {
 				throw result;
 			}
-			return { stdout: result?.stdout ?? '', stderr: '' };
+			// By default, every recorded commit still exists.
+			const commits = args[0] === 'rev-list' ? args.slice(3).join('\n') : '';
+			return { stdout: result?.stdout ?? commits, stderr: '' };
 		},
 		ui: {
 			withProgress: (_o, task) => task(),
@@ -210,6 +212,14 @@ suite('restore workflow', () => {
 		assert.deepStrictEqual(h.infos, ['Restored 1 branch(es): feature/a.']);
 	});
 
+	test('does not offer deletions whose commit Git garbage-collected', async () => {
+		const { log } = logWith([entry('gone', SHA_B, '2026-01-01T00:00:00Z')]);
+		const h = createHarness({ log, git: { [`rev-list --no-walk --ignore-missing ${SHA_B}`]: { stdout: '' } } });
+		assert.strictEqual(await runRestoreWorkflow(h.deps, []), 'ok');
+		assert.strictEqual(h.pickRequests.length, 0);
+		assert.deepStrictEqual(h.infos, ['No deleted branches to restore.']);
+	});
+
 	test('a dismissed or empty pick restores nothing', async () => {
 		const h = createHarness({ log: logWith([entry('feature/a', SHA_A, '2026-01-01T00:00:00Z')]).log, picked: [] });
 		assert.strictEqual(await runRestoreWorkflow(h.deps, []), 'cancelled');
@@ -239,7 +249,7 @@ suite('restore workflow', () => {
 			log,
 			git: {
 				[LOCAL_BRANCHES_CMD]: { stdout: 'refs/heads/back\n' },
-				[`cat-file -e ${SHA_B}^{commit}`]: new Error('fatal: Not a valid object name'),
+				[`rev-list --no-walk --ignore-missing ${SHA_A} ${SHA_B}`]: { stdout: `${SHA_A}\n` },
 			},
 		});
 

@@ -4,7 +4,7 @@ import { createDeletionLog, describeDeletion, type DeletionLog } from '../core/d
 import { describeGitFailure, NOT_A_REPOSITORY, toErrorMessage } from '../core/errors';
 import { runGitCommand, type CommandResult } from '../core/git-command';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
-import { findRestorableDeletions, runRestoreWorkflow } from '../core/restore-workflow';
+import { inspectDeletions, runRestoreWorkflow } from '../core/restore-workflow';
 import { findStaleBranches } from '../core/stale-branches';
 import type { SweepSettings } from '../core/sweep-logic';
 import { runSweepWorkflow, type SweepWorkflowDeps, type WorkflowOutcome } from '../core/sweep-workflow';
@@ -199,7 +199,7 @@ async function runRestore(
 	}
 
 	try {
-		const entries = await findRestorableDeletions(restoreDeps, root);
+		const entries = (await inspectDeletions(restoreDeps, root)).flatMap(({ entry, blocker }) => (blocker ? [] : [entry]));
 		if (options.json) {
 			io.stdout(`${JSON.stringify(entries, null, 2)}\n`);
 		} else if (entries.length === 0) {

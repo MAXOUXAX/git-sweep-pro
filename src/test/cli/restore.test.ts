@@ -118,6 +118,22 @@ suite('restore (real git)', function () {
 		assert.ok(io.err.join('').includes('To recreate it, run: git worktree add'));
 	});
 
+	test('a deletion whose commit Git garbage-collected is no longer offered', async () => {
+		makeGoneBranchWithCommit('feature/old');
+		await runCli(['--yes', '--force'], createFakeIo(fx.repo));
+		git(['reflog', 'expire', '--expire=now', '--all'], fx.repo);
+		git(['gc', '-q', '--prune=now'], fx.repo);
+
+		const listing = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['restore'], listing), EXIT.ok);
+		assert.ok(listing.err.join('').includes('No deleted branches to restore.'));
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['restore', 'feature/old'], io), EXIT.failed);
+		assert.match(io.err.join(''), /Could not restore feature\/old \(Git has garbage-collected its commit [0-9a-f]{7}\)\./);
+		assert.ok(!branchExists(fx.repo, 'feature/old'));
+	});
+
 	test('outside a repository restore fails clearly', async () => {
 		const io = createFakeIo(fx.dir);
 		assert.strictEqual(await runCli(['restore'], io), EXIT.failed);
