@@ -490,6 +490,10 @@ suite('sync-with-upstream workflow', () => {
 
 			await runSyncWithUpstreamWorkflow(h.deps);
 
+			assert.strictEqual(
+				h.quickPickRequests[0].items.find((item) => item.label === 'main')?.description,
+				'local, checked out in another worktree (not pulled)'
+			);
 			assert.ok(!h.commands.includes('checkout main'), 'main cannot be checked out in this worktree');
 			assert.ok(!h.commands.some((cmd) => cmd.startsWith('pull')));
 			assert.ok(h.commands.includes('rebase main'));

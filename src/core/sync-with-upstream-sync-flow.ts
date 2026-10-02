@@ -210,7 +210,7 @@ export async function runSyncFlow(deps: SyncWithUpstreamDeps): Promise<WorkflowO
 
 		const quickPickItems = branchItems.map((b) => ({
 			label: branchPickLabel(b),
-			description: b.isRemote ? undefined : 'local',
+			description: b.isRemote ? undefined : b.inOtherWorktree ? 'local, checked out in another worktree (not pulled)' : 'local',
 		}));
 
 		const selected = await deps.ui.showQuickPick(quickPickItems, {
