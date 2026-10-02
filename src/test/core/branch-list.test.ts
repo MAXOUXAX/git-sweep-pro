@@ -250,6 +250,13 @@ suite('branch-list chooseBranch', () => {
 });
 
 suite('branch-list worktrees', () => {
+	test('a plus in a branch name is not a worktree marker', () => {
+		assert.deepStrictEqual(parseBranches('  +foo\n+ +bar\n'), [
+			{ label: '+foo', ref: '+foo', isRemote: false },
+			{ label: '+bar', ref: '+bar', isRemote: false, inOtherWorktree: true },
+		]);
+	});
+
 	test('parses branches checked out in another worktree ("+" marker)', () => {
 		const items = parseBranches(['* main', '+ feature/wt', '  feature/plain', '  remotes/origin/feature/wt'].join('\n'));
 		assert.deepStrictEqual(items, [

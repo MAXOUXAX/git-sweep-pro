@@ -83,6 +83,32 @@ suite('cli process client (real git)', function () {
 		assert.deepStrictEqual(host.logs, ['[cli] fatal: boom']);
 	});
 
+	test('a child crash completes while a host prompt remains unanswered', async function () {
+		this.timeout(5000);
+		const crashingCli = path.join(fx.dir, 'crash-prompt.js');
+		fs.writeFileSync(crashingCli, `
+			console.log(JSON.stringify({ type: 'progressStart', id: 1, title: 'Running' }));
+			console.log(JSON.stringify({ type: 'request', id: 2, method: 'confirm', params: ['Continue?', 'Continue'] }));
+			setTimeout(() => process.exit(1), 100);
+		`);
+		const host = createHostUi(true);
+		let prompted = false;
+		let progressClosed = false;
+		host.ui.confirm = () => {
+			prompted = true;
+			return new Promise<boolean>(() => undefined);
+		};
+		host.ui.withProgress = async (_options, task) => {
+			const result = await task();
+			progressClosed = true;
+			return result;
+		};
+		const result = await runCliProcess({ nodePath: process.execPath, cliPath: crashingCli, cwd: fx.repo, args: [], ui: host.ui });
+		assert.deepStrictEqual(result, { exitCode: 1, errorShown: false });
+		assert.strictEqual(prompted, true);
+		assert.strictEqual(progressClosed, true);
+	});
+
 	test('reports a runtime that cannot be started', async () => {
 		const host = createHostUi(true);
 		const result = await runCliProcess({ nodePath: path.join(fx.dir, 'no-such-node'), cliPath: CLI_PATH, cwd: fx.repo, args: [], ui: host.ui });
