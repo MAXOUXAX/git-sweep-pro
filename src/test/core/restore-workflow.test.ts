@@ -96,13 +96,23 @@ suite('deletion log', () => {
 		assert.strictEqual(entries.length, MAX_DELETION_LOG_ENTRIES);
 		assert.strictEqual(entries[0].branch, `b${MAX_DELETION_LOG_ENTRIES}`);
 
-		await log.forget(entries[0]);
+		await log.forget(entries[0].branch);
 		assert.strictEqual(log.list()[0].branch, `b${MAX_DELETION_LOG_ENTRIES - 1}`);
 	});
 
-	test('ignores malformed entries and a value that is not a list', () => {
-		const valid = entry('ok', SHA_A, '2026-01-01T00:00:00Z');
+	test('forgetting a branch drops all its deletions', async () => {
 		const { log } = logWith([
+			entry('x', SHA_B, '2026-01-02T00:00:00Z'),
+			entry('y', SHA_A, '2026-01-01T12:00:00Z'),
+			entry('x', SHA_A, '2026-01-01T00:00:00Z'),
+		]);
+		await log.forget('x');
+		assert.deepStrictEqual(log.list().map((e) => e.branch), ['y']);
+	});
+
+	test('ignores malformed entries, drops them on the next write, and survives a value that is not a list', async () => {
+		const valid = entry('ok', SHA_A, '2026-01-01T00:00:00Z');
+		const { store, log } = logWith([
 			valid,
 			entry('-D', SHA_A, '2026-01-01T00:00:00Z'),
 			entry('short-sha', 'abc1234', '2026-01-01T00:00:00Z'),
@@ -111,6 +121,8 @@ suite('deletion log', () => {
 			null as unknown as DeletedBranch,
 		]);
 		assert.deepStrictEqual(log.list(), [valid]);
+		await log.forget('other');
+		assert.deepStrictEqual(store.state[DELETION_LOG_KEY], [valid]);
 		assert.deepStrictEqual(createDeletionLog(createMemoryStore({ [DELETION_LOG_KEY]: { not: 'a list' } })).list(), []);
 	});
 

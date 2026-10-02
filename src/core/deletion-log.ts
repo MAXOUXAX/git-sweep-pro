@@ -22,7 +22,8 @@ export type DeletionLog = {
 	/** Recorded deletions, newest first. */
 	list: () => readonly DeletedBranch[];
 	record: (entry: Omit<DeletedBranch, 'deletedAt'>) => Promise<void>;
-	forget: (entry: DeletedBranch) => Promise<void>;
+	/** Drops every deletion of `branch`: once restored, older deletions of that name are outdated. */
+	forget: (branch: string) => Promise<void>;
 };
 
 /** State key of the log, in the store shared by every worktree of a repository. */
@@ -54,22 +55,20 @@ function isDeletedBranch(value: unknown): value is DeletedBranch {
 	);
 }
 
-/** The deletion log, kept in `store` under {@link DELETION_LOG_KEY}. */
+/** The deletion log, kept in `store` under {@link DELETION_LOG_KEY}. Malformed entries are dropped on the next write. */
 export function createDeletionLog(store: StateStore, now: () => Date = () => new Date()): DeletionLog {
-	const read = (): unknown[] => {
+	const list = (): DeletedBranch[] => {
 		const stored = store.get<unknown>(DELETION_LOG_KEY);
-		return Array.isArray(stored) ? stored : [];
+		return Array.isArray(stored) ? stored.filter(isDeletedBranch) : [];
 	};
 	return {
-		list: () => read().filter(isDeletedBranch),
+		list,
 		record: async (entry) => {
 			const recorded: DeletedBranch = { ...entry, deletedAt: now().toISOString() };
-			await store.update(DELETION_LOG_KEY, [recorded, ...read()].slice(0, MAX_DELETION_LOG_ENTRIES));
+			await store.update(DELETION_LOG_KEY, [recorded, ...list()].slice(0, MAX_DELETION_LOG_ENTRIES));
 		},
-		forget: async (entry) => {
-			const isEntry = (e: unknown) =>
-				isDeletedBranch(e) && e.branch === entry.branch && e.sha === entry.sha && e.deletedAt === entry.deletedAt;
-			await store.update(DELETION_LOG_KEY, read().filter((e) => !isEntry(e)));
+		forget: async (branch) => {
+			await store.update(DELETION_LOG_KEY, list().filter((entry) => entry.branch !== branch));
 		},
 	};
 }

@@ -64,7 +64,7 @@ async function restoreBranch(deps: RestoreDeps, runGit: RunGit, { entry, blocker
 		);
 	}
 	try {
-		await deps.deletionLog.forget(entry);
+		await deps.deletionLog.forget(entry.branch);
 	} catch (error) {
 		deps.output.appendLine(`[warning] Could not remove ${entry.branch} from the deleted-branch log: ${toErrorMessage(error)}`);
 	}
