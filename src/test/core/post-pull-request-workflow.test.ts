@@ -521,6 +521,7 @@ suite('post-pull-request workflow', () => {
 			await runPostPullRequestWorkflow(h.deps);
 
 			assert.ok(h.commands.includes('checkout --detach origin/main'));
+			assert.ok(h.progressTitles.includes('Checking out origin/main as a detached HEAD'));
 			assert.ok(!h.commands.includes('checkout main'));
 			assert.ok(h.commands.includes('branch -D feature/merged'));
 			assert.ok(!h.commands.includes('pull'));

@@ -131,7 +131,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 
 		try {
 			await deps.ui.withProgress(
-				{ title: `Checking out ${localTarget}` },
+				{ title: detached ? `Checking out ${targetRef} as a detached HEAD` : `Checking out ${localTarget}` },
 				async () => {
 					if (detached) {
 						await runGit(['checkout', '--detach', targetRef]);
