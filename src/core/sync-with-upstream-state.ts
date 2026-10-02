@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import { describeGitFailure, toErrorMessage } from './errors';
+import type { StateStore } from './state-store';
 import type { SweepWorkflowDeps } from './sweep-workflow';
 
 export const MEMENTO_KEY = 'git-sweep-pro.syncWithUpstream.memento';
@@ -14,12 +15,6 @@ export type SyncMemento = {
 	readonly upstreamIsRemote: boolean;
 	/** Temporary branch to delete after recovery (remote branch case). */
 	readonly tempBranchToCleanup?: string;
-};
-
-/** Key-value store that keeps a paused sync across runs. Setting a key to `undefined` removes it. */
-export type StateStore = {
-	get: <T>(key: string) => T | undefined;
-	update: (key: string, value: unknown) => PromiseLike<void>;
 };
 
 export type SyncWithUpstreamDeps = SweepWorkflowDeps & {

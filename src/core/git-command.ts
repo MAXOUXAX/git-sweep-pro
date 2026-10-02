@@ -12,6 +12,11 @@ export function escapeForShell(s: string): string {
 	return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+/** Quotes `s` for a copy-pasteable shell command, only when it contains characters the shell would interpret. */
+export function quoteShellArg(s: string): string {
+	return /^[\w./@+-]+$/.test(s) ? s : escapeForShell(s);
+}
+
 /**
  * Builds a user-facing command string for display (e.g. in logs or error messages).
  * Args containing whitespace or single quotes are wrapped with escapeForShell.

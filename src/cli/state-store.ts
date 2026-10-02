@@ -1,11 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { StateStore } from '../core/sync-with-upstream-state';
+import type { StateStore } from '../core/state-store';
 
 /**
  * Persists workflow state (e.g. a sync paused on conflicts) as JSON inside the
  * repository's git directory, so a paused operation can be resumed from the
- * terminal or the editor alike. Setting a key to `undefined` removes it; the
+ * terminal or the editor alike. Concurrent runs are not locked against each
+ * other: the last write wins. Setting a key to `undefined` removes it; the
  * file is deleted once empty.
  */
 export function createFileStateStore(filePath: string): StateStore {
@@ -34,7 +35,11 @@ export function createFileStateStore(filePath: string): StateStore {
 				return;
 			}
 			fs.mkdirSync(path.dirname(filePath), { recursive: true });
-			fs.writeFileSync(filePath, `${JSON.stringify(state, null, 2)}\n`);
+			// Write a temporary file, then rename it over the state file: an
+			// interrupted run never leaves a truncated file (rename is atomic).
+			const temporary = `${filePath}.${process.pid}.tmp`;
+			fs.writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`);
+			fs.renameSync(temporary, filePath);
 		},
 	};
 }

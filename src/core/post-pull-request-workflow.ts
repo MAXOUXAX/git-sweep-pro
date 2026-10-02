@@ -1,4 +1,6 @@
+import { createBranchDeleter } from './branch-deletion';
 import { branchPickLabel, findBranchByPickLabel, findOtherWorktreeBranch, localBranchName, parseBranches, type BranchItem } from './branch-list';
+import { createDeletionRecorder } from './deletion-log';
 import { describeGitFailure, isNoUpstreamError, toErrorMessage } from './errors';
 import { escapeForShell } from './git-command';
 import { GONE_REFS_ARGS, isProtectedBranch, parseGoneBranchRefs } from './sweep-logic';
@@ -166,13 +168,18 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 		if (isProtectedBranch(currentBranch, deps.getSettings().protectedBranches)) {
 			deps.output.appendLine(`Branch "${currentBranch}" is protected; skipping deletion.`);
 		} else {
-			try {
-				await deps.ui.withProgress(
-					{ title: `Deleting branch ${currentBranch}` },
-					() => runGit(['branch', '-D', currentBranch])
-				);
+			const deleteBranch = createBranchDeleter({
+				runGit,
+				log: (line) => deps.output.appendLine(line),
+				worktrees: new Map(),
+				onDeleted: deps.deletionLog && createDeletionRecorder(deps.deletionLog, 'post-pr', deps.output.appendLine).record,
+			});
+			const result = await deps.ui.withProgress({ title: `Deleting branch ${currentBranch}` }, () =>
+				deleteBranch(currentBranch, '-D')
+			);
+			if (result === 'deleted') {
 				deps.output.appendLine(`Deleted branch: ${currentBranch}`);
-			} catch {
+			} else {
 				deps.ui.showErrorMessage(
 					`Could not delete branch "${currentBranch}". You can delete it manually with: git branch -D ${escapeForShell(currentBranch)}`
 				);
