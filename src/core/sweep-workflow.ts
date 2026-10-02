@@ -236,17 +236,16 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 		let skippedCount = 0;
 
-		// Branches whose remote is gone but that a safe delete (-d) refuses because
-		// they are "not fully merged" were almost certainly merged via squash or
-		// rebase. Their commits live under a new SHA on the base branch, so the
-		// local branch is genuinely stale. Offer a targeted force-delete.
+		// A safe delete (-d) checks the upstream, or HEAD once the upstream is
+		// gone, so it refuses branches merged via squash or rebase: their commits
+		// live under new SHAs on the base branch. Offer a targeted force-delete.
 		if (notFullyMerged.length > 0) {
 			deps.output.appendLine(
-				`${notFullyMerged.length} branch(es) were not deleted because they are not fully merged into the current branch. ` +
+				`${notFullyMerged.length} branch(es) were not deleted because Git does not see them as fully merged. ` +
 					'This is expected when a pull request was merged with a squash or rebase strategy.'
 			);
 			const confirmed = await deps.ui.confirm(
-				`${notFullyMerged.length} branch(es) are not merged into the current branch, as is usual after a squash or rebase merge. ` +
+				`${notFullyMerged.length} branch(es) are not fully merged as far as Git can tell, as is usual after a squash or rebase merge. ` +
 					`Force-delete them with git branch -D? ${undoNote(deps)}`,
 				`Force-delete ${notFullyMerged.length}`
 			);
