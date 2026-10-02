@@ -1,7 +1,7 @@
 {
   "name": "git-sweep-pro",
   "displayName": "Git Sweep Pro",
-  "description": "Safely detect and prune local Git branches whose remote upstream is gone — with dry-run previews, protected branches, and upstream sync.",
+  "description": "Safely prune the local Git branches whose remote branch is gone, from VS Code or the gsp command line, for you and your coding agents. Dry runs, protected branches, undo.",
   "repository": {
     "url": "git+https://github.com/MAXOUXAX/git-sweep-pro",
     "type": "git"
@@ -40,7 +40,10 @@
     "sync upstream",
     "force-with-lease",
     "housekeeping",
-    "cli"
+    "cli",
+    "gsp",
+    "agents",
+    "ai"
   ],
   "activationEvents": [
     "onStartupFinished"
