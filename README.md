@@ -35,7 +35,7 @@ All commands are available from the Command Palette under the **Git Sweep Pro** 
 | **Post Pull Request Cleanup** | `git-sweep-pro.postPullRequest` | Checkout a local or remote branch, then delete the previous branch, prune, run the sweep, and pull. |
 | **Sync Branch With Upstream** | `git-sweep-pro.syncWithUpstream` | Keeps your feature branch up to date with a base branch (`main`, `develop`, …): stashes local changes, pulls the base, rebases the current branch onto it, force-pushes with `--force-with-lease`, then restores the stash. Pauses on rebase conflicts. |
 | **Resume Sync With Upstream** | `git-sweep-pro.syncWithUpstreamResume` | Resumes a paused sync after you resolve rebase conflicts, or retries a failed force-push and finishes the cleanup. |
-| **Restore Deleted Branches** | `git-sweep-pro.restore` | Undo: pick among branches Git Sweep Pro deleted and recreate them at the commit they pointed to. |
+| **Restore Deleted Branches** | `git-sweep-pro.restore` | Undo: pick among the branches Git Sweep Pro deleted, and recreate them at the commit they pointed to. |
 
 ## Command line
 
@@ -52,6 +52,7 @@ git sweep-pro post-pr main    # after a merged PR: switch to main, clean up, pul
 git sweep-pro sync origin/main    # rebase onto origin/main and force-push (with lease)
 git sweep-pro sync --continue     # resume after resolving rebase conflicts
 git sweep-pro restore feature/x   # undo: recreate a branch deleted by git-sweep-pro
+git sweep-pro restore --json      # list the deletions that can be restored
 ```
 
 Outside VS Code, run it with Node.js (`node <extension dir>/dist/cli/main.js`) or install it from a checkout of this repository with `npm install -g`.
@@ -75,6 +76,7 @@ Git Sweep Pro understands [`git worktree`](https://git-scm.com/docs/git-worktree
 - **`list`** shows the worktree of each stale branch, and marks the stale branches that are checked out here or in the main worktree. With `--json`, `worktrees` maps each branch to its worktree path, and `checkedOut` lists the branches that a sweep from here skips.
 - Worktrees whose directory was deleted are pruned (`git worktree prune`) along with `git fetch -p`, so their branches become sweepable again.
 - **Post Pull Request Cleanup** in a linked worktree: when the branch to switch to (typically `main`) is checked out in another worktree, it switches to a detached HEAD at the same commit instead, then deletes the merged branch and sweeps.
+- **Restore Deleted Branches** recreates a branch whose worktree a sweep removed, and prints the `git worktree add` command that recreates the worktree.
 - **Sync With Upstream** can rebase onto a local branch checked out in another worktree (it is used as is, without pulling; pick its remote branch for the latest version). A paused sync is tracked per worktree.
 
 ## Safety model
@@ -85,7 +87,7 @@ Git Sweep Pro is built to make destructive operations feel trustworthy. It never
 - **Safe delete by default.** The default mode uses `git branch -d`, which Git itself refuses to run on branches with unmerged commits. Force delete (`git branch -D`) is opt-in per run, and is offered as a follow-up only for the specific branches a safe delete rejected.
 - **You confirm before deletion.** A confirmation dialog is shown before branches are removed (configurable via `gitSweepPro.confirmBeforeDelete`).
 - **Protected branches can never be deleted.** Configure glob patterns in `gitSweepPro.protectedBranches` to guarantee branches like `main`, `develop`, or `release/*` are excluded from every sweep.
-- **Deletions can be undone.** Every branch Git Sweep Pro deletes is recorded (name and commit) in the repository's Git directory. **Restore Deleted Branches** (`git sweep-pro restore`) recreates them, as long as Git has not garbage-collected their commits (by default two weeks after they became unreachable).
+- **Deletions can be undone.** Every branch Git Sweep Pro deletes is recorded (name, commit and upstream) in the repository's Git directory, shared by all its worktrees. **Restore Deleted Branches** (`git sweep-pro restore`) recreates them, as long as Git has not garbage-collected their commits (by default two weeks after they became unreachable). Restore never overwrites a branch whose name is in use again, and tracks the upstream again only if it still exists. The 100 most recent deletions are kept.
 - **Nothing is hidden.** Every executed command and its result is written to the `Git Sweep` output channel.
 
 ## Settings
