@@ -172,7 +172,7 @@ export async function runPostPullRequestWorkflow(deps: PostPullRequestDeps): Pro
 				runGit,
 				log: (line) => deps.output.appendLine(line),
 				worktrees: new Map(),
-				onDeleted: deps.deletionLog && createDeletionRecorder(deps.deletionLog, 'post-pr', deps.output.appendLine),
+				onDeleted: deps.deletionLog && createDeletionRecorder(deps.deletionLog, 'post-pr', deps.output.appendLine).record,
 			});
 			const result = await deps.ui.withProgress({ title: `Deleting branch ${currentBranch}` }, () =>
 				deleteBranch(currentBranch, '-D')

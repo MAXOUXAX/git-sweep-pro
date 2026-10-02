@@ -76,24 +76,28 @@ export function createDeletionLog(store: StateStore, now: () => Date = () => new
 	};
 }
 
+export type DeletionRecorder = {
+	readonly record: (deletion: Deletion) => Promise<void>;
+	/** Branches recorded so far, in deletion order. */
+	readonly recorded: readonly string[];
+};
+
 /**
  * Records each deletion in `log`, best effort: failing to write the log is
  * reported in the output but never turns a successful deletion into a failure.
- * Resolves to whether the deletion was recorded.
  */
-export function createDeletionRecorder(
-	log: DeletionLog,
-	source: DeletionSource,
-	warn: (line: string) => void
-): (deletion: Deletion) => Promise<boolean> {
-	return async (deletion) => {
-		try {
-			await log.record({ ...deletion, source });
-			return true;
-		} catch (error) {
-			warn(`[warning] Could not record the deletion of ${deletion.branch}, so it cannot be restored: ${toErrorMessage(error)}`);
-			return false;
-		}
+export function createDeletionRecorder(log: DeletionLog, source: DeletionSource, warn: (line: string) => void): DeletionRecorder {
+	const recorded: string[] = [];
+	return {
+		recorded,
+		record: async (deletion) => {
+			try {
+				await log.record({ ...deletion, source });
+				recorded.push(deletion.branch);
+			} catch (error) {
+				warn(`[warning] Could not record the deletion of ${deletion.branch}, so it cannot be restored: ${toErrorMessage(error)}`);
+			}
+		},
 	};
 }
 

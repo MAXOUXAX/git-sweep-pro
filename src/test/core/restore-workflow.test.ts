@@ -135,8 +135,9 @@ suite('deletion log', () => {
 			},
 			forget: async () => undefined,
 		};
-		const recorded = await createDeletionRecorder(failing, 'sweep', (line) => warnings.push(line))({ branch: 'x', sha: SHA_A });
-		assert.strictEqual(recorded, false);
+		const recorder = createDeletionRecorder(failing, 'sweep', (line) => warnings.push(line));
+		await recorder.record({ branch: 'x', sha: SHA_A });
+		assert.deepStrictEqual(recorder.recorded, []);
 		assert.deepStrictEqual(warnings, [
 			'[warning] Could not record the deletion of x, so it cannot be restored: EACCES: permission denied',
 		]);

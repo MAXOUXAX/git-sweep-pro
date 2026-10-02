@@ -208,28 +208,21 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			}
 		}
 
-		const record = deps.deletionLog && createDeletionRecorder(deps.deletionLog, 'sweep', deps.output.appendLine);
-		const restorable: string[] = [];
+		const recorder = deps.deletionLog && createDeletionRecorder(deps.deletionLog, 'sweep', deps.output.appendLine);
 		const deleteBranch = createBranchDeleter({
 			runGit: (args) => deps.runGitCommand(args, workspaceRoot),
 			log: (line) => deps.output.appendLine(line),
 			worktrees: worktreeOf,
-			onDeleted:
-				record &&
-				(async (deletion) => {
-					if (await record(deletion)) {
-						restorable.push(deletion.branch);
-					}
-				}),
+			onDeleted: recorder?.record,
 		});
-		const deleted: string[] = [];
+		let deletedCount = 0;
 		const notFullyMerged: string[] = [];
 		const failedBranches: string[] = [];
 
 		for (const branch of branchNames) {
 			const result = await deleteBranch(branch, describeDeleteFlag(mode));
 			if (result === 'deleted') {
-				deleted.push(branch);
+				deletedCount += 1;
 			} else if (result === 'not-fully-merged') {
 				notFullyMerged.push(branch);
 			} else {
@@ -256,7 +249,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			if (confirmed) {
 				for (const branch of notFullyMerged) {
 					if ((await deleteBranch(branch, '-D')) === 'deleted') {
-						deleted.push(branch);
+						deletedCount += 1;
 					} else {
 						failedBranches.push(branch);
 					}
@@ -267,12 +260,12 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			}
 		}
 
-		if (restorable.length > 0) {
-			deps.output.appendLine(`To restore them, run: git sweep-pro restore ${restorable.map(quoteShellArg).join(' ')}`);
+		if (recorder && recorder.recorded.length > 0) {
+			deps.output.appendLine(`To restore them, run: git sweep-pro restore ${recorder.recorded.map(quoteShellArg).join(' ')}`);
 		}
 
 		const outcome = formatSweepOutcome({
-			deleted: deleted.length,
+			deleted: deletedCount,
 			skipped: skippedCount,
 			failed: failedBranches.length,
 		});
