@@ -102,6 +102,9 @@ async function cleanupAfterSyncError(
 	tempBranchToCleanup: string | undefined,
 	hasStash: boolean
 ): Promise<void> {
+	if (!featureBranch && !tempBranchToCleanup && !hasStash) {
+		return;
+	}
 	output.appendLine(syncMessages.infoCleanupAttempted);
 	if (featureBranch) {
 		try {
@@ -172,7 +175,6 @@ export async function runSyncWorkflow(context: SyncContext, requested?: string):
 			output.header(syncMessages.outputFailed);
 			return 'failed';
 		}
-		featureBranch = currentBranch;
 
 		const branchItems = parseBranches(branchListResult.stdout);
 		if (branchItems.length === 0) {
@@ -194,11 +196,14 @@ export async function runSyncWorkflow(context: SyncContext, requested?: string):
 
 		const upstreamRef = targetItem.ref;
 
-		if (localBranchName(targetItem) === featureBranch) {
-			ui.showInformationMessage(syncMessages.cannotSyncOntoItself(featureBranch));
+		if (localBranchName(targetItem) === currentBranch) {
+			ui.showInformationMessage(syncMessages.cannotSyncOntoItself(currentBranch));
 			output.appendLine(syncMessages.operationCancelled);
 			return 'cancelled';
 		}
+
+		// From here on, a failure returns to this branch and restores the stash.
+		featureBranch = currentBranch;
 
 		// A status failure must not pass for a clean tree: proceeding without a
 		// stash would rebase over local changes, so let the outer catch abort.
