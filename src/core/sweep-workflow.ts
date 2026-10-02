@@ -1,6 +1,7 @@
+import { createBranchDeleter } from './branch-deletion';
 import { describeGitFailure, toErrorMessage } from './errors';
 import { describeCheckedOutBranch, findStaleBranches } from './stale-branches';
-import { isNotFullyMergedError, type SweepMode, type SweepSettings } from './sweep-logic';
+import type { SweepMode, SweepSettings } from './sweep-logic';
 import { formatSweepOutcome, formatSweepSummary, type SelectableBranch } from './sweep-selection';
 
 export type QuickPickItemLike = {
@@ -193,38 +194,23 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			}
 		}
 
+		const deleteBranch = createBranchDeleter({
+			runGit: (args) => deps.runGitCommand(args, workspaceRoot),
+			log: (line) => deps.output.appendLine(line),
+			worktrees: worktreeOf,
+		});
 		let deletedCount = 0;
-		const deleteFlag = describeDeleteFlag(mode);
 		const notFullyMerged: string[] = [];
 		const failedBranches: string[] = [];
 
 		for (const branch of branchNames) {
-			const worktree = worktreeOf.get(branch);
-			if (worktree) {
-				try {
-					// Without --force, Git refuses when the worktree has changes or is locked.
-					await deps.runGitCommand(['worktree', 'remove', worktree], workspaceRoot);
-					deps.output.appendLine(`Removed worktree ${worktree}`);
-				} catch (error) {
-					failedBranches.push(branch);
-					deps.output.appendLine(`[worktree-not-removed] ${branch}: could not remove worktree ${worktree}: ${toErrorMessage(error)}`);
-					continue;
-				}
-			}
-			try {
-				await deps.runGitCommand(['branch', deleteFlag, branch], workspaceRoot);
+			const result = await deleteBranch(branch, describeDeleteFlag(mode));
+			if (result === 'deleted') {
 				deletedCount += 1;
-			} catch (error) {
-				const message = toErrorMessage(error);
-				if (!mode.forceDelete && isNotFullyMergedError(message)) {
-					notFullyMerged.push(branch);
-					deps.output.appendLine(
-						`[not-fully-merged] ${branch}: commits are not reachable from the current branch (likely squash/rebase merged).`
-					);
-				} else {
-					failedBranches.push(branch);
-					deps.output.appendLine(`[delete-failed] ${branch}: ${message}`);
-				}
+			} else if (result === 'not-fully-merged') {
+				notFullyMerged.push(branch);
+			} else {
+				failedBranches.push(branch);
 			}
 		}
 
@@ -246,13 +232,10 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			);
 			if (confirmed) {
 				for (const branch of notFullyMerged) {
-					try {
-						await deps.runGitCommand(['branch', '-D', branch], workspaceRoot);
+					if ((await deleteBranch(branch, '-D')) === 'deleted') {
 						deletedCount += 1;
-					} catch (error) {
-						const message = toErrorMessage(error);
+					} else {
 						failedBranches.push(branch);
-						deps.output.appendLine(`[delete-failed] ${branch}: ${message}`);
 					}
 				}
 			} else {

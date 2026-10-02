@@ -630,6 +630,30 @@ suite('sweep workflow', () => {
 			assert.deepStrictEqual(h.infoMessages, ['Deleted 2 branch(es); 0 skipped, 0 failed.']);
 		});
 
+		test('keeps the worktree of a squash-merged branch until its force-delete is confirmed', async () => {
+			const squashed = (confirmResult: boolean) =>
+				createHarness({
+					workspaceRoot: '/repo',
+					confirmResult,
+					quickPickSelection: [{ label: 'feature/wt' }],
+					git: {
+						[GONE_REFS_CMD]: { stdout: 'feature/wt\t[gone]\t \t/work/wt' },
+						'worktree list --porcelain': { stdout: 'worktree /repo\n' },
+						'merge-base --is-ancestor feature/wt HEAD': new Error('exit code 1'),
+					},
+				});
+
+			const declined = squashed(false);
+			assert.strictEqual(await runSweepWorkflow(safeMode, declined.deps), 'ok');
+			assert.ok(!declined.commands.some((cmd) => cmd.startsWith('worktree remove') || cmd.startsWith('branch -')));
+			assert.deepStrictEqual(declined.infoMessages, ['Deleted 0 branch(es); 1 skipped, 0 failed.']);
+
+			const confirmed = squashed(true);
+			assert.strictEqual(await runSweepWorkflow(safeMode, confirmed.deps), 'ok');
+			const commands = confirmed.commands.filter((cmd) => cmd.startsWith('worktree remove') || cmd.startsWith('branch -'));
+			assert.deepStrictEqual(commands, ['worktree remove /work/wt', 'branch -D feature/wt']);
+		});
+
 		test('keeps the branch when its worktree cannot be removed', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
