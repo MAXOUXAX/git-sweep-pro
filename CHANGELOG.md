@@ -4,6 +4,24 @@ All notable changes to the "git-sweep-pro" extension are documented in this file
 
 This project adheres to [Semantic Versioning](https://semver.org) and the changelog is generated automatically from [Conventional Commits](https://www.conventionalcommits.org).
 
+# [1.3.0](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.2.0...v1.3.0) (2026-10-02)
+
+
+### Bug Fixes
+
+* address the review of the 1.3.0 release ([#19](https://github.com/MAXOUXAX/git-sweep-pro/issues/19)) ([d38e4ce](https://github.com/MAXOUXAX/git-sweep-pro/commit/d38e4cee7f527f7de25988a7fc8d9fa288fd9eae))
+* address the second review of the 1.3.0 release ([#20](https://github.com/MAXOUXAX/git-sweep-pro/issues/20)) ([9f99cf3](https://github.com/MAXOUXAX/git-sweep-pro/commit/9f99cf32659c15af15aa459aeeaaefca57870f2d))
+* handle additional release review edge cases ([#21](https://github.com/MAXOUXAX/git-sweep-pro/issues/21)) ([a6f983a](https://github.com/MAXOUXAX/git-sweep-pro/commit/a6f983a70a7ba80c3a4156b74ff268a7ffd49ed7))
+
+
+### Features
+
+* gsp, instructions for coding agents, and Homebrew install ([#17](https://github.com/MAXOUXAX/git-sweep-pro/issues/17)) ([5505a05](https://github.com/MAXOUXAX/git-sweep-pro/commit/5505a05b84562b2aa9239325c359a26da949a3bb))
+* optionally offer local branches already merged into the default branch ([#13](https://github.com/MAXOUXAX/git-sweep-pro/issues/13)) ([63d21da](https://github.com/MAXOUXAX/git-sweep-pro/commit/63d21da970e5231a45b3acbe3bc39dc84e002aea))
+* record deleted branches and add a restore (undo) command ([#12](https://github.com/MAXOUXAX/git-sweep-pro/issues/12)) ([fad672c](https://github.com/MAXOUXAX/git-sweep-pro/commit/fad672c37bdf3eca0ae109a0d0a6ba84ad5f9a6a))
+* ship a git-sweep-pro CLI and run every extension command through it ([#10](https://github.com/MAXOUXAX/git-sweep-pro/issues/10)) ([9e4c450](https://github.com/MAXOUXAX/git-sweep-pro/commit/9e4c450ef369bf0ba3f4cf5ab142f0dea8644429))
+* support git worktrees across sweep, post-PR cleanup and sync ([#11](https://github.com/MAXOUXAX/git-sweep-pro/issues/11)) ([6601421](https://github.com/MAXOUXAX/git-sweep-pro/commit/6601421ff7d19189ca3ba5f459a9550a94d708d7))
+
 # [1.2.0](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.1.0...v1.2.0) (2026-07-04)
 
 
