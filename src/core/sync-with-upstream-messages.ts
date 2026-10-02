@@ -77,5 +77,7 @@ export const syncMessages = {
 		'[info] Stash not restored and its ref could not be identified. Check "git stash list" for the "gsp-sync-with-upstream" entry.',
 	infoStashRefOnFailure: (ref: string) =>
 		`[info] Stash not restored. Recover manually: git stash list, then git stash apply ${ref} or git stash pop ${ref}`,
+	infoUpstreamInOtherWorktree: (ref: string) =>
+		`[info] ${ref} is checked out in another worktree, so it was not pulled; rebasing onto it as it is. Pick its remote branch to rebase onto the latest version.`,
 	infoCleanupAttempted: '[info] Attempting cleanup after error...',
 } as const;

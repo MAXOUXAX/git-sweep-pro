@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { branchPickLabel, findBranchByPickLabel, localBranchName, parseBranches, splitRemoteRef, type BranchItem } from '../../core/branch-list';
+import { branchPickLabel, findBranchByPickLabel, findOtherWorktreeBranch, localBranchName, parseBranches, splitRemoteRef, type BranchItem } from '../../core/branch-list';
 
 suite('branch-list parseBranches', () => {
 	test('parses local branches', () => {
@@ -203,5 +203,25 @@ suite('branch helpers', () => {
 		assert.strictEqual(branchPickLabel(remote), 'origin/feature/x (remote)');
 		assert.strictEqual(findBranchByPickLabel([local, remote], 'origin/feature/x (remote)'), remote);
 		assert.strictEqual(findBranchByPickLabel([local, remote], 'nope'), undefined);
+	});
+});
+
+suite('branch-list worktrees', () => {
+	test('parses branches checked out in another worktree ("+" marker)', () => {
+		const items = parseBranches(['* main', '+ feature/wt', '  feature/plain', '  remotes/origin/feature/wt'].join('\n'));
+		assert.deepStrictEqual(items, [
+			{ label: 'feature/wt', ref: 'feature/wt', isRemote: false, inOtherWorktree: true },
+			{ label: 'feature/plain', ref: 'feature/plain', isRemote: false },
+			{ label: 'origin/feature/wt', ref: 'origin/feature/wt', isRemote: true },
+		]);
+	});
+
+	test('findOtherWorktreeBranch resolves local and remote items', () => {
+		const items = parseBranches(['+ main', '  dev', '  remotes/origin/main', '  remotes/origin/dev'].join('\n'));
+		const [main, dev, originMain, originDev] = items;
+		assert.strictEqual(findOtherWorktreeBranch(items, main), main);
+		assert.strictEqual(findOtherWorktreeBranch(items, originMain), main);
+		assert.strictEqual(findOtherWorktreeBranch(items, dev), undefined);
+		assert.strictEqual(findOtherWorktreeBranch(items, originDev), undefined);
 	});
 });

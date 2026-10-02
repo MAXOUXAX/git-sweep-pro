@@ -3,7 +3,7 @@ import { runPostPullRequestWorkflow } from '../../core/post-pull-request-workflo
 import type { QuickPickItemLike, SweepWorkflowDeps } from '../../core/sweep-workflow';
 import { DEFAULT_SWEEP_SETTINGS, type SweepSettings } from '../../core/sweep-logic';
 
-const GONE_REFS_CMD = 'for-each-ref --format=%(refname:short)%09%(upstream:track) refs/heads';
+const GONE_REFS_CMD = 'for-each-ref --format=%(refname:short)%09%(upstream:track)%09%(HEAD)%09%(worktreepath) refs/heads';
 
 type GitEntry = { stdout?: string; stderr?: string } | Error;
 
@@ -471,5 +471,64 @@ suite('post-pull-request workflow', () => {
 
 		assert.ok(h.commands.includes('checkout feature/auth/oauth'));
 		assert.ok(h.commands.includes('branch -D team/subteam/merged-pr'));
+	});
+
+	suite('worktrees', () => {
+		const worktreeGit = {
+			...baseGit,
+			'branch --no-column -a': { stdout: ['* feature/merged', '+ main', '  remotes/origin/HEAD -> origin/main', '  remotes/origin/main'].join('\n') },
+		};
+
+		test('pre-selects the remote default when the local one is in another worktree', async () => {
+			const h = createHarness({ workspaceRoot: '/repo/wt', quickPickSelection: undefined, git: worktreeGit });
+
+			await runPostPullRequestWorkflow(h.deps);
+
+			const items = h.quickPickRequests[0].items;
+			assert.deepStrictEqual(items.find((i) => i.label === 'main'), {
+				label: 'main',
+				description: 'default, checked out in another worktree',
+				picked: false,
+			});
+			assert.strictEqual(items.find((i) => i.label === 'origin/main (remote)')?.picked, true);
+		});
+
+		test('pre-selects the default remote, not the first remote with the same branch', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo/wt',
+				quickPickSelection: undefined,
+				git: {
+					...worktreeGit,
+					'branch --no-column -a': {
+						stdout: ['* feature/merged', '+ main', '  remotes/fork/main', '  remotes/origin/HEAD -> origin/main', '  remotes/origin/main'].join('\n'),
+					},
+				},
+			});
+
+			await runPostPullRequestWorkflow(h.deps);
+
+			const picked = h.quickPickRequests[0].items.filter((item) => item.picked).map((item) => item.label);
+			assert.deepStrictEqual(picked, ['origin/main (remote)']);
+		});
+
+		test('switches to a detached HEAD, deletes the merged branch and skips the pull', async () => {
+			const h = createHarness({
+				workspaceRoot: '/repo/wt',
+				quickPickSelection: { label: 'origin/main (remote)' },
+				git: worktreeGit,
+			});
+
+			await runPostPullRequestWorkflow(h.deps);
+
+			assert.ok(h.commands.includes('checkout --detach origin/main'));
+			assert.ok(h.progressTitles.includes('Checking out origin/main as a detached HEAD'));
+			assert.ok(!h.commands.includes('checkout main'));
+			assert.ok(h.commands.includes('branch -D feature/merged'));
+			assert.ok(!h.commands.includes('pull'));
+			assert.strictEqual(
+				h.infoMessages.at(-1),
+				'Switched to a detached HEAD at origin/main because "main" is checked out in another worktree. Pull skipped.'
+			);
+		});
 	});
 });
