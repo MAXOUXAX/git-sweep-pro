@@ -92,6 +92,20 @@ suite('restore (real git)', function () {
 		assert.strictEqual(tipOf('feature/done'), sha);
 	});
 
+	test('a branch deleted while its remote branch still exists tracks it again', async () => {
+		git(['checkout', '-q', '-b', 'feature/live'], fx.repo);
+		commitFile(fx.repo, 'live.txt', 'live\n', 'live work');
+		git(['push', '-q', '-u', 'origin', 'feature/live'], fx.repo);
+
+		assert.strictEqual(await runCli(['post-pr', 'main', '--yes'], createFakeIo(fx.repo)), EXIT.ok);
+		assert.ok(!branchExists(fx.repo, 'feature/live'));
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['restore', 'feature/live'], io), EXIT.ok);
+		assert.strictEqual(git(['rev-parse', '--abbrev-ref', 'feature/live@{upstream}'], fx.repo).trim(), 'origin/feature/live');
+		assert.ok(io.err.join('').includes('It tracks origin/feature/live again.'));
+	});
+
 	test('the log is shared by all worktrees, and records removed worktrees', async () => {
 		const sha = makeGoneBranchWithCommit('feature/wt');
 		const linked = path.join(fx.dir, 'linked');

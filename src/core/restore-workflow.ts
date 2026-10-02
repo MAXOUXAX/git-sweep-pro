@@ -10,18 +10,22 @@ export type RestoreDeps = SweepWorkflowDeps & {
 
 type RunGit = (args: string[]) => Promise<{ stdout: string }>;
 
-/** A recorded deletion, and why it cannot be restored when it cannot. */
+/** A recorded deletion, checked against the repository. */
 export type RestoreCandidate = {
 	readonly entry: DeletedBranch;
+	/** Why it cannot be restored, when it cannot. */
 	readonly blocker: string | undefined;
+	/** The upstream to track again: the recorded one, if it still exists. */
+	readonly upstream: string | undefined;
 };
 
 const lineSet = (stdout: string) => new Set(stdout.split('\n').map((line) => line.trim()));
 
 /**
  * The newest recorded deletion of each branch, checked against the
- * repository: a branch whose name is in use again is never overwritten, and
- * a commit that Git garbage-collected cannot come back.
+ * repository: a branch whose name is in use again is never overwritten, a
+ * commit that Git garbage-collected cannot come back, and an upstream that
+ * was deleted is not tracked again (the next sweep would delete the branch).
  */
 export async function inspectDeletions(deps: RestoreDeps, workspaceRoot: string): Promise<RestoreCandidate[]> {
 	const entries = latestDeletions(deps.deletionLog.list());
@@ -30,7 +34,7 @@ export async function inspectDeletions(deps: RestoreDeps, workspaceRoot: string)
 	}
 	const runGit: RunGit = (args) => deps.runGitCommand(args, workspaceRoot);
 	const [refs, commits] = await Promise.all([
-		runGit(['for-each-ref', '--format=%(refname)', 'refs/heads']),
+		runGit(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes']),
 		// Prints the commits that still exist, and skips the others.
 		runGit(['rev-list', '--no-walk', '--ignore-missing', ...new Set(entries.map((entry) => entry.sha))]),
 	]);
@@ -43,11 +47,16 @@ export async function inspectDeletions(deps: RestoreDeps, workspaceRoot: string)
 			: availableCommits.has(entry.sha)
 				? undefined
 				: `Git has garbage-collected its commit ${entry.sha.slice(0, 7)}`,
+		upstream: entry.upstream && existingRefs.has(entry.upstream) ? entry.upstream : undefined,
 	}));
 }
 
 /** Recreates one branch at its recorded commit; resolves to why it could not, if it could not. */
-async function restoreBranch(deps: RestoreDeps, runGit: RunGit, { entry, blocker }: RestoreCandidate): Promise<string | undefined> {
+async function restoreBranch(
+	deps: RestoreDeps,
+	runGit: RunGit,
+	{ entry, blocker, upstream }: RestoreCandidate
+): Promise<string | undefined> {
 	if (blocker) {
 		return blocker;
 	}
@@ -58,6 +67,15 @@ async function restoreBranch(deps: RestoreDeps, runGit: RunGit, { entry, blocker
 		return toErrorMessage(error);
 	}
 	deps.output.appendLine(`Restored ${entry.branch} at ${entry.sha.slice(0, 7)}.`);
+	if (upstream) {
+		const name = upstream.replace(/^refs\/(?:remotes|heads)\//, '');
+		try {
+			await runGit(['branch', `--set-upstream-to=${upstream}`, entry.branch]);
+			deps.output.appendLine(`It tracks ${name} again.`);
+		} catch (error) {
+			deps.output.appendLine(`[warning] Could not set ${name} as the upstream of ${entry.branch}: ${toErrorMessage(error)}`);
+		}
+	}
 	if (entry.worktree) {
 		deps.output.appendLine(
 			`Its worktree was removed. To recreate it, run: git worktree add ${quoteShellArg(entry.worktree)} ${quoteShellArg(entry.branch)}`

@@ -11,12 +11,14 @@ export type DeletedBranch = {
 	readonly source: DeletionSource;
 	/** Linked worktree removed together with the branch, if any. */
 	readonly worktree?: string;
+	/** Full ref of the branch's upstream (e.g. "refs/remotes/origin/x"), if it had one. */
+	readonly upstream?: string;
 };
 
 export type DeletionSource = 'sweep' | 'post-pr';
 
 /** What the code deleting a branch knows about the deletion. */
-export type Deletion = Pick<DeletedBranch, 'branch' | 'sha' | 'worktree'>;
+export type Deletion = Omit<DeletedBranch, 'deletedAt' | 'source'>;
 
 export type DeletionLog = {
 	/** Recorded deletions, newest first. */
@@ -51,7 +53,8 @@ function isDeletedBranch(value: unknown): value is DeletedBranch {
 		typeof entry.deletedAt === 'string' &&
 		!Number.isNaN(Date.parse(entry.deletedAt)) &&
 		SOURCES.includes(entry.source as DeletionSource) &&
-		(entry.worktree === undefined || typeof entry.worktree === 'string')
+		(entry.worktree === undefined || typeof entry.worktree === 'string') &&
+		(entry.upstream === undefined || (typeof entry.upstream === 'string' && /^refs\/\S+$/.test(entry.upstream)))
 	);
 }
 

@@ -39,10 +39,14 @@ export function createBranchDeleter({ runGit, log, worktrees, onDeleted }: Branc
 		return 'not-fully-merged';
 	};
 
-	/** Tip of the branch, read right before deleting it so the recorded commit is the one deleted. */
-	const readTip = async (branch: string): Promise<string | undefined> => {
+	/** Tip and upstream of the branch, read right before deleting it so the recorded commit is the one deleted. */
+	const readBranch = async (branch: string): Promise<Pick<Deletion, 'sha' | 'upstream'> | undefined> => {
+		const ref = `refs/heads/${branch}`;
 		try {
-			return (await runGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`])).stdout.trim() || undefined;
+			// A pattern also matches the refs below it ("a" matches "a/b"): keep the exact ref.
+			const { stdout } = await runGit(['for-each-ref', '--format=%(refname)%09%(objectname)%09%(upstream)', ref]);
+			const [, sha, upstream] = stdout.split('\n').map((line) => line.split('\t')).find(([name]) => name === ref) ?? [];
+			return sha ? { sha, ...(upstream ? { upstream } : {}) } : undefined;
 		} catch {
 			return undefined;
 		}
@@ -64,7 +68,7 @@ export function createBranchDeleter({ runGit, log, worktrees, onDeleted }: Branc
 				return 'failed';
 			}
 		}
-		const sha = onDeleted ? await readTip(branch) : undefined;
+		const tip = onDeleted ? await readBranch(branch) : undefined;
 		try {
 			await runGit(['branch', flag, branch]);
 		} catch (error) {
@@ -75,8 +79,8 @@ export function createBranchDeleter({ runGit, log, worktrees, onDeleted }: Branc
 			log(`[delete-failed] ${branch}: ${message}`);
 			return 'failed';
 		}
-		if (onDeleted && sha) {
-			await onDeleted({ branch, sha, ...(removed.has(branch) ? { worktree } : {}) });
+		if (onDeleted && tip) {
+			await onDeleted({ branch, ...tip, ...(removed.has(branch) ? { worktree } : {}) });
 		} else if (onDeleted) {
 			log(`[warning] Could not read the last commit of ${branch}, so it cannot be restored.`);
 		}

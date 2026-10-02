@@ -80,7 +80,7 @@ function createHarness(options: { log: DeletionLog; git?: Record<string, { stdou
 	return { deps, infos, errors, lines, commands, pickRequests };
 }
 
-const LOCAL_BRANCHES_CMD = 'for-each-ref --format=%(refname) refs/heads';
+const LOCAL_BRANCHES_CMD = 'for-each-ref --format=%(refname) refs/heads refs/remotes';
 
 suite('deletion log', () => {
 	test('records newest first, caps its size and forgets one entry', async () => {
@@ -142,13 +142,19 @@ suite('deletion log', () => {
 		]);
 	});
 
-	test('the branch deleter reads the tip right before deleting and reports the removed worktree', async () => {
+	test('the branch deleter reads the branch right before deleting it and reports the removed worktree', async () => {
 		const commands: string[] = [];
 		const deletions: unknown[] = [];
+		const answers: Record<string, string> = {
+			'branch --format=%(refname:short) --merged HEAD --list wt': 'wt\n',
+			// A pattern also lists the refs below it.
+			'for-each-ref --format=%(refname)%09%(objectname)%09%(upstream) refs/heads/wt': `refs/heads/wt\t${SHA_B}\trefs/remotes/origin/wt\n`,
+			'for-each-ref --format=%(refname)%09%(objectname)%09%(upstream) refs/heads/plain': `refs/heads/plain\t${SHA_A}\t\nrefs/heads/plain/sub\t${SHA_B}\t\n`,
+		};
 		const deleteBranch = createBranchDeleter({
 			runGit: async (args) => {
 				commands.push(args.join(' '));
-				return { stdout: args[0] === 'rev-parse' ? `${SHA_B}\n` : args[0] === 'branch' && args[1] === '--format=%(refname:short)' ? 'wt\n' : '' };
+				return { stdout: answers[args.join(' ')] ?? '' };
 			},
 			log: () => undefined,
 			worktrees: new Map([['wt', '/repo-wt']]),
@@ -159,14 +165,14 @@ suite('deletion log', () => {
 		assert.strictEqual(await deleteBranch('plain', '-D'), 'deleted');
 		assert.deepStrictEqual(commands.slice(1), [
 			'worktree remove /repo-wt',
-			'rev-parse --verify --quiet refs/heads/wt^{commit}',
+			'for-each-ref --format=%(refname)%09%(objectname)%09%(upstream) refs/heads/wt',
 			'branch -d wt',
-			'rev-parse --verify --quiet refs/heads/plain^{commit}',
+			'for-each-ref --format=%(refname)%09%(objectname)%09%(upstream) refs/heads/plain',
 			'branch -D plain',
 		]);
 		assert.deepStrictEqual(deletions, [
-			{ branch: 'wt', sha: SHA_B, worktree: '/repo-wt' },
-			{ branch: 'plain', sha: SHA_B },
+			{ branch: 'wt', sha: SHA_B, upstream: 'refs/remotes/origin/wt', worktree: '/repo-wt' },
+			{ branch: 'plain', sha: SHA_A },
 		]);
 	});
 
@@ -272,6 +278,20 @@ suite('restore workflow', () => {
 			'Restored 0 of 2 branch(es). Could not restore back (a branch with this name already exists); gone (Git has garbage-collected its commit bbbbbbb).',
 		]);
 		assert.strictEqual((store.state[DELETION_LOG_KEY] as DeletedBranch[]).length, 2, 'failed restores stay in the log');
+	});
+
+	test('tracks the recorded upstream again only while it exists', async () => {
+		const { log } = logWith([
+			entry('live', SHA_A, '2026-01-01T00:00:00Z', { upstream: 'refs/remotes/origin/live' }),
+			entry('merged', SHA_B, '2026-01-01T00:00:00Z', { upstream: 'refs/remotes/origin/merged' }),
+		]);
+		const h = createHarness({ log, git: { [LOCAL_BRANCHES_CMD]: { stdout: 'refs/heads/main\nrefs/remotes/origin/live\n' } } });
+		assert.strictEqual(await runRestoreWorkflow(h.deps, ['live', 'merged']), 'ok');
+		assert.deepStrictEqual(
+			h.commands.filter((c) => c.startsWith('branch ')),
+			[`branch live ${SHA_A}`, 'branch --set-upstream-to=refs/remotes/origin/live live', `branch merged ${SHA_B}`]
+		);
+		assert.deepStrictEqual(h.lines, ['Restored live at aaaaaaa.', 'It tracks origin/live again.', 'Restored merged at bbbbbbb.']);
 	});
 
 	test('explains how to recreate a removed worktree', async () => {
