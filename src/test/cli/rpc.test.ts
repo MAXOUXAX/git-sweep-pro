@@ -94,6 +94,31 @@ suite('cli rpc bridge', () => {
 		assert.deepStrictEqual(host.rec.progress, ['start Fetching', 'end Fetching']);
 	});
 
+	for (const end of ['progressEnd', 'dispose'] as const) {
+		test(`progress closes when ${end} happens before the host starts its task`, async () => {
+			let startTask: (() => Promise<void>) | undefined;
+			const host = createRecordingHostUi({});
+			host.withProgress = (_options, task) => new Promise((resolve, reject) => {
+				startTask = async () => {
+					try {
+						resolve(await task());
+					} catch (error) {
+						reject(error);
+					}
+				};
+			});
+			const handler = createCliEventHandler(host, () => undefined);
+			await handler.handleLine(JSON.stringify({ type: 'progressStart', id: 1, title: 'Fast' }));
+			if (end === 'dispose') {
+				handler.dispose();
+			} else {
+				await handler.handleLine(JSON.stringify({ type: 'progressEnd', id: 1 }));
+			}
+			assert.ok(startTask);
+			await startTask();
+		});
+	}
+
 	test('requests carry the WorkflowUi method name and its arguments', async () => {
 		const sent: string[] = [];
 		const io: CliIo = { cwd: '/', interactive: false, stdout: (text) => sent.push(text), stderr: () => undefined, readLine: async () => undefined };
