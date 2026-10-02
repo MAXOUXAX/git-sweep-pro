@@ -499,7 +499,7 @@ suite('sync-with-upstream workflow', () => {
 
 			assert.strictEqual(
 				h.quickPickRequests[0].items.find((item) => item.label === 'main')?.description,
-				'local, checked out in another worktree (not pulled)'
+				'local, checked out in another worktree (used as is)'
 			);
 			assert.ok(!h.commands.includes('checkout main'), 'main cannot be checked out in this worktree');
 			assert.ok(!h.commands.some((cmd) => cmd.startsWith('pull')));

@@ -76,6 +76,6 @@ export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkfl
 /** Why a checked-out stale branch was skipped, and how to delete it. */
 export function describeCheckedOutBranch(branch: CheckedOutBranch): string {
 	return branch.where === 'current'
-		? `"${branch.name}" is stale, but it is the current branch, so it was skipped. Switch to another branch to delete it.`
-		: `"${branch.name}" is stale, but it is checked out in the main worktree (${branch.worktreePath}), so it was skipped. Switch branches there to delete it.`;
+		? `Skipped "${branch.name}": it is the current branch. Switch to another branch to delete it.`
+		: `Skipped "${branch.name}": it is checked out in the main worktree (${branch.worktreePath}). Switch branches there to delete it.`;
 }

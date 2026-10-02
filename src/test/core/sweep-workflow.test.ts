@@ -564,7 +564,7 @@ suite('sweep workflow', () => {
 			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
 
 			assert.deepStrictEqual(h.quickPickRequests[0].items.map((item) => item.label), ['stale/other']);
-			assert.ok(h.outputLines.some((line) => line.startsWith('"feature/here" is stale, but it is the current branch')));
+			assert.ok(h.outputLines.some((line) => line.startsWith('Skipped "feature/here": it is the current branch.')));
 			assert.ok(!h.commands.includes('branch -d feature/here'));
 			assert.ok(h.commands.includes('branch -d stale/other'));
 		});
@@ -586,7 +586,7 @@ suite('sweep workflow', () => {
 			assert.strictEqual(h.quickPickRequests.length, 0);
 			assert.ok(!h.commands.some((cmd) => cmd.startsWith('worktree remove')));
 			assert.deepStrictEqual(h.infoMessages, [
-				'"feature/main-wt" is stale, but it is checked out in the main worktree (/repo), so it was skipped. Switch branches there to delete it. 1 other stale branch(es) are protected.',
+				'Skipped "feature/main-wt": it is checked out in the main worktree (/repo). Switch branches there to delete it. 1 other stale branch(es) are protected.',
 			]);
 		});
 
@@ -600,7 +600,7 @@ suite('sweep workflow', () => {
 
 			assert.strictEqual(h.quickPickRequests.length, 0);
 			assert.deepStrictEqual(h.infoMessages, [
-				'"feature/here" is stale, but it is the current branch, so it was skipped. Switch to another branch to delete it.',
+				'Skipped "feature/here": it is the current branch. Switch to another branch to delete it.',
 			]);
 		});
 
@@ -683,7 +683,7 @@ suite('sweep workflow', () => {
 
 			assert.ok(h.outputLines.includes('- feature/wt (removes worktree /work/wt)'));
 			assert.ok(!h.commands.some((cmd) => cmd.startsWith('worktree remove')));
-			assert.ok(!h.outputLines.includes('Not selected, so their worktree is kept:'));
+			assert.ok(!h.outputLines.includes('Not selected (worktree kept):'));
 		});
 
 		test('lists the worktree branches left unselected', async () => {
@@ -697,7 +697,7 @@ suite('sweep workflow', () => {
 			});
 
 			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'cancelled');
-			const index = h.outputLines.indexOf('Not selected, so their worktree is kept:');
+			const index = h.outputLines.indexOf('Not selected (worktree kept):');
 			assert.ok(index >= 0);
 			assert.strictEqual(h.outputLines[index + 1], '- feature/wt (worktree /work/wt)');
 		});
