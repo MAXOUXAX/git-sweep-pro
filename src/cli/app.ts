@@ -51,7 +51,7 @@ async function openRepository(git: GitIn, dir: string): Promise<Repository> {
 }
 
 /**
- * Runs the `git-sweep-pro` CLI and resolves to its exit code. All process I/O
+ * Runs the `gsp` CLI and resolves to its exit code. All process I/O
  * goes through `io`, so the CLI can run in-process (tests) or as a child
  * process driven over RPC by the VS Code extension.
  */
@@ -83,7 +83,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	}
 
 	const frontend = await createFrontend(options, io);
-	frontend.intro?.(`git sweep-pro ${options.command}`);
+	frontend.intro?.(`gsp ${options.command}`);
 	const outcome = await runCommand(options, requestedDir, frontend, io);
 	frontend.outro?.(outcome);
 	return EXIT_CODES[outcome];
@@ -199,7 +199,7 @@ async function runRestore(context: WorkflowContext, options: CliOptions, fronten
 			const now = new Date();
 			const width = Math.max(...entries.map((entry) => entry.branch.length));
 			entries.forEach((entry) => io.stdout(`${entry.branch.padEnd(width)}  ${describeDeletion(entry, now)}\n`));
-			io.stderr('To restore them, run: git sweep-pro restore <branch>...\n');
+			io.stderr('To restore them, run: gsp restore <branch>...\n');
 		}
 		return 'ok';
 	} catch (error) {

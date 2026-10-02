@@ -47,6 +47,7 @@
   ],
   "main": "./dist/extension.js",
   "bin": {
+    "gsp": "./dist/cli/main.js",
     "git-sweep-pro": "./dist/cli/main.js"
   },
   "contributes": {
@@ -132,7 +133,7 @@
         "gitSweepPro.cli.addToTerminalPath": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Make the bundled `git-sweep-pro` command line (also usable as `git sweep-pro`) available in VS Code's integrated terminals. New terminals pick up changes."
+          "markdownDescription": "Make the bundled `gsp` command line (also usable as `git-sweep-pro` and `git sweep-pro`) available in VS Code's integrated terminals. New terminals pick up changes."
         }
       }
     }

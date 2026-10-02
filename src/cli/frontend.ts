@@ -42,7 +42,7 @@ export async function createFrontend(options: CliOptions, io: CliIo): Promise<Fr
 const OUTRO: Record<WorkflowOutcome, string> = {
 	ok: 'Done.',
 	cancelled: 'Cancelled.',
-	paused: 'Paused: resolve the conflicts, then run "git sweep-pro sync --continue".',
+	paused: 'Paused: resolve the conflicts, then run "gsp resume".',
 	failed: 'Finished with errors.',
 };
 

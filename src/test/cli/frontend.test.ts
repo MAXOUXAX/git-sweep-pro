@@ -34,8 +34,8 @@ suite('cli front ends', () => {
 			const { prompter, calls } = createFakePrompter();
 			const io = { ...createFakeIo('/repo', { interactive: true }), loadPrompter: async () => prompter };
 			const frontend = await createFrontend(parseArgs([]), io);
-			frontend.intro?.('git sweep-pro sweep');
-			assert.deepStrictEqual(calls, ['intro git sweep-pro sweep']);
+			frontend.intro?.('gsp sweep');
+			assert.deepStrictEqual(calls, ['intro gsp sweep']);
 			assert.strictEqual(frontend.canPrompt, true);
 			assert.strictEqual((await createFrontend(parseArgs(['--yes']), io)).canPrompt, false, '--yes answers every prompt');
 		});
@@ -119,7 +119,7 @@ suite('cli front ends', () => {
 				'error oops',
 				'detail - a',
 				'spin Fetching',
-				'outro Paused: resolve the conflicts, then run "git sweep-pro sync --continue".',
+				'outro Paused: resolve the conflicts, then run "gsp resume".',
 			]);
 		});
 

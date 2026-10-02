@@ -78,7 +78,7 @@ function rejectInvalidOptions(argv: readonly string[]): void {
 }
 
 /**
- * Parses `git-sweep-pro` arguments with `util.parseArgs`: no dependency, as the
+ * Parses `gsp` arguments with `util.parseArgs`: no dependency, as the
  * CLI ships inside the VS Code extension, which is packaged without
  * node_modules.
  */
@@ -143,10 +143,10 @@ export function settingsToCliArgs(settings: SweepSettings): string[] {
 	];
 }
 
-export const USAGE = `Usage: git-sweep-pro [command] [options]
+export const USAGE = `Usage: gsp [command] [options]
 
 Safely prune local branches whose remote upstream is gone.
-Also available as "git sweep-pro" when the executable is on your PATH.
+Also available as "git-sweep-pro" and "git sweep-pro".
 
 Commands:
   sweep              Detect stale branches, pick, confirm and delete them (default)
@@ -158,7 +158,7 @@ Commands:
                      with --force-with-lease (stashes local changes)
   resume             Continue a sync paused on conflicts (alias: sync --continue)
   restore [branch...]
-                     Recreate branches deleted by git-sweep-pro at their last
+                     Recreate branches deleted by gsp at their last
                      commit; without arguments, pick among recent deletions
   help, version
 

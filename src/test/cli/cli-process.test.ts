@@ -87,6 +87,6 @@ suite('cli process client (real git)', function () {
 		const host = createHostUi(true);
 		const result = await runCliProcess({ nodePath: path.join(fx.dir, 'no-such-node'), cliPath: CLI_PATH, cwd: fx.repo, args: [], ui: host.ui });
 		assert.deepStrictEqual(result, { exitCode: -1, errorShown: true });
-		assert.ok(host.errors[0]?.startsWith('Could not start the git-sweep-pro CLI'));
+		assert.ok(host.errors[0]?.startsWith('Could not start the gsp CLI'));
 	});
 });

@@ -171,7 +171,7 @@ export async function runSweepWorkflow(context: WorkflowContext, mode: SweepMode
 		}
 
 		if (recorder.recorded.length > 0) {
-			output.appendLine(`To restore them, run: git sweep-pro restore ${recorder.recorded.map(quoteShellArg).join(' ')}`);
+			output.appendLine(`To restore them, run: gsp restore ${recorder.recorded.map(quoteShellArg).join(' ')}`);
 		}
 
 		const outcome = formatSweepOutcome({

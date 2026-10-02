@@ -83,7 +83,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 		const cliArgs = [...args, ...settingsToCliArgs(getSweepSettings())];
 		outputChannel.show(true);
-		outputChannel.appendLine(`> git-sweep-pro ${cliArgs.join(' ')}`);
+		outputChannel.appendLine(`> gsp ${cliArgs.join(' ')}`);
 		const { exitCode, errorShown } = await runCliProcess({
 			nodePath: process.execPath,
 			cliPath: CLI_PATH,
