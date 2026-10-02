@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
-import { runGitCommand, type CommandResult } from '../core/git-command';
+import { runGitCommand } from '../core/git-command';
 import { describeMergedBranch } from '../core/merged-branches';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import { inspectDeletions, runRestoreWorkflow } from '../core/restore-workflow';
@@ -20,8 +20,6 @@ import { createFileStateStore, stateFilePath } from './state-store';
 
 /** git config key holding extra protected-branch globs (multi-valued). */
 export const PROTECTED_CONFIG_KEY = 'git-sweep-pro.protected';
-
-type GitIn = (args: readonly string[], cwd: string) => Promise<CommandResult>;
 
 const EXIT_CODES: Record<WorkflowOutcome, number> = {
 	ok: EXIT.ok,
@@ -42,13 +40,23 @@ type Repository = {
 	readonly gitDir: string;
 	/** Git directory shared by every worktree of the repository. */
 	readonly commonDir: string;
+	/** Protected-branch globs from {@link PROTECTED_CONFIG_KEY}. */
+	readonly protectedPatterns: readonly string[];
 };
 
-async function openRepository(git: GitIn, dir: string): Promise<Repository> {
-	const { stdout } = await git(['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'], dir);
+async function openRepository(dir: string, trace: (line: string) => void): Promise<Repository> {
+	const output = { appendLine: trace };
+	const { stdout } = await runGitCommand(['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'], dir, output);
 	const [root, gitDir, commonDir] = stdout.split('\n');
-	// --git-common-dir may be relative to the directory git runs in.
-	return { root, gitDir, commonDir: path.resolve(dir, commonDir) };
+	// Exits with 1 when no pattern is configured.
+	const config = await runGitCommand(['config', '--get-all', PROTECTED_CONFIG_KEY], root, output, { expectedExitCodes: [1] });
+	return {
+		root,
+		gitDir,
+		// --git-common-dir may be relative to the directory git runs in.
+		commonDir: path.resolve(dir, commonDir),
+		protectedPatterns: config.stdout.split('\n').filter((line) => line.trim()),
+	};
 }
 
 /**
@@ -91,30 +99,24 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 }
 
 async function runCommand(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<WorkflowOutcome> {
-	const git: GitIn = (args, cwd) => runGitCommand(args, cwd, { appendLine: frontend.trace });
 	let repository: Repository;
 	try {
-		repository = await openRepository(git, dir);
+		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return 'failed';
 	}
 
-	const { root, gitDir, commonDir } = repository;
-	const configProtected = await git(['config', '--get-all', PROTECTED_CONFIG_KEY], root).then(
-		({ stdout }) => stdout.split('\n').filter((line) => line.trim()),
-		// Exits with 1 when the key is not set.
-		() => []
-	);
+	const { root, gitDir, commonDir, protectedPatterns } = repository;
 	const context: WorkflowContext = {
 		root,
 		settings: {
-			protectedBranches: [...options.protect, ...configProtected],
+			protectedBranches: [...options.protect, ...protectedPatterns],
 			autoFetchPrune: options.fetch,
 			confirmBeforeDelete: options.confirm,
 			includeMergedBranches: options.merged,
 		},
-		git: (args) => git(args, root),
+		git: (args) => runGitCommand(args, root, { appendLine: frontend.trace }),
 		output: frontend.output,
 		ui: frontend.ui,
 		// Branches are shared by every worktree, and so is their undo history.
