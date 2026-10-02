@@ -91,8 +91,7 @@ suite('sweep selection helpers', () => {
 		assert.strictEqual(
 			summary,
 			[
-				'Detected: 5 stale branch(es)',
-				'Merged into the default branch: 2',
+				'Detected: 5 stale and 2 merged branch(es)',
 				'Protected (skipped): 2',
 				'Checked out (skipped): 1',
 				'Selected: 3',

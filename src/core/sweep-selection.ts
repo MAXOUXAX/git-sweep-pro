@@ -53,10 +53,11 @@ export type SweepSummary = {
  * protected, how many are selected, and which mode will run.
  */
 export function formatSweepSummary(summary: SweepSummary): string {
-	const lines = [`Detected: ${summary.totalDetected} stale branch(es)`];
-	if (summary.mergedCount > 0) {
-		lines.push(`Merged into the default branch: ${summary.mergedCount}`);
-	}
+	const lines = [
+		summary.mergedCount > 0
+			? `Detected: ${summary.totalDetected} stale and ${summary.mergedCount} merged branch(es)`
+			: `Detected: ${summary.totalDetected} stale branch(es)`,
+	];
 	if (summary.protectedCount > 0) {
 		lines.push(`Protected (skipped): ${summary.protectedCount}`);
 	}
