@@ -22,9 +22,9 @@ function createHarness(options: HarnessOptions = {}) {
 		settings: options.settings,
 		git: options.git,
 		confirm: options.confirmResult,
-		pickBranches: () => options.quickPickSelection?.map((item) => item.label),
+		pickMany: () => options.quickPickSelection?.map((item) => item.label),
 	});
-	return { ...fake, quickPickRequests: fake.pickBranchesRequests };
+	return { ...fake, quickPickRequests: fake.pickManyRequests };
 }
 
 suite('sweep workflow', () => {

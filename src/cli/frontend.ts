@@ -42,7 +42,7 @@ export async function createFrontend(options: CliOptions, io: CliIo): Promise<Fr
 const OUTRO: Record<WorkflowOutcome, string> = {
 	ok: 'Done.',
 	cancelled: 'Cancelled.',
-	paused: 'Paused: resolve the conflicts, then run "git sweep-pro sync --continue".',
+	paused: 'Paused: resolve the conflicts, then run "gsp resume".',
 	failed: 'Finished with errors.',
 };
 
@@ -85,14 +85,14 @@ export function createPlainFrontend(io: CliIo, options: TerminalOptions): Fronte
 				printProgress(io, progress.title);
 				return task();
 			},
-			pickBranch: async ({ items, title }) => {
+			pickOne: async ({ items, title }) => {
 				const preselected = items.find((item) => item.picked);
 				if (!preselected) {
 					throw new Error(`${title}: no default available; pass the branch as an argument.`);
 				}
 				return preselected.label;
 			},
-			pickBranches: async ({ items }) => items.filter((item) => item.picked).map((item) => item.label),
+			pickMany: async ({ items }) => items.filter((item) => item.picked).map((item) => item.label),
 			showInformationMessage: (message, notification) => io.stdout(`${notice(message, notification)}\n`),
 			showErrorMessage: (message, notification) => io.stderr(`${pc.red('error:')} ${notice(message, notification)}\n`),
 			confirm: async (message, confirmLabel) => {
@@ -130,7 +130,7 @@ export function createInteractiveFrontend(io: CliIo, options: TerminalOptions, p
 				}
 				return prompter.spin(progress.title, task);
 			},
-			pickBranch: async ({ items, title }) => {
+			pickOne: async ({ items, title }) => {
 				const defaultIndex = items.findIndex((item) => item.picked);
 				const index = await prompter.select(
 					title,
@@ -139,12 +139,12 @@ export function createInteractiveFrontend(io: CliIo, options: TerminalOptions, p
 				);
 				return index === undefined ? undefined : items[index].label;
 			},
-			pickBranches: async ({ items, title }) => {
+			pickMany: async ({ items, title }) => {
 				if (options.yes) {
 					return items.filter((item) => item.picked).map((item) => item.label);
 				}
 				const values = await prompter.multiselect(
-					`${title} ${pc.dim('(space: toggle, a: all, enter: confirm)')}`,
+					title,
 					items.map((item, value) => ({ value, label: item.label, hint: item.description })),
 					items.flatMap((item, index) => (item.picked ? [index] : []))
 				);

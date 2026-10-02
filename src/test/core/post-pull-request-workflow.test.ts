@@ -22,7 +22,7 @@ function createHarness(options: HarnessOptions = {}) {
 		settings: options.settings,
 		git: options.git,
 		pick: [options.quickPickSelection?.label],
-		pickBranches: (items) => items.map((item) => item.label),
+		pickMany: (items) => items.map((item) => item.label),
 	});
 	return { ...fake, quickPickRequests: fake.pickRequests };
 }

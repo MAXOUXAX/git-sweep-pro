@@ -17,7 +17,7 @@ const readLine = async (): Promise<string | undefined> => {
 	return next.done ? undefined : next.value;
 };
 
-// A closed pipe (e.g. `git-sweep-pro list | head -1`) is not an error.
+// A closed pipe (e.g. `gsp list | head -1`) is not an error.
 process.stdout.on('error', (error: NodeJS.ErrnoException) => {
 	if (error.code !== 'EPIPE') {
 		throw error;

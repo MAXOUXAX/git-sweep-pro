@@ -6,7 +6,7 @@
  */
 
 /** How to resume a paused sync, in the editor and in a terminal. */
-const RESUME = '"Resume Sync With Upstream" (git sweep-pro resume)';
+const RESUME = '"Resume Sync With Upstream" (gsp resume)';
 
 export const syncMessages = {
 	// runSyncWorkflow

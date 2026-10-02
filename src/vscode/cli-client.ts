@@ -81,7 +81,7 @@ export type CliRunResult = {
 };
 
 /**
- * Runs `git-sweep-pro --rpc <args>` as a child process, rendering its UI with
+ * Runs `gsp --rpc <args>` as a child process, rendering its UI with
  * `ui`, and resolves once it exits.
  */
 export function runCliProcess(options: CliRunOptions): Promise<CliRunResult> {
@@ -119,7 +119,7 @@ export function runCliProcess(options: CliRunOptions): Promise<CliRunResult> {
 		};
 
 		child.on('error', (error) => {
-			options.ui.showErrorMessage(`Could not start the git-sweep-pro CLI: ${error.message}`);
+			options.ui.showErrorMessage(`Could not start the gsp CLI: ${error.message}`);
 			finish(-1, true);
 		});
 		child.on('close', (code) => finish(code ?? -1));

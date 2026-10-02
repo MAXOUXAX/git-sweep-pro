@@ -108,7 +108,7 @@ export async function chooseBranch(
 		const description = describe(branch);
 		return { label: branchPickLabel(branch), ...(description && { description }), ...(branch === preferred && { picked: true }) };
 	});
-	const label = await ui.pickBranch({ items, title, placeholder });
+	const label = await ui.pickOne({ items, title, placeholder });
 	if (label === undefined) {
 		return undefined;
 	}

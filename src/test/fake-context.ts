@@ -19,7 +19,7 @@ export type FakeContextOptions = {
 	/** Answers of the single-select picker, one per call (the last one repeats). */
 	readonly pick?: readonly (string | undefined)[];
 	/** Answers the multi-select picker; dismisses it by default. */
-	readonly pickBranches?: (items: readonly PickItem[]) => readonly string[] | undefined;
+	readonly pickMany?: (items: readonly PickItem[]) => readonly string[] | undefined;
 	readonly confirm?: boolean;
 	readonly deletionLog?: DeletionLog;
 };
@@ -64,7 +64,7 @@ export function createFakeContext(options: FakeContextOptions = {}) {
 		noticeOptions: [] as Array<NoticeOptions | undefined>,
 		progressTitles: [] as string[],
 		pickRequests: [] as Array<{ items: readonly PickItem[]; title: string; placeholder: string }>,
-		pickBranchesRequests: [] as Array<{ items: readonly PickItem[]; title: string }>,
+		pickManyRequests: [] as Array<{ items: readonly PickItem[]; title: string }>,
 		confirmRequests: [] as Array<{ message: string; confirmLabel: string }>,
 	};
 	const calls: Record<string, number> = {};
@@ -108,14 +108,14 @@ export function createFakeContext(options: FakeContextOptions = {}) {
 				recorded.progressTitles.push(title);
 				return task();
 			},
-			pickBranch: async (request) => {
+			pickOne: async (request) => {
 				recorded.pickRequests.push(request);
 				const answers = options.pick ?? [];
 				return answers[Math.min(recorded.pickRequests.length, answers.length) - 1];
 			},
-			pickBranches: async ({ items, title }) => {
-				recorded.pickBranchesRequests.push({ items, title });
-				return options.pickBranches?.(items);
+			pickMany: async ({ items, title }) => {
+				recorded.pickManyRequests.push({ items, title });
+				return options.pickMany?.(items);
 			},
 			showInformationMessage: (message, notice) => {
 				recorded.infoMessages.push(message);

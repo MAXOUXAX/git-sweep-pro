@@ -1,0 +1,4 @@
+#!/bin/sh
+# Short name of the Git Sweep Pro CLI: runs the git-sweep-pro launcher next to
+# this file (through sh, as a VSIX may not keep its executable bit).
+exec sh "$(dirname -- "$0")/git-sweep-pro" "$@"

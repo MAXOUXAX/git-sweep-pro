@@ -1,12 +1,13 @@
 import { parseArgs as parseArgv, type ParseArgsOptionsConfig } from 'node:util';
+import { AGENT_FILE_NAMES, isAgentFile } from '../core/agent-instructions';
 import type { SweepMode, SweepSettings } from '../core/sweep-logic';
 
-export const COMMANDS = ['sweep', 'list', 'post-pr', 'sync', 'resume', 'restore', 'help', 'version'] as const;
+export const COMMANDS = ['sweep', 'list', 'post-pr', 'sync', 'resume', 'restore', 'agents', 'help', 'version'] as const;
 export type CommandName = (typeof COMMANDS)[number];
 
 export type CliOptions = {
 	readonly command: CommandName;
-	/** Positional arguments after the command (the branch for `post-pr`/`sync`, the branches for `restore`). */
+	/** Positional arguments after the command (the branch for `post-pr`/`sync`, the branches for `restore`, the files for `agents`). */
 	readonly positionals: readonly string[];
 	/** Repository directory (`-C <path>`); defaults to the current directory. */
 	readonly cwd: string | undefined;
@@ -78,7 +79,7 @@ function rejectInvalidOptions(argv: readonly string[]): void {
 }
 
 /**
- * Parses `git-sweep-pro` arguments with `util.parseArgs`: no dependency, as the
+ * Parses `gsp` arguments with `util.parseArgs`: no dependency, as the
  * CLI ships inside the VS Code extension, which is packaged without
  * node_modules.
  */
@@ -105,9 +106,13 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 		// Restore never overwrites a branch, so there is nothing to force or to preview.
 		throw new UsageError(`${values.force ? '--force' : '--dry-run'} cannot be used with restore.`);
 	}
-	const maxPositionals = command === 'restore' ? Infinity : command === 'post-pr' || command === 'sync' ? 1 : 0;
+	const maxPositionals = command === 'restore' || command === 'agents' ? Infinity : command === 'post-pr' || command === 'sync' ? 1 : 0;
 	if (args.length > maxPositionals) {
 		throw new UsageError(`Unexpected argument: ${args[maxPositionals]}`);
+	}
+	const unknownFile = command === 'agents' ? args.find((file) => !isAgentFile(file)) : undefined;
+	if (unknownFile !== undefined) {
+		throw new UsageError(`Unknown instruction file: ${unknownFile}. Use ${AGENT_FILE_NAMES.join(' or ')}.`);
 	}
 
 	return {
@@ -143,10 +148,10 @@ export function settingsToCliArgs(settings: SweepSettings): string[] {
 	];
 }
 
-export const USAGE = `Usage: git-sweep-pro [command] [options]
+export const USAGE = `Usage: gsp [command] [options]
 
 Safely prune local branches whose remote upstream is gone.
-Also available as "git sweep-pro" when the executable is on your PATH.
+Also available as "git-sweep-pro" and "git sweep-pro".
 
 Commands:
   sweep              Detect stale branches, pick, confirm and delete them (default)
@@ -158,8 +163,11 @@ Commands:
                      with --force-with-lease (stashes local changes)
   resume             Continue a sync paused on conflicts (alias: sync --continue)
   restore [branch...]
-                     Recreate branches deleted by git-sweep-pro at their last
+                     Recreate branches deleted by gsp at their last
                      commit; without arguments, pick among recent deletions
+  agents [file...]   Tell coding agents to use gsp: add a short note to AGENTS.md
+                     (Codex, Cursor, GitHub Copilot, OpenCode) and/or CLAUDE.md
+                     (Claude Code); without arguments, pick the files
   help, version
 
 Options:
@@ -178,5 +186,14 @@ Options:
   -v, --verbose      Echo every git command and its output
   -h, --help         Show this help
 
-Without a terminal (e.g. in scripts), prompts fall back to their defaults and
-confirmations are refused unless --yes is given.`;
+Without a terminal (scripts, coding agents), prompts take their defaults and
+confirmations are refused unless --yes is given:
+  gsp list --json           See what a sweep would offer, without deleting
+  gsp --yes                 Delete the pre-selected stale branches (never the
+                            merged ones or those checked out in a worktree)
+  gsp post-pr main --yes    After a merged PR: switch to main, clean up, pull
+  gsp sync origin/main      Rebase onto origin/main, then force-push with a lease
+  gsp restore <branch>      Undo a deletion
+
+Exit codes: 0 done (or nothing to do), 1 failed, 2 invalid arguments,
+3 sync paused on conflicts (resolve them, then run "gsp resume").`;

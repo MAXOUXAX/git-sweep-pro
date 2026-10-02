@@ -1,7 +1,7 @@
 {
   "name": "git-sweep-pro",
   "displayName": "Git Sweep Pro",
-  "description": "Safely detect and prune local Git branches whose remote upstream is gone — with dry-run previews, protected branches, and upstream sync.",
+  "description": "Safely prune the local Git branches whose remote branch is gone, from VS Code or the gsp command line, for you and your coding agents. Dry runs, protected branches, undo.",
   "repository": {
     "url": "git+https://github.com/MAXOUXAX/git-sweep-pro",
     "type": "git"
@@ -40,13 +40,17 @@
     "sync upstream",
     "force-with-lease",
     "housekeeping",
-    "cli"
+    "cli",
+    "gsp",
+    "agents",
+    "ai"
   ],
   "activationEvents": [
     "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "bin": {
+    "gsp": "./dist/cli/main.js",
     "git-sweep-pro": "./dist/cli/main.js"
   },
   "contributes": {
@@ -86,6 +90,12 @@
         "category": "Git Sweep Pro",
         "title": "Restore Deleted Branches",
         "shortTitle": "Restore Branches"
+      },
+      {
+        "command": "git-sweep-pro.agents",
+        "category": "Git Sweep Pro",
+        "title": "Add Instructions for Coding Agents",
+        "shortTitle": "Agent Instructions"
       }
     ],
     "configuration": {
@@ -132,7 +142,7 @@
         "gitSweepPro.cli.addToTerminalPath": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Make the bundled `git-sweep-pro` command line (also usable as `git sweep-pro`) available in VS Code's integrated terminals. New terminals pick up changes."
+          "markdownDescription": "Make the bundled `gsp` command line (also usable as `git-sweep-pro` and `git sweep-pro`) available in VS Code's integrated terminals. New terminals pick up changes."
         }
       }
     }

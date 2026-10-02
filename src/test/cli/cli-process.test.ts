@@ -16,8 +16,8 @@ function createHostUi(confirmAnswer: boolean) {
 	const ui: HostUi = {
 		log: (line) => logs.push(line),
 		withProgress: (_options, task) => task(),
-		pickBranch: async () => undefined,
-		pickBranches: async ({ items }) => items.filter((item) => item.picked).map((item) => item.label),
+		pickOne: async () => undefined,
+		pickMany: async ({ items }) => items.filter((item) => item.picked).map((item) => item.label),
 		showInformationMessage: (message) => infos.push(message),
 		showErrorMessage: (message) => errors.push(message),
 		confirm: async (message) => {
@@ -87,6 +87,6 @@ suite('cli process client (real git)', function () {
 		const host = createHostUi(true);
 		const result = await runCliProcess({ nodePath: path.join(fx.dir, 'no-such-node'), cliPath: CLI_PATH, cwd: fx.repo, args: [], ui: host.ui });
 		assert.deepStrictEqual(result, { exitCode: -1, errorShown: true });
-		assert.ok(host.errors[0]?.startsWith('Could not start the git-sweep-pro CLI'));
+		assert.ok(host.errors[0]?.startsWith('Could not start the gsp CLI'));
 	});
 });

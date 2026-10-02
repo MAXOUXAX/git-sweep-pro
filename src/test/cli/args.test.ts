@@ -60,6 +60,12 @@ suite('cli args', () => {
 		assert.throws(() => parseArgs(['restore', '-f']), /--force cannot be used with restore\./);
 	});
 
+	test('agents takes instruction file names, and rejects any other', () => {
+		assert.deepStrictEqual(parseArgs(['agents']).positionals, []);
+		assert.deepStrictEqual(parseArgs(['agents', 'AGENTS.md', 'CLAUDE.md']).positionals, ['AGENTS.md', 'CLAUDE.md']);
+		assert.throws(() => parseArgs(['agents', 'README.md']), /Unknown instruction file: README\.md\. Use AGENTS\.md or CLAUDE\.md\./);
+	});
+
 	test('restore takes any number of branches', () => {
 		assert.deepStrictEqual(parseArgs(['restore']).positionals, []);
 		assert.deepStrictEqual(parseArgs(['restore', 'a', 'b/c']).positionals, ['a', 'b/c']);

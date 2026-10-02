@@ -22,8 +22,8 @@ function createRecordingHostUi(answers: { pick?: string; branches?: readonly str
 			rec.progress.push(`end ${options.title}`);
 			return result;
 		},
-		pickBranch: async () => answers.pick,
-		pickBranches: async () => answers.branches,
+		pickOne: async () => answers.pick,
+		pickMany: async () => answers.branches,
 		showInformationMessage: (message) => rec.infos.push(message),
 		showErrorMessage: (message) => rec.errors.push(message),
 		confirm: async () => answers.confirm ?? false,
@@ -74,15 +74,15 @@ suite('cli rpc bridge', () => {
 	test('round-trips prompts and their answers', async () => {
 		const host = createRecordingHostUi({ pick: 'main', branches: ['a'], confirm: true });
 		const { ui } = connect(host);
-		assert.strictEqual(await ui.pickBranch({ items: [{ label: 'main' }], title: 't', placeholder: '' }), 'main');
-		assert.deepStrictEqual(await ui.pickBranches({ items: [{ label: 'a', picked: true }], title: 't' }), ['a']);
+		assert.strictEqual(await ui.pickOne({ items: [{ label: 'main' }], title: 't', placeholder: '' }), 'main');
+		assert.deepStrictEqual(await ui.pickMany({ items: [{ label: 'a', picked: true }], title: 't' }), ['a']);
 		assert.strictEqual(await ui.confirm('Delete?', 'Delete'), true);
 	});
 
 	test('a dismissed prompt comes back as undefined', async () => {
 		const host = createRecordingHostUi({});
 		const { ui } = connect(host);
-		assert.strictEqual(await ui.pickBranches({ items: [], title: 't' }), undefined);
+		assert.strictEqual(await ui.pickMany({ items: [], title: 't' }), undefined);
 		assert.strictEqual(await ui.confirm('Delete?', 'Delete'), false);
 	});
 

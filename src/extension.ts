@@ -83,7 +83,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 		const cliArgs = [...args, ...settingsToCliArgs(getSweepSettings())];
 		outputChannel.show(true);
-		outputChannel.appendLine(`> git-sweep-pro ${cliArgs.join(' ')}`);
+		outputChannel.appendLine(`> gsp ${cliArgs.join(' ')}`);
 		const { exitCode, errorShown } = await runCliProcess({
 			nodePath: process.execPath,
 			cliPath: CLI_PATH,
@@ -139,7 +139,8 @@ export function activate(context: vscode.ExtensionContext) {
 		registerRepoCommand('git-sweep-pro.postPullRequest', (root) => runCli(root, ['post-pr'])),
 		registerRepoCommand('git-sweep-pro.syncWithUpstream', (root) => runCli(root, ['sync'])),
 		registerRepoCommand('git-sweep-pro.syncWithUpstreamResume', (root) => runCli(root, ['resume'])),
-		registerRepoCommand('git-sweep-pro.restore', (root) => runCli(root, ['restore']))
+		registerRepoCommand('git-sweep-pro.restore', (root) => runCli(root, ['restore'])),
+		registerRepoCommand('git-sweep-pro.agents', (root) => runCli(root, ['agents']))
 	);
 }
 
