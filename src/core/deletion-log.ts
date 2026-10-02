@@ -71,7 +71,9 @@ export function createDeletionLog(store: StateStore, now: () => Date = () => new
 			await store.update(DELETION_LOG_KEY, [recorded, ...list()].slice(0, MAX_DELETION_LOG_ENTRIES));
 		},
 		forget: async (branch) => {
-			await store.update(DELETION_LOG_KEY, list().filter((entry) => entry.branch !== branch));
+			const remaining = list().filter((entry) => entry.branch !== branch);
+			// An empty log removes its key, and the state file once nothing else is in it.
+			await store.update(DELETION_LOG_KEY, remaining.length > 0 ? remaining : undefined);
 		},
 	};
 }

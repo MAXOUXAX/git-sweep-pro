@@ -54,6 +54,7 @@ suite('restore (real git)', function () {
 		assert.strictEqual(await runCli(['restore', 'feature/unmerged'], io), EXIT.ok);
 		assert.strictEqual(tipOf('feature/unmerged'), sha);
 		assert.ok(io.out.join('').includes('Restored 1 branch(es): feature/unmerged.'));
+		assert.ok(!fs.existsSync(stateFilePath(path.join(fx.repo, '.git'))), 'nothing left to restore: the state file is gone');
 
 		const again = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['restore', 'feature/unmerged'], again), EXIT.failed);

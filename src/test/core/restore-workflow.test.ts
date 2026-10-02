@@ -102,13 +102,15 @@ suite('deletion log', () => {
 	});
 
 	test('forgetting a branch drops all its deletions', async () => {
-		const { log } = logWith([
+		const { store, log } = logWith([
 			entry('x', SHA_B, '2026-01-02T00:00:00Z'),
 			entry('y', SHA_A, '2026-01-01T12:00:00Z'),
 			entry('x', SHA_A, '2026-01-01T00:00:00Z'),
 		]);
 		await log.forget('x');
 		assert.deepStrictEqual(log.list().map((e) => e.branch), ['y']);
+		await log.forget('y');
+		assert.strictEqual(store.state[DELETION_LOG_KEY], undefined, 'an empty log removes its key');
 	});
 
 	test('ignores malformed entries, drops them on the next write, and survives a value that is not a list', async () => {
