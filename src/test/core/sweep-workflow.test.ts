@@ -546,6 +546,7 @@ suite('sweep workflow', () => {
 			protected: ['release/1'],
 			checkedOut: [],
 			merged: [],
+			mergedSkipped: false,
 			worktrees: new Map(),
 		});
 		assert.deepStrictEqual(h.commands, ['fetch -p', 'worktree prune', GONE_REFS_CMD]);

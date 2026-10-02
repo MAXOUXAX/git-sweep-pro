@@ -111,13 +111,8 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 	const settings = deps.getSettings();
 
 	try {
-		const {
-			stale: staleBranches,
-			protected: protectedBranches,
-			checkedOut,
-			merged,
-			worktrees: worktreeOf,
-		} = await findStaleBranches(workspaceRoot, deps);
+		const found = await findStaleBranches(workspaceRoot, deps);
+		const { stale: staleBranches, protected: protectedBranches, checkedOut, merged, worktrees: worktreeOf } = found;
 		const mergedOf = new Map(merged.map((branch) => [branch.name, describeMergedBranch(branch)]));
 		const candidateBranches = [...staleBranches, ...mergedOf.keys()];
 		/** How a branch was merged and where it is checked out, e.g. "merged into origin/main, checked out in worktree /wt". */
@@ -127,8 +122,8 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 				.join(', ');
 
 		if (candidateBranches.length === 0 && protectedBranches.length === 0 && checkedOut.length === 0) {
-			deps.output.appendLine(noBranchesFound(settings));
-			deps.ui.showInformationMessage(noBranchesFound(settings));
+			deps.output.appendLine(noBranchesFound(settings, found));
+			deps.ui.showInformationMessage(noBranchesFound(settings, found), found.mergedSkipped ? { seeOutput: true } : undefined);
 			return 'ok';
 		}
 

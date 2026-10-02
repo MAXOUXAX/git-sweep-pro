@@ -119,7 +119,12 @@ suite('merged branch detection (real git)', function () {
 
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['--merged', '--yes'], io), EXIT.ok);
-		assert.ok(io.err.join('').includes('the remote default branch is unknown'));
+		assert.ok(io.out.join('').includes('No stale branches found. Merged branches were not checked.'));
+		assert.ok(
+			io.err.join('').includes(
+				'Merged branches were not checked: the default branch of "origin" is unknown. To set it, run: git remote set-head origin --auto'
+			)
+		);
 	});
 
 	test('a local branch named like the remote default branch is not taken for it', async () => {

@@ -154,7 +154,8 @@ async function runCommand(
 /** `list`: prints stale branches without touching them (`--json` for scripts). */
 async function runList(root: string, deps: SweepWorkflowDeps, options: CliOptions, io: CliIo): Promise<WorkflowOutcome> {
 	try {
-		const { stale, protected: protectedStale, checkedOut, merged, worktrees } = await findStaleBranches(root, deps);
+		const found = await findStaleBranches(root, deps);
+		const { stale, protected: protectedStale, checkedOut, merged, worktrees } = found;
 		const withWorktree = (branch: string, note?: string) => {
 			const worktree = worktrees.get(branch);
 			const notes = [note, worktree && `worktree ${worktree}`].filter(Boolean);
@@ -165,7 +166,7 @@ async function runList(root: string, deps: SweepWorkflowDeps, options: CliOption
 			const json = { stale, protected: protectedStale, checkedOut, merged, worktrees: Object.fromEntries(worktrees) };
 			io.stdout(`${JSON.stringify(json, null, 2)}\n`);
 		} else if (stale.length === 0 && protectedStale.length === 0 && checkedOut.length === 0 && merged.length === 0) {
-			io.stderr(`${noBranchesFound(deps.getSettings())}\n`);
+			io.stderr(`${noBranchesFound(deps.getSettings(), found)}\n`);
 		} else {
 			stale.forEach((branch) => io.stdout(withWorktree(branch)));
 			merged.forEach((branch) => io.stdout(withWorktree(branch.name, describeMergedBranch(branch))));

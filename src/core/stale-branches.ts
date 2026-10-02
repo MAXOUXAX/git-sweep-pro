@@ -21,6 +21,8 @@ export type StaleBranches = {
 	 * protected, current or checked out in the main worktree.
 	 */
 	readonly merged: readonly MergedBranch[];
+	/** `includeMergedBranches` is on, but merged branches could not be searched (the reason is in the output). */
+	readonly mergedSkipped: boolean;
 	/** Worktree path of each stale or merged branch checked out in a linked worktree (removed before the branch is deleted). */
 	readonly worktrees: ReadonlyMap<string, string>;
 };
@@ -81,19 +83,19 @@ export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkfl
 
 	// Never offered when checked out where they cannot be removed: unlike stale
 	// branches, they are not reported as skipped, as their upstream still exists.
-	const merged = settings.includeMergedBranches
+	const { merged, skipped: mergedSkipped = false } = settings.includeMergedBranches
 		? await findMerged(
 				workspaceRoot,
 				deps,
 				deletable.filter((ref) => !ref.gone && !ref.isCurrent && !isInMainWorktree(ref.worktreePath)).map((ref) => ref.name)
 			)
-		: [];
+		: { merged: [] };
 
 	const offered = new Set([...stale, ...merged.map((branch) => branch.name)]);
 	const worktrees = new Map(
 		deletable.flatMap(({ name, worktreePath }) => (worktreePath && offered.has(name) ? [[name, worktreePath] as const] : []))
 	);
-	return { stale, protected: gone.filter(isProtected).map((ref) => ref.name), checkedOut, merged, worktrees };
+	return { stale, protected: gone.filter(isProtected).map((ref) => ref.name), checkedOut, merged, mergedSkipped, worktrees };
 }
 
 /**
@@ -101,21 +103,29 @@ export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkfl
  * branch (`refs/remotes/<remote>/HEAD`, set by `git clone` or
  * `git remote set-head <remote> --auto`).
  */
-async function findMerged(workspaceRoot: string, deps: SweepWorkflowDeps, branches: readonly string[]): Promise<MergedBranch[]> {
+async function findMerged(
+	workspaceRoot: string,
+	deps: SweepWorkflowDeps,
+	branches: readonly string[]
+): Promise<{ merged: MergedBranch[]; skipped?: boolean }> {
 	const runGit = (args: string[]) => deps.runGitCommand(args, workspaceRoot);
 	const base = await getDefaultBranch(runGit);
 	if (!base) {
+		const [remote] = (await runGit(['remote'])).stdout.split('\n').filter(Boolean);
 		deps.output.appendLine(
-			'Cannot look for merged branches: the remote default branch is unknown. Run "git remote set-head origin --auto" to set it.'
+			remote
+				? `Merged branches were not checked: the default branch of "${remote}" is unknown. To set it, run: git remote set-head ${remote} --auto`
+				: 'Merged branches were not checked: the repository has no remote.'
 		);
-		return [];
+		return { merged: [], skipped: true };
 	}
 	if (branches.length === 0) {
-		return [];
+		return { merged: [] };
 	}
-	return deps.ui.withProgress({ title: `Looking for branches merged into ${base.remoteRef}` }, () =>
+	const merged = await deps.ui.withProgress({ title: `Looking for branches merged into ${base.remoteRef}` }, () =>
 		findMergedBranches(runGit, branches, base)
 	);
+	return { merged };
 }
 
 /** Why a checked-out stale branch was skipped, and how to delete it. */
@@ -126,6 +136,9 @@ export function describeCheckedOutBranch(branch: CheckedOutBranch): string {
 }
 
 /** What to say when {@link findStaleBranches} finds no branch at all. */
-export function noBranchesFound(settings: SweepSettings): string {
+export function noBranchesFound(settings: SweepSettings, found: StaleBranches): string {
+	if (found.mergedSkipped) {
+		return 'No stale branches found. Merged branches were not checked.';
+	}
 	return settings.includeMergedBranches ? 'No stale or merged branches found.' : 'No stale branches found.';
 }
