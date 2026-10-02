@@ -1,57 +1,29 @@
 import * as assert from 'assert';
 import * as path from 'node:path';
-import { DEFAULT_SWEEP_SETTINGS } from '../../core/sweep-logic';
 import {
 	clearMemento,
 	getMemento,
 	isRebaseInProgress,
 	MEMENTO_KEY,
 	readRebaseHeadName,
-	resolveGitDir,
 	saveMemento,
 	TEMP_BRANCH_PREFIX,
+	type SyncContext,
 	type SyncMemento,
-	type SyncWithUpstreamDeps,
-} from '../../core/sync-with-upstream-state';
+} from '../../core/sync-state';
+import { createFakeContext, createMemoryStore } from '../fake-context';
 
-function createDeps(overrides: {
-	workspaceState?: Partial<SyncWithUpstreamDeps['workspaceState']>;
-	fileExists?: (p: string) => boolean;
-	readFileUtf8?: (p: string) => string;
-	runGitCommand?: SyncWithUpstreamDeps['runGitCommand'];
-} = {}): SyncWithUpstreamDeps {
-	const state = new Map<string, unknown>();
-
+function createDeps(overrides: { fileExists?: (p: string) => boolean; readFileUtf8?: (p: string) => string } = {}): SyncContext {
 	return {
-		getWorkspaceRoot: () => '/repo',
-		getSettings: () => ({ ...DEFAULT_SWEEP_SETTINGS, confirmBeforeDelete: false }),
-		output: { show: () => undefined, appendLine: () => undefined, header: () => undefined },
-		runGitCommand: overrides.runGitCommand ?? (async () => ({ stdout: '', stderr: '' })),
-		ui: {
-			withProgress: async (_, task) => task(),
-			showQuickPick: async () => undefined,
-			pickBranches: async () => undefined,
-			showInformationMessage: () => undefined,
-			showErrorMessage: () => undefined,
-			confirm: async () => true,
-		},
-		workspaceState: {
-			get: <T>(key: string) => state.get(key) as T | undefined,
-			update: async (key: string, value: unknown) => {
-				if (value === undefined) {
-					state.delete(key);
-				} else {
-					state.set(key, value);
-				}
-			},
-			...overrides.workspaceState,
-		},
+		...createFakeContext().context,
+		gitDir: '/repo/.git',
+		state: createMemoryStore(),
 		fileExists: overrides.fileExists ?? (() => false),
 		readFileUtf8: overrides.readFileUtf8 ?? (() => ''),
 	};
 }
 
-suite('sync-with-upstream-state', () => {
+suite('sync state', () => {
 	suite('MEMENTO_KEY and TEMP_BRANCH_PREFIX', () => {
 		test('exports expected constants', () => {
 			assert.strictEqual(MEMENTO_KEY, 'git-sweep-pro.syncWithUpstream.memento');
@@ -112,50 +84,6 @@ suite('sync-with-upstream-state', () => {
 		});
 	});
 
-	suite('resolveGitDir', () => {
-		test('returns git dir path when rev-parse succeeds', async () => {
-			const deps = createDeps({
-				runGitCommand: async (args) => {
-					assert.deepStrictEqual(args, ['rev-parse', '--absolute-git-dir']);
-					return { stdout: '/repo/.git\n', stderr: '' };
-				},
-			});
-			const dir = await resolveGitDir('/repo', deps);
-			assert.strictEqual(dir, '/repo/.git');
-		});
-
-		test('returns worktree git dir when .git is a file (worktree/submodule)', async () => {
-			const worktreeGitDir = '/main-repo/.git/worktrees/my-feature';
-			const deps = createDeps({
-				runGitCommand: async (args) => {
-					assert.deepStrictEqual(args, ['rev-parse', '--absolute-git-dir']);
-					return { stdout: `${worktreeGitDir}\n`, stderr: '' };
-				},
-			});
-			const dir = await resolveGitDir('/worktree/root', deps);
-			assert.strictEqual(dir, worktreeGitDir);
-		});
-
-		test('returns undefined when rev-parse fails (not a git repo)', async () => {
-			const deps = createDeps({
-				runGitCommand: async () => {
-					throw new Error('fatal: not a git repository');
-				},
-			});
-			const dir = await resolveGitDir('/not-a-repo', deps);
-			assert.strictEqual(dir, undefined);
-		});
-
-		test('rethrows when rev-parse fails for reasons other than not a git repo', async () => {
-			const deps = createDeps({
-				runGitCommand: async () => {
-					throw new Error('spawn git ENOENT');
-				},
-			});
-			await assert.rejects(() => resolveGitDir('/repo', deps), /spawn git ENOENT/);
-		});
-	});
-
 	suite('isRebaseInProgress', () => {
 		test('returns false when neither rebase dir exists', () => {
 			const gitDir = '/repo/.git';
@@ -169,7 +97,7 @@ suite('sync-with-upstream-state', () => {
 				},
 			});
 
-			assert.strictEqual(isRebaseInProgress(gitDir, deps), false);
+			assert.strictEqual(isRebaseInProgress({ ...deps, gitDir }), false);
 		});
 
 		test('returns true when rebase-merge exists', () => {
@@ -179,7 +107,7 @@ suite('sync-with-upstream-state', () => {
 				fileExists: (p) => p === rebaseMerge,
 			});
 
-			assert.strictEqual(isRebaseInProgress(gitDir, deps), true);
+			assert.strictEqual(isRebaseInProgress({ ...deps, gitDir }), true);
 		});
 
 		test('returns true when rebase-apply exists', () => {
@@ -189,7 +117,7 @@ suite('sync-with-upstream-state', () => {
 				fileExists: (p) => p === rebaseApply,
 			});
 
-			assert.strictEqual(isRebaseInProgress(gitDir, deps), true);
+			assert.strictEqual(isRebaseInProgress({ ...deps, gitDir }), true);
 		});
 
 		test('returns true when both exist (rebase-merge wins first)', () => {
@@ -199,7 +127,7 @@ suite('sync-with-upstream-state', () => {
 					p === path.join(gitDir, 'rebase-merge') || p === path.join(gitDir, 'rebase-apply'),
 			});
 
-			assert.strictEqual(isRebaseInProgress(gitDir, deps), true);
+			assert.strictEqual(isRebaseInProgress({ ...deps, gitDir }), true);
 		});
 	});
 
@@ -208,7 +136,7 @@ suite('sync-with-upstream-state', () => {
 			const gitDir = '/repo/.git';
 			const deps = createDeps({ fileExists: () => false });
 
-			assert.strictEqual(readRebaseHeadName(gitDir, deps), undefined);
+			assert.strictEqual(readRebaseHeadName({ ...deps, gitDir }), undefined);
 		});
 
 		test('falls back to the other head-name location when the first read hits ENOENT', () => {
@@ -225,7 +153,7 @@ suite('sync-with-upstream-state', () => {
 				},
 			});
 
-			assert.strictEqual(readRebaseHeadName(gitDir, deps), 'from-apply');
+			assert.strictEqual(readRebaseHeadName({ ...deps, gitDir }), 'from-apply');
 		});
 
 		test('returns undefined when head-name is empty or whitespace-only', () => {
@@ -236,7 +164,7 @@ suite('sync-with-upstream-state', () => {
 				readFileUtf8: () => '   \n',
 			});
 
-			assert.strictEqual(readRebaseHeadName(gitDir, deps), undefined);
+			assert.strictEqual(readRebaseHeadName({ ...deps, gitDir }), undefined);
 		});
 
 		test('returns branch name when head-name contains refs/heads/branch', () => {
@@ -252,7 +180,7 @@ suite('sync-with-upstream-state', () => {
 				},
 			});
 
-			assert.strictEqual(readRebaseHeadName(gitDir, deps), 'feature/xyz');
+			assert.strictEqual(readRebaseHeadName({ ...deps, gitDir }), 'feature/xyz');
 		});
 
 		test('returns content as-is when not refs/heads/ prefix', () => {
@@ -263,7 +191,7 @@ suite('sync-with-upstream-state', () => {
 				readFileUtf8: (p) => (p === headPath ? 'origin/main' : ''),
 			});
 
-			assert.strictEqual(readRebaseHeadName(gitDir, deps), 'origin/main');
+			assert.strictEqual(readRebaseHeadName({ ...deps, gitDir }), 'origin/main');
 		});
 
 		test('trims whitespace from head-name content', () => {
@@ -274,7 +202,7 @@ suite('sync-with-upstream-state', () => {
 				readFileUtf8: (p) => (p === headPath ? '  refs/heads/develop  ' : ''),
 			});
 
-			assert.strictEqual(readRebaseHeadName(gitDir, deps), 'develop');
+			assert.strictEqual(readRebaseHeadName({ ...deps, gitDir }), 'develop');
 		});
 
 		test('prefers rebase-merge over rebase-apply', () => {
@@ -294,7 +222,7 @@ suite('sync-with-upstream-state', () => {
 				},
 			});
 
-			assert.strictEqual(readRebaseHeadName(gitDir, deps), 'from-merge');
+			assert.strictEqual(readRebaseHeadName({ ...deps, gitDir }), 'from-merge');
 		});
 	});
 });

@@ -8,7 +8,7 @@ const execFileAsync = promisify(execFile);
  * Used when showing commands to users (e.g. in error messages).
  * For actual execution, use runGitCommand with args array—no shell is invoked.
  */
-export function escapeForShell(s: string): string {
+function escapeForShell(s: string): string {
 	return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
@@ -22,7 +22,7 @@ export function quoteShellArg(s: string): string {
  * Args containing whitespace or single quotes are wrapped with escapeForShell.
  * Returns 'git' when args is empty.
  */
-function buildDisplayCmd(args: string[]): string {
+function buildDisplayCmd(args: readonly string[]): string {
 	if (args.length === 0) {
 		return 'git';
 	}
@@ -35,9 +35,12 @@ export type CommandResult = {
 	readonly stderr: string;
 };
 
+/** Runs git with `args` in a fixed repository. */
+export type RunGit = (args: readonly string[]) => Promise<CommandResult>;
+
 export type ExecFileFn = (
 	file: string,
-	args: string[],
+	args: readonly string[],
 	options: { cwd: string; env?: NodeJS.ProcessEnv }
 ) => Promise<{ stdout: string; stderr: string }>;
 
@@ -83,7 +86,7 @@ function logStreams(outputChannel: OutputWriter, streams: { stdout?: string; std
  * cause command injection regardless of their content.
  */
 export async function runGitCommand(
-	args: string[],
+	args: readonly string[],
 	cwd: string,
 	outputChannel: OutputWriter,
 	execFn: ExecFileFn = execFileAsync

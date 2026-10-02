@@ -1,4 +1,4 @@
-type RunGit = (args: string[]) => Promise<{ stdout: string }>;
+import type { RunGit } from './git-command';
 
 export type DefaultBranch = {
 	/** Local name, e.g. "main". */

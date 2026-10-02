@@ -11,7 +11,7 @@ suite('errors', () => {
 	test('describeGitFailure explains a missing repository', () => {
 		assert.deepStrictEqual(
 			describeGitFailure('fatal: not a git repository (or any parent)', { failed: true }),
-			['The selected workspace folder is not a Git repository.']
+			['This folder is not a Git repository.']
 		);
 	});
 

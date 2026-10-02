@@ -1,116 +1,58 @@
-import type { QuickPickItemLike } from '../../core/sweep-workflow';
-import { DEFAULT_SWEEP_SETTINGS } from '../../core/sweep-logic';
-import type { SyncMemento, SyncWithUpstreamDeps } from '../../core/sync-with-upstream-state';
-import { MEMENTO_KEY } from '../../core/sync-with-upstream-state';
+import { MEMENTO_KEY, type SyncContext, type SyncMemento } from '../../core/sync-state';
+import { createFakeContext, createMemoryStore, type GitEntry } from '../fake-context';
 
-export type GitEntry = { stdout?: string; stderr?: string } | Error;
+export type { GitEntry };
 
 export type HarnessOptions = {
 	workspaceRoot?: string;
-	quickPickSelection?: QuickPickItemLike | undefined;
+	/** Branch the single-select picker returns; `undefined` dismisses it. */
+	quickPickSelection?: { label: string } | undefined;
 	git?: Record<string, GitEntry | GitEntry[]>;
 	/** Return true/false for rebase-state paths (for example rebase-merge, rebase-apply, or head-name). Omit to default to false. */
 	fileExists?: (path: string) => boolean;
-	/** When set, runGitCommand will set .current=true when a rebase (non-continue) command runs. Use with stateful fileExists for conflict tests. */
+	/** When set, git sets .current=true when a rebase (non-continue) command runs. Use with stateful fileExists for conflict tests. */
 	rebaseAttemptedRef?: { current: boolean };
-	/** When set, runGitCommand will set .current=true when 'rebase --continue' runs. Use with stateful fileExists for resume push-failure tests. */
+	/** When set, git sets .current=true when 'rebase --continue' runs. Use with stateful fileExists for resume push-failure tests. */
 	rebaseContinueRanRef?: { current: boolean };
 	readFileUtf8?: (path: string) => string;
 	memento?: SyncMemento | undefined;
 };
 
-export type Harness = {
-	deps: SyncWithUpstreamDeps;
-	outputLines: string[];
-	infoMessages: string[];
-	errorMessages: string[];
-	commands: string[];
-	progressTitles: string[];
-	quickPickRequests: Array<{ items: QuickPickItemLike[]; title: string }>;
-	mementoUpdates: Array<{ key: string; value: unknown }>;
-	mementoGets: string[];
-};
-
-export function createHarness(options: HarnessOptions = {}): Harness {
-	const outputLines: string[] = [];
-	const infoMessages: string[] = [];
-	const errorMessages: string[] = [];
-	const commands: string[] = [];
-	const progressTitles: string[] = [];
-	const quickPickRequests: Array<{ items: QuickPickItemLike[]; title: string }> = [];
-	const mementoUpdates: Array<{ key: string; value: unknown }> = [];
-	const mementoGets: string[] = [];
-	const callCount: Record<string, number> = {};
-
-	const resolveGitEntry = (command: string): GitEntry | undefined => {
-		const entry = options.git?.[command];
-		if (entry === undefined) {
-			return undefined;
-		}
-		if (Array.isArray(entry)) {
-			const idx = callCount[command] ?? 0;
-			callCount[command] = idx + 1;
-			return entry[idx] ?? entry[entry.length - 1];
-		}
-		return entry;
-	};
-
-	const workspaceStateStore: Record<string, unknown> = {
-		...(options.memento !== undefined && { [MEMENTO_KEY]: options.memento }),
-	};
-
-	const deps: SyncWithUpstreamDeps = {
-		getWorkspaceRoot: () => options.workspaceRoot,
-		getSettings: () => ({ ...DEFAULT_SWEEP_SETTINGS, confirmBeforeDelete: false }),
-		output: {
-			show: () => undefined,
-			appendLine: (line) => outputLines.push(line),
-			header: (line) => outputLines.push(line),
-		},
-		runGitCommand: async (args, _cwd) => {
-			const key = args.join(' ');
-			if (options.rebaseAttemptedRef && key.startsWith('rebase ') && !key.includes('--continue')) {
+export function createHarness(options: HarnessOptions = {}) {
+	const root = options.workspaceRoot ?? '/repo';
+	const fake = createFakeContext({
+		root,
+		git: options.git,
+		pick: [options.quickPickSelection?.label],
+		onGit: (command) => {
+			if (options.rebaseAttemptedRef && command.startsWith('rebase ') && !command.includes('--continue')) {
 				options.rebaseAttemptedRef.current = true;
 			}
-			if (options.rebaseContinueRanRef && key === 'rebase --continue') {
+			if (options.rebaseContinueRanRef && command === 'rebase --continue') {
 				options.rebaseContinueRanRef.current = true;
 			}
-			commands.push(key);
-			const entry = resolveGitEntry(key);
-			if (entry instanceof Error) {
-				throw entry;
-			}
-			return { stdout: entry?.stdout ?? '', stderr: entry?.stderr ?? '' };
 		},
-		ui: {
-			withProgress: async (progress, task) => {
-				progressTitles.push(progress.title);
-				return task();
-			},
-			showQuickPick: async (items, config) => {
-				quickPickRequests.push({ items, title: config.title });
-				return options.quickPickSelection;
-			},
-			pickBranches: async () => undefined,
-			showInformationMessage: (message) => infoMessages.push(message),
-			showErrorMessage: (message) => errorMessages.push(message),
-			confirm: async () => true,
-		},
-		workspaceState: {
+	});
+	const store = createMemoryStore(options.memento ? { [MEMENTO_KEY]: options.memento } : {});
+	const mementoUpdates: Array<{ key: string; value: unknown }> = [];
+	const mementoGets: string[] = [];
+	const context: SyncContext = {
+		...fake.context,
+		gitDir: `${root}/.git`,
+		state: {
 			get: <T>(key: string) => {
 				mementoGets.push(key);
-				return workspaceStateStore[key] as T | undefined;
+				return store.get<T>(key);
 			},
 			update: async (key, value) => {
 				mementoUpdates.push({ key, value });
-				workspaceStateStore[key] = value;
+				await store.update(key, value);
 			},
 		},
 		fileExists: options.fileExists ?? (() => false),
 		readFileUtf8: options.readFileUtf8 ?? (() => ''),
 	};
-
-	return { deps, outputLines, infoMessages, errorMessages, commands, progressTitles, quickPickRequests, mementoUpdates, mementoGets };
+	return { ...fake, context, quickPickRequests: fake.pickRequests, mementoUpdates, mementoGets };
 }
 
 /** No rebase in progress. Use for sync-flow tests that should proceed past the initial checks. */

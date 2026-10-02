@@ -1,9 +1,8 @@
 import * as assert from 'assert';
-import { runSyncWithUpstreamWorkflow } from '../../core/sync-with-upstream-workflow';
-import { syncMessages } from '../../core/sync-with-upstream-messages';
-import type { SyncMemento } from '../../core/sync-with-upstream-state';
-import { MEMENTO_KEY } from '../../core/sync-with-upstream-state';
-import { tempBranchNameFor } from '../../core/sync-with-upstream-sync-flow';
+import { NOT_A_REPOSITORY } from '../../core/errors';
+import { syncMessages } from '../../core/sync-messages';
+import { MEMENTO_KEY, type SyncMemento } from '../../core/sync-state';
+import { runSyncWorkflow, tempBranchNameFor } from '../../core/sync-workflow';
 import {
 	baseGitForSync,
 	createHarness,
@@ -14,45 +13,14 @@ const tempMain = tempBranchNameFor('origin/main', '/repo/.git');
 const tempDevelop = tempBranchNameFor('origin/develop', '/repo/.git');
 
 suite('sync-with-upstream workflow', () => {
-	suite('runSyncWithUpstreamWorkflow', () => {
-		test('fails fast when no workspace is open', async () => {
-			const h = createHarness();
-			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'failed');
-
-			assert.deepStrictEqual(h.errorMessages, [syncMessages.noWorkspace]);
-			assert.strictEqual(h.commands.length, 0);
-		});
-
-		test('reports error when workspace has no .git directory', async () => {
-			const h = createHarness({
-				workspaceRoot: '/repo',
-				git: { 'rev-parse --absolute-git-dir': new Error('fatal: not a git repository') },
-			});
-			await runSyncWithUpstreamWorkflow(h.deps);
-
-			assert.deepStrictEqual(h.errorMessages, [syncMessages.notGitRepo]);
-			assert.ok(h.commands.includes('rev-parse --absolute-git-dir'));
-			assert.ok(h.commands.length >= 1);
-		});
-
-		test('maps git-not-installed errors from rev-parse to friendly message', async () => {
-			const h = createHarness({
-				workspaceRoot: '/repo',
-				git: { 'rev-parse --absolute-git-dir': new Error('spawn git ENOENT') },
-			});
-			await runSyncWithUpstreamWorkflow(h.deps);
-
-			assert.deepStrictEqual(h.errorMessages, [syncMessages.gitNotInstalled]);
-			assert.strictEqual(h.commands.length, 1);
-		});
-
+	suite('runSyncWorkflow', () => {
 		test('fails fast when rebase already in progress', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
 				fileExists: (p) => p.includes('rebase-merge') || p.includes('rebase-apply'),
 				git: { 'rev-parse --absolute-git-dir': { stdout: '/repo/.git' } },
 			});
-			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'paused');
+			assert.strictEqual(await runSyncWorkflow(h.context), 'paused');
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.rebaseAlreadyInProgress]);
 			assert.ok(!h.commands.includes('fetch -p'));
@@ -67,7 +35,7 @@ suite('sync-with-upstream workflow', () => {
 					'rev-parse --abbrev-ref HEAD': { stdout: 'HEAD' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.deepStrictEqual(h.errorMessages, [syncMessages.couldNotDetermineBranch]);
 			assert.ok(h.commands.includes('fetch -p'));
@@ -83,10 +51,18 @@ suite('sync-with-upstream workflow', () => {
 					'branch --no-column -a': { stdout: '* feature/my-branch\n  remotes/origin/HEAD -> origin/main' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.noBranchesForSync]);
 			assert.strictEqual(h.quickPickRequests.length, 0);
+		});
+
+		test('syncs with the requested branch without asking', async () => {
+			const h = createHarness({ fileExists: fileExistsNoRebase, git: baseGitForSync });
+			await runSyncWorkflow(h.context, 'main');
+
+			assert.strictEqual(h.quickPickRequests.length, 0);
+			assert.ok(h.commands.includes('rebase main'));
 		});
 
 		test('handles quick-pick cancellation', async () => {
@@ -96,23 +72,23 @@ suite('sync-with-upstream workflow', () => {
 				quickPickSelection: undefined,
 				git: baseGitForSync,
 			});
-			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'cancelled');
+			assert.strictEqual(await runSyncWorkflow(h.context), 'cancelled');
 
 			assert.ok(h.outputLines.includes(syncMessages.operationCancelled));
 			assert.strictEqual(h.quickPickRequests.length, 1);
 			assert.strictEqual(h.quickPickRequests[0]?.title, syncMessages.pickBranchTitle);
 		});
 
-		test('reports an internal error when the selected label matches no branch', async () => {
+		test('fails when the picker returns a label that matches no branch', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',
 				fileExists: fileExistsNoRebase,
 				quickPickSelection: { label: 'does-not-exist' },
 				git: baseGitForSync,
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
-			assert.deepStrictEqual(h.errorMessages, [syncMessages.internalBranchNotFound]);
+			assert.deepStrictEqual(h.errorMessages, ['Unknown branch picked: does-not-exist']);
 			assert.ok(h.outputLines.includes(syncMessages.outputFailed), 'log should end with a terminal marker');
 			assert.ok(!h.commands.some((c) => c.startsWith('rebase')));
 		});
@@ -128,7 +104,7 @@ suite('sync-with-upstream workflow', () => {
 					'checkout feature/my-branch': { stdout: '' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.ok(h.errorMessages.some((m) => m.includes('index file corrupt')));
 			assert.ok(!h.commands.some((c) => c.startsWith('stash push')));
@@ -152,7 +128,7 @@ suite('sync-with-upstream workflow', () => {
 					'push --force-with-lease': { stdout: '' },
 				},
 			});
-			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'ok');
+			assert.strictEqual(await runSyncWorkflow(h.context), 'ok');
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedWith('feature/my-branch', 'main')]);
 			assert.deepStrictEqual(h.errorMessages, []);
@@ -190,7 +166,7 @@ suite('sync-with-upstream workflow', () => {
 					'push --force-with-lease': { stdout: '' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedWith('feature/my-branch', 'main')]);
 			const clearUpdate = h.mementoUpdates.find((u) => u.key === MEMENTO_KEY && u.value === undefined);
@@ -214,7 +190,7 @@ suite('sync-with-upstream workflow', () => {
 					'stash pop': { stdout: '' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.syncedWith('feature/my-branch', 'main')]);
 			assert.ok(h.commands.includes('status --porcelain -u'));
@@ -240,7 +216,7 @@ suite('sync-with-upstream workflow', () => {
 					'rev-parse --verify refs/heads/main': { stdout: 'abc123' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.ok(h.commands.includes(`checkout -B ${tempMain} origin/main`));
 			assert.ok(h.commands.includes('pull --ff-only origin main'));
@@ -269,7 +245,7 @@ suite('sync-with-upstream workflow', () => {
 					'branch main origin/main': { stdout: '' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.ok(h.commands.includes('branch main origin/main'));
 			assert.ok(!h.commands.some((c) => c.includes('branch -f')), 'should not force-update');
@@ -286,7 +262,7 @@ suite('sync-with-upstream workflow', () => {
 					'rev-parse --abbrev-ref HEAD': { stdout: 'main' },
 				},
 			});
-			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'cancelled');
+			assert.strictEqual(await runSyncWorkflow(h.context), 'cancelled');
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.cannotSyncOntoItself('main')]);
 			assert.ok(h.outputLines.includes(syncMessages.operationCancelled));
@@ -308,7 +284,7 @@ suite('sync-with-upstream workflow', () => {
 					'checkout feature/my-branch': { stdout: '' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.ok(!h.commands.some((c) => c.startsWith('rebase')));
 			assert.ok(!h.commands.includes('push --force-with-lease'));
@@ -332,7 +308,7 @@ suite('sync-with-upstream workflow', () => {
 					'push --force-with-lease': { stdout: '' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.ok(h.outputLines.includes(syncMessages.infoPullSkippedLocal));
 			assert.ok(h.commands.includes('rebase main'));
@@ -357,7 +333,7 @@ suite('sync-with-upstream workflow', () => {
 					[`branch -D ${tempDevelop}`]: { stdout: '' },
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.ok(!h.commands.some((c) => c.startsWith('rebase')));
 			assert.ok(!h.commands.includes('push --force-with-lease'));
@@ -382,7 +358,7 @@ suite('sync-with-upstream workflow', () => {
 					'rebase main': new Error('CONFLICT (content): Merge conflict in foo.ts'),
 				},
 			});
-			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'paused');
+			assert.strictEqual(await runSyncWorkflow(h.context), 'paused');
 
 			assert.deepStrictEqual(h.infoMessages, [syncMessages.rebaseConflicts]);
 			assert.ok(h.outputLines.includes(syncMessages.outputRebasePaused));
@@ -410,7 +386,7 @@ suite('sync-with-upstream workflow', () => {
 				},
 			});
 
-			assert.strictEqual(await runSyncWithUpstreamWorkflow(h.deps), 'failed');
+			assert.strictEqual(await runSyncWorkflow(h.context), 'failed');
 
 			assert.ok(h.errorMessages.some((m) => m.includes('non-fast-forward')));
 			assert.ok(h.outputLines.includes(syncMessages.infoStateSavedForResume));
@@ -428,9 +404,9 @@ suite('sync-with-upstream workflow', () => {
 					'fetch -p': new Error('fatal: not a git repository (or any of the parent directories): .git'),
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
-			assert.deepStrictEqual(h.errorMessages, [syncMessages.notGitRepo]);
+			assert.deepStrictEqual(h.errorMessages, [NOT_A_REPOSITORY]);
 			assert.ok(h.outputLines.includes(syncMessages.outputFailed));
 		});
 
@@ -443,9 +419,9 @@ suite('sync-with-upstream workflow', () => {
 					'fetch -p': new Error('spawn git ENOENT'),
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
-			assert.deepStrictEqual(h.errorMessages, [syncMessages.gitNotInstalled]);
+			assert.deepStrictEqual(h.errorMessages, ['Git is not installed or not available in PATH.']);
 		});
 
 		test('maps unknown errors to generic failure message', async () => {
@@ -457,7 +433,7 @@ suite('sync-with-upstream workflow', () => {
 					'fetch -p': new Error('mysterious failure'),
 				},
 			});
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.deepStrictEqual(h.errorMessages, ['mysterious failure']);
 		});
@@ -495,7 +471,7 @@ suite('sync-with-upstream workflow', () => {
 				},
 			});
 
-			await runSyncWithUpstreamWorkflow(h.deps);
+			await runSyncWorkflow(h.context);
 
 			assert.strictEqual(
 				h.quickPickRequests[0].items.find((item) => item.label === 'main')?.description,

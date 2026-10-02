@@ -1,11 +1,11 @@
-import type { NoticeOptions } from './sweep-workflow';
+import type { NoticeOptions } from './workflow';
 
 /** Extracts a human-readable message from anything thrown. */
 export function toErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-export const NOT_A_REPOSITORY = 'The selected workspace folder is not a Git repository.';
+export const NOT_A_REPOSITORY = 'This folder is not a Git repository.';
 
 /**
  * Maps a failed git invocation to the arguments of an error notification:

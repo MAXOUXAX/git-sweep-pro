@@ -24,9 +24,6 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 			case 'log':
 				ui.log(event.line);
 				return;
-			case 'showOutput':
-				ui.showOutput(event.preserveFocus);
-				return;
 			case 'notify':
 				errorShown ||= event.method === 'showErrorMessage';
 				invoke(ui, event);

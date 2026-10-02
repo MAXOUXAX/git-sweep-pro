@@ -1,63 +1,14 @@
-export type SweepMode = {
-	readonly dryRun: boolean;
-	readonly forceDelete: boolean;
-};
+/** How a sweep deletes: not at all, with `git branch -d`, or with `git branch -D`. */
+export type SweepMode = 'dryRun' | 'safeDelete' | 'forceDelete';
 
-export type SweepModeSetting = 'dryRun' | 'safeDelete' | 'forceDelete';
-
+/** Repository-wide sweep preferences (VS Code settings, or CLI flags and git config). */
 export type SweepSettings = {
-	readonly defaultMode: SweepModeSetting;
 	readonly protectedBranches: readonly string[];
 	readonly autoFetchPrune: boolean;
 	readonly confirmBeforeDelete: boolean;
 	/** Also offer branches already merged into the default branch whose upstream is not gone. */
 	readonly includeMergedBranches: boolean;
 };
-
-export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
-	defaultMode: 'safeDelete',
-	protectedBranches: [],
-	autoFetchPrune: true,
-	confirmBeforeDelete: true,
-	includeMergedBranches: false,
-};
-
-/** Maps a configured default-mode setting to a concrete {@link SweepMode}. */
-export function resolveModeFromSetting(setting: SweepModeSetting): SweepMode {
-	switch (setting) {
-		case 'dryRun':
-			return { dryRun: true, forceDelete: false };
-		case 'forceDelete':
-			return { dryRun: false, forceDelete: true };
-		case 'safeDelete':
-		default:
-			return { dryRun: false, forceDelete: false };
-	}
-}
-
-const MODE_ACTION_LABELS: Record<SweepModeSetting, string> = {
-	dryRun: 'Dry Run',
-	safeDelete: 'Delete (safe -d)',
-	forceDelete: 'Delete (force -D)',
-};
-
-/**
- * Returns the three mode-picker action labels ordered so the configured default
- * appears first (VS Code renders the first modal button as the primary action).
- */
-export function orderModeActions(defaultMode: SweepModeSetting): string[] {
-	const order: SweepModeSetting[] = ['safeDelete', 'forceDelete', 'dryRun'];
-	const ordered = [defaultMode, ...order.filter((m) => m !== defaultMode)];
-	return ordered.map((m) => MODE_ACTION_LABELS[m]);
-}
-
-/** Maps a label returned by the mode picker back to its {@link SweepMode}. */
-export function resolveSweepModeAction(action: string | undefined): SweepMode | undefined {
-	const setting = (Object.keys(MODE_ACTION_LABELS) as SweepModeSetting[]).find(
-		(key) => MODE_ACTION_LABELS[key] === action
-	);
-	return setting ? resolveModeFromSetting(setting) : undefined;
-}
 
 /** `git for-each-ref` arguments whose output {@link parseLocalBranchRefs} understands. */
 export const GONE_REFS_ARGS: readonly string[] = [

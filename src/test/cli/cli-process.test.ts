@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { NOT_A_REPOSITORY } from '../../core/errors';
 import type { HostUi } from '../../core/rpc-protocol';
 import { runCliProcess } from '../../vscode/cli-client';
 import { branchExists, createRepoFixture, makeGoneBranch, type RepoFixture } from './git-fixture';
@@ -14,9 +15,8 @@ function createHostUi(confirmAnswer: boolean) {
 	const confirms: string[] = [];
 	const ui: HostUi = {
 		log: (line) => logs.push(line),
-		showOutput: () => undefined,
 		withProgress: (_options, task) => task(),
-		showQuickPick: async () => undefined,
+		pickBranch: async () => undefined,
 		pickBranches: async ({ items }) => items.filter((item) => item.picked).map((item) => item.label),
 		showInformationMessage: (message) => infos.push(message),
 		showErrorMessage: (message) => errors.push(message),
@@ -71,7 +71,7 @@ suite('cli process client (real git)', function () {
 		const host = createHostUi(true);
 		const result = await runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: fx.dir, args: ['sweep'], ui: host.ui });
 		assert.deepStrictEqual(result, { exitCode: 1, errorShown: true });
-		assert.deepStrictEqual(host.errors, ['The selected workspace folder is not a Git repository.']);
+		assert.deepStrictEqual(host.errors, [NOT_A_REPOSITORY]);
 	});
 
 	test('a crash exits non-zero without an error notification, its stderr goes to the log', async () => {

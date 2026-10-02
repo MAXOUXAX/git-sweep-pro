@@ -9,22 +9,20 @@ type Recorded = {
 	infos: string[];
 	errors: string[];
 	progress: string[];
-	shown: boolean[];
 };
 
-function createRecordingHostUi(answers: { pick?: unknown; branches?: readonly string[]; confirm?: boolean }): HostUi & { rec: Recorded } {
-	const rec: Recorded = { logs: [], infos: [], errors: [], progress: [], shown: [] };
+function createRecordingHostUi(answers: { pick?: string; branches?: readonly string[]; confirm?: boolean }): HostUi & { rec: Recorded } {
+	const rec: Recorded = { logs: [], infos: [], errors: [], progress: [] };
 	return {
 		rec,
 		log: (line) => rec.logs.push(line),
-		showOutput: (preserveFocus) => rec.shown.push(preserveFocus),
 		withProgress: async (options, task) => {
 			rec.progress.push(`start ${options.title}`);
 			const result = await task();
 			rec.progress.push(`end ${options.title}`);
 			return result;
 		},
-		showQuickPick: async () => answers.pick as never,
+		pickBranch: async () => answers.pick,
 		pickBranches: async () => answers.branches,
 		showInformationMessage: (message) => rec.infos.push(message),
 		showErrorMessage: (message) => rec.errors.push(message),
@@ -61,27 +59,22 @@ function connect(host: HostUi): ReturnType<typeof createRpcFrontend> {
 }
 
 suite('cli rpc bridge', () => {
-	test('forwards notifications, logs and output requests', () => {
+	test('forwards notifications and logs', () => {
 		const host = createRecordingHostUi({});
 		const { ui, output, trace } = connect(host);
 		trace('$ git fetch -p');
 		output.appendLine('Deleted branch a');
-		output.show(true);
 		ui.showInformationMessage('done');
 		ui.showErrorMessage('bad');
 		assert.deepStrictEqual(host.rec.logs, ['$ git fetch -p', 'Deleted branch a']);
-		assert.deepStrictEqual(host.rec.shown, [true]);
 		assert.deepStrictEqual(host.rec.infos, ['done']);
 		assert.deepStrictEqual(host.rec.errors, ['bad']);
 	});
 
 	test('round-trips prompts and their answers', async () => {
-		const host = createRecordingHostUi({ pick: { label: 'main' }, branches: ['a'], confirm: true });
+		const host = createRecordingHostUi({ pick: 'main', branches: ['a'], confirm: true });
 		const { ui } = connect(host);
-		assert.deepStrictEqual(
-			await ui.showQuickPick([{ label: 'main' }], { canPickMany: false, ignoreFocusOut: true, matchOnDescription: true, title: 't', placeHolder: '' }),
-			{ label: 'main' }
-		);
+		assert.strictEqual(await ui.pickBranch({ items: [{ label: 'main' }], title: 't', placeholder: '' }), 'main');
 		assert.deepStrictEqual(await ui.pickBranches({ items: [{ label: 'a', picked: true }], title: 't' }), ['a']);
 		assert.strictEqual(await ui.confirm('Delete?', 'Delete'), true);
 	});
