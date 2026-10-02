@@ -61,6 +61,7 @@ suite('cli app (real git)', function () {
 			stale: ['feature/a', 'release/1'],
 			protected: [],
 			checkedOut: [],
+			merged: [],
 			worktrees: {},
 		});
 
@@ -222,6 +223,7 @@ suite('cli app (real git)', function () {
 				stale: ['feature/wt'],
 				protected: [],
 				checkedOut: [{ name: 'feature/here', where: 'current' }],
+				merged: [],
 				worktrees: { 'feature/wt': realWt },
 			});
 		});

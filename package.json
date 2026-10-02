@@ -124,6 +124,11 @@
           "default": true,
           "description": "Show a confirmation dialog before deleting the selected branches."
         },
+        "gitSweepPro.includeMergedBranches": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Also offer local branches whose work is already in the remote default branch (merged, rebase-merged or squash-merged) even though their upstream is not gone — e.g. branches that were never pushed or whose remote branch was kept. They are listed but never pre-selected."
+        },
         "gitSweepPro.cli.addToTerminalPath": {
           "type": "boolean",
           "default": true,

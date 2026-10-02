@@ -21,6 +21,7 @@ function getSweepSettings(): SweepSettings {
 		protectedBranches: config.get<string[]>('protectedBranches', []),
 		autoFetchPrune: config.get<boolean>('autoFetchPrune', true),
 		confirmBeforeDelete: config.get<boolean>('confirmBeforeDelete', true),
+		includeMergedBranches: config.get<boolean>('includeMergedBranches', false),
 	};
 }
 

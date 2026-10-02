@@ -9,6 +9,7 @@ After a pull request is merged and its remote branch is deleted, the matching lo
 - **Precise, not aggressive** — it only targets branches whose upstream tracking is *gone*. Local-only branches you never pushed are never listed.
 - **You stay in control** — every candidate appears in a multi-select list with quick actions to select all, clear all, or invert your selection; before anything is deleted you get a summary (detected, selected, mode) and a confirmation.
 - **Clear outcomes** — after a run you see exactly how many branches were deleted, skipped, and failed.
+- **Finds merged branches too (opt-in)** — with `gitSweepPro.includeMergedBranches` (`--merged`), local branches whose work already landed on the default branch are offered as well, even if they were never pushed. Squash merges are recognized by comparing the branch's combined patch with the default branch's history.
 - **Handles squash & rebase merges** — detection is based on the remote branch being gone, not on commit reachability, so branches merged via squash or rebase are still found. When a safe delete refuses them (their commits were rewritten), Git Sweep Pro offers a one-click force-delete for exactly those branches.
 - **Worktree aware** — branches checked out in another `git worktree` are shown with their worktree and left unselected; picking one removes that worktree first (only if it has no uncommitted changes). Worktrees whose folder was deleted are pruned automatically.
 - **Multi-root aware** — when several open folders are Git repositories, it asks which one to operate on and remembers your choice for the session.
@@ -46,6 +47,7 @@ In VS Code's integrated terminals it is on the `PATH` automatically (setting `gi
 ```sh
 git sweep-pro                 # detect, pick, confirm and delete stale branches
 git sweep-pro --dry-run       # show what would be deleted
+git sweep-pro --merged        # also offer branches already (squash-)merged into main
 git sweep-pro list --json     # machine-readable list, nothing is deleted
 git sweep-pro -y -p 'release/*'   # non-interactive, with a protected pattern
 git sweep-pro post-pr main    # after a merged PR: switch to main, clean up, pull
@@ -83,7 +85,7 @@ Git Sweep Pro understands [`git worktree`](https://git-scm.com/docs/git-worktree
 
 Git Sweep Pro is built to make destructive operations feel trustworthy. It never deletes a branch you didn't approve.
 
-- **Only "gone upstream" branches are candidates.** Detection uses structured `git for-each-ref` output (stable across Git versions and locales) to find local branches whose remote tracking reference no longer exists. Branches without an upstream are never touched.
+- **Only "gone upstream" branches are pre-selected.** Detection uses structured `git for-each-ref` output (stable across Git versions and locales) to find local branches whose remote tracking reference no longer exists. Branches without an upstream are only offered when `gitSweepPro.includeMergedBranches` is enabled and their work is already on the default branch, and even then you must select them yourself.
 - **Safe delete by default.** The default mode uses `git branch -d`, which Git itself refuses to run on branches with unmerged commits. Force delete (`git branch -D`) is opt-in per run, and is offered as a follow-up only for the specific branches a safe delete rejected.
 - **You confirm before deletion.** A confirmation dialog is shown before branches are removed (configurable via `gitSweepPro.confirmBeforeDelete`).
 - **Protected branches can never be deleted.** Configure glob patterns in `gitSweepPro.protectedBranches` to guarantee branches like `main`, `develop`, or `release/*` are excluded from every sweep.
@@ -98,6 +100,7 @@ Git Sweep Pro is built to make destructive operations feel trustworthy. It never
 | `gitSweepPro.protectedBranches` | `string[]` | `[]` | Glob patterns for branches that must never be deleted (e.g. `main`, `develop`, `release/*`). `*` matches any characters, `?` matches a single character. |
 | `gitSweepPro.autoFetchPrune` | `boolean` | `true` | Run `git fetch -p` before detecting stale branches. Disable to operate on the local ref state only. |
 | `gitSweepPro.confirmBeforeDelete` | `boolean` | `true` | Show a confirmation dialog before deleting the selected branches. |
+| `gitSweepPro.includeMergedBranches` | `boolean` | `false` | Also offer local branches already merged — including rebase- and squash-merged — into the remote default branch even though their upstream is not gone (never pushed, or remote branch kept). Listed but never pre-selected. CLI: `--merged`. |
 | `gitSweepPro.cli.addToTerminalPath` | `boolean` | `true` | Put the bundled `git-sweep-pro` CLI (also `git sweep-pro`) on the `PATH` of integrated terminals. |
 
 ## Requirements

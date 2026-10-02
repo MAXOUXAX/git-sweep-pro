@@ -36,6 +36,8 @@ export function describeSweepMode(mode: SweepMode): string {
 
 export type SweepSummary = {
 	readonly totalDetected: number;
+	/** Branches merged into the default branch whose upstream is not gone, offered on top of the stale ones. */
+	readonly mergedCount: number;
 	readonly protectedCount: number;
 	/** Stale branches skipped because they are checked out here or in the main worktree. */
 	readonly checkedOutCount: number;
@@ -51,7 +53,11 @@ export type SweepSummary = {
  * protected, how many are selected, and which mode will run.
  */
 export function formatSweepSummary(summary: SweepSummary): string {
-	const lines = [`Detected: ${summary.totalDetected} stale branch(es)`];
+	const lines = [
+		summary.mergedCount > 0
+			? `Detected: ${summary.totalDetected} stale and ${summary.mergedCount} merged branch(es)`
+			: `Detected: ${summary.totalDetected} stale branch(es)`,
+	];
 	if (summary.protectedCount > 0) {
 		lines.push(`Protected (skipped): ${summary.protectedCount}`);
 	}
