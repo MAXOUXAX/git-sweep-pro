@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { NOT_A_REPOSITORY } from '../../core/errors';
@@ -42,6 +43,33 @@ suite('cli process client (real git)', function () {
 
 	teardown(() => {
 		fx.cleanup();
+	});
+
+	test('an agent can discover, delete and restore through the CLI process without stdin', () => {
+		makeGoneBranch(fx.repo, 'feature/agent');
+		const run = (args: string[]) => {
+			const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
+				cwd: fx.repo,
+				encoding: 'utf8',
+				env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+				timeout: 10000,
+			});
+			assert.ifError(result.error);
+			return result;
+		};
+
+		const listing = run(['list', '--json']);
+		assert.strictEqual(listing.status, 0, listing.stderr);
+		assert.deepStrictEqual(JSON.parse(listing.stdout).stale, ['feature/agent']);
+		assert.strictEqual(run(['--non-interactive']).status, 4);
+		assert.ok(branchExists(fx.repo, 'feature/agent'));
+		assert.strictEqual(run(['--non-interactive', '--yes']).status, 0);
+		assert.ok(!branchExists(fx.repo, 'feature/agent'));
+		const deleted = run(['restore', '--json']);
+		assert.strictEqual(deleted.status, 0, deleted.stderr);
+		assert.deepStrictEqual(JSON.parse(deleted.stdout).map((entry: { branch: string }) => entry.branch), ['feature/agent']);
+		assert.strictEqual(run(['restore', 'feature/agent', '--non-interactive']).status, 0);
+		assert.ok(branchExists(fx.repo, 'feature/agent'));
 	});
 
 	test('runs a sweep over RPC, answering the prompts', async () => {

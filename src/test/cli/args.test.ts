@@ -10,6 +10,7 @@ suite('cli args', () => {
 		assert.strictEqual(options.fetch, true);
 		assert.strictEqual(options.confirm, true);
 		assert.strictEqual(options.rpc, false);
+		assert.strictEqual(options.nonInteractive, false);
 		assert.deepStrictEqual(options.protect, []);
 	});
 
@@ -34,6 +35,22 @@ suite('cli args', () => {
 	test('takes a branch positional for post-pr and sync', () => {
 		assert.deepStrictEqual(parseArgs(['post-pr', 'main']).positionals, ['main']);
 		assert.deepStrictEqual(parseArgs(['sync', 'origin/main']).positionals, ['origin/main']);
+	});
+
+	test('supports explicit non-interactive mode without implying consent', () => {
+		const options = parseArgs(['--non-interactive']);
+		assert.strictEqual(options.nonInteractive, true);
+		assert.strictEqual(options.yes, false);
+		assert.throws(() => parseArgs(['--non-interactive', '--rpc']), /cannot be combined/);
+	});
+
+	test('JSON is available only for discovery, never silently ignored by a mutation', () => {
+		assert.strictEqual(parseArgs(['list', '--json']).json, true);
+		assert.strictEqual(parseArgs(['restore', '--json']).json, true);
+		assert.strictEqual(parseArgs(['--json', '--help']).command, 'help');
+		for (const args of [[], ['sweep'], ['post-pr', 'main'], ['sync'], ['resume'], ['restore', 'feature/x'], ['agents'], ['version']]) {
+			assert.throws(() => parseArgs([...args, '--json']), /--json requires list or restore without branch arguments/);
+		}
 	});
 
 	test('sync --continue is an alias of resume', () => {

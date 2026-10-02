@@ -43,7 +43,10 @@ suite('restore (real git)', function () {
 		assert.ok(!branchExists(fx.repo, 'feature/unmerged'));
 		assert.ok(sweep.err.join('').includes('To restore them, run: gsp restore feature/unmerged'));
 
-		const listing = createFakeIo(fx.repo);
+		const listing = {
+			...createFakeIo(fx.repo, { interactive: true }),
+			loadPrompter: async () => { throw new Error('JSON must not load widgets'); },
+		};
 		assert.strictEqual(await runCli(['restore', '--json'], listing), EXIT.ok);
 		const recorded = JSON.parse(listing.out.join('')) as Array<{ branch: string; sha: string; source: string }>;
 		assert.deepStrictEqual(recorded.map(({ branch, sha: s, source }) => ({ branch, sha: s, source })), [
