@@ -1,5 +1,6 @@
 import * as assert from 'assert';
-import { findStaleBranches, runSweepWorkflow, type NoticeOptions, type QuickPickItemLike, type SweepWorkflowDeps } from '../../core/sweep-workflow';
+import { findStaleBranches } from '../../core/stale-branches';
+import { runSweepWorkflow, type NoticeOptions, type QuickPickItemLike, type SweepWorkflowDeps } from '../../core/sweep-workflow';
 import { DEFAULT_SWEEP_SETTINGS, type SweepMode, type SweepSettings } from '../../core/sweep-logic';
 import type { SelectableBranch } from '../../core/sweep-selection';
 

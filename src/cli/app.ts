@@ -3,8 +3,9 @@ import * as path from 'node:path';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand, type CommandResult } from '../core/git-command';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
+import { findStaleBranches } from '../core/stale-branches';
 import type { SweepSettings } from '../core/sweep-logic';
-import { findStaleBranches, runSweepWorkflow, type SweepWorkflowDeps, type WorkflowOutcome } from '../core/sweep-workflow';
+import { runSweepWorkflow, type SweepWorkflowDeps, type WorkflowOutcome } from '../core/sweep-workflow';
 import type { StateStore } from '../core/sync-with-upstream-state';
 import {
 	runSyncWithUpstreamResumeWorkflow,
