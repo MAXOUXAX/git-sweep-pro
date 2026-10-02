@@ -150,6 +150,9 @@ async function resume(context: SyncContext): Promise<WorkflowOutcome> {
 
 	await clearMemento(context);
 	output.header(syncMessages.outputResumeComplete);
-	ui.showInformationMessage(syncMessages.syncedSuccess(featureBranch));
+	// After a failed stash pop, its error is the outcome: no success on top of it.
+	if (outcome === 'ok') {
+		ui.showInformationMessage(syncMessages.syncedSuccess(featureBranch));
+	}
 	return outcome;
 }

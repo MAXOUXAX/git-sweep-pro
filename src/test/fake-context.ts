@@ -38,7 +38,8 @@ export function createMemoryStore(initial: Record<string, unknown> = {}): StateS
 	return {
 		state,
 		get: <T>(key: string) => state[key] as T | undefined,
-		update: async (key: string, value: unknown) => {
+		update: async <T>(key: string, change: (current: T | undefined) => T | undefined) => {
+			const value = change(state[key] as T | undefined);
 			if (value === undefined) {
 				delete state[key];
 			} else {

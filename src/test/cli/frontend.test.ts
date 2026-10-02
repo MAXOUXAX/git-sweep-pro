@@ -164,6 +164,14 @@ suite('cli front ends', () => {
 			assert.strictEqual(await createInteractiveFrontend(interactiveIo(), plain, cancelled.prompter).ui.pickOne(pick(items)), undefined);
 		});
 
+		test('pickOne with --yes takes the default without prompting, or fails without one', async () => {
+			const yes = createFakePrompter();
+			const { ui } = createInteractiveFrontend(interactiveIo(), { ...plain, yes: true }, yes.prompter);
+			assert.strictEqual(await ui.pickOne(pick([{ label: 'dev' }, { label: 'main', picked: true }])), 'main');
+			await assert.rejects(async () => ui.pickOne(pick([{ label: 'dev' }])), /no default available/);
+			assert.deepStrictEqual(yes.calls, []);
+		});
+
 		test('confirm only proceeds on an explicit yes, or with --yes', async () => {
 			const confirm = (answer: boolean | undefined, yes = false) =>
 				createInteractiveFrontend(interactiveIo(), { ...plain, yes }, createFakePrompter({ confirm: answer }).prompter).ui.confirm('m', 'Delete');

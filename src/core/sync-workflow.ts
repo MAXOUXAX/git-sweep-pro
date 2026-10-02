@@ -323,7 +323,10 @@ export async function runSyncWorkflow(context: SyncContext, requested?: string):
 		await clearMemento(context);
 
 		output.header(syncMessages.outputComplete);
-		ui.showInformationMessage(syncMessages.syncedWith(featureBranch, upstreamRef));
+		// After a failed stash pop, its error is the outcome: no success on top of it.
+		if (outcome === 'ok') {
+			ui.showInformationMessage(syncMessages.syncedWith(featureBranch, upstreamRef));
+		}
 		return outcome;
 	} catch (error) {
 		if (!skipOuterCleanup) {
