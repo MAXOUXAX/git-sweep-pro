@@ -1,5 +1,7 @@
 import { createBranchDeleter } from './branch-deletion';
+import { canRecordDeletions, createDeletionRecorder, type DeletionLog } from './deletion-log';
 import { describeGitFailure, toErrorMessage } from './errors';
+import { quoteShellArg } from './git-command';
 import { describeCheckedOutBranch, findStaleBranches } from './stale-branches';
 import type { SweepMode, SweepSettings } from './sweep-logic';
 import { formatSweepOutcome, formatSweepSummary, type SelectableBranch } from './sweep-selection';
@@ -73,6 +75,8 @@ export type SweepWorkflowDeps = {
 	};
 	readonly runGitCommand: (args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
 	readonly ui: WorkflowUi;
+	/** Where deletions are recorded so they can be undone with `restore`. */
+	readonly deletionLog?: DeletionLog;
 };
 
 /** Narrows a single-select quick pick result to the picked item (or undefined when dismissed). */
@@ -84,6 +88,11 @@ export function singlePick(
 
 function describeDeleteFlag(mode: SweepMode): '-d' | '-D' {
 	return mode.forceDelete ? '-D' : '-d';
+}
+
+/** Ends a deletion prompt: whether the user can take the deletion back. */
+function undoNote(deps: SweepWorkflowDeps): string {
+	return canRecordDeletions(deps.deletionLog) ? 'You can restore them later.' : 'This cannot be undone.';
 }
 
 export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps): Promise<WorkflowOutcome> {
@@ -189,7 +198,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 		if (settings.confirmBeforeDelete) {
 			const confirmed = await deps.ui.confirm(
-				`${summary}\n\nDelete ${branchNames.length} branch(es) with git branch ${describeDeleteFlag(mode)}? This cannot be undone.`,
+				`${summary}\n\nDelete ${branchNames.length} branch(es) with git branch ${describeDeleteFlag(mode)}? ${undoNote(deps)}`,
 				`Delete ${branchNames.length}`
 			);
 			if (!confirmed) {
@@ -199,10 +208,12 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			}
 		}
 
+		const recorder = deps.deletionLog && createDeletionRecorder(deps.deletionLog, 'sweep', deps.output.appendLine);
 		const deleteBranch = createBranchDeleter({
 			runGit: (args) => deps.runGitCommand(args, workspaceRoot),
 			log: (line) => deps.output.appendLine(line),
 			worktrees: worktreeOf,
+			onDeleted: recorder?.record,
 		});
 		let deletedCount = 0;
 		const notFullyMerged: string[] = [];
@@ -232,7 +243,7 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			);
 			const confirmed = await deps.ui.confirm(
 				`${notFullyMerged.length} branch(es) look squash/rebase merged (remote gone, but not a fast-forward merge locally). ` +
-					'Force-delete them with git branch -D? This cannot be undone.',
+					`Force-delete them with git branch -D? ${undoNote(deps)}`,
 				`Force-delete ${notFullyMerged.length}`
 			);
 			if (confirmed) {
@@ -247,6 +258,10 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 				skippedCount = notFullyMerged.length;
 				deps.output.appendLine('Force-delete of not-fully-merged branches declined.');
 			}
+		}
+
+		if (recorder && recorder.recorded.length > 0) {
+			deps.output.appendLine(`To restore them, run: git sweep-pro restore ${recorder.recorded.map(quoteShellArg).join(' ')}`);
 		}
 
 		const outcome = formatSweepOutcome({

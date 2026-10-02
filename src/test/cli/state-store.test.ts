@@ -26,6 +26,7 @@ suite('cli state store', () => {
 		assert.deepStrictEqual(createFileStateStore(file).get('k'), { a: 1 }, 'visible to a fresh store (another process)');
 
 		await store.update('other', true);
+		assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), ['state.json'], 'no temporary file is left behind');
 		await store.update('k', undefined);
 		assert.strictEqual(store.get('k'), undefined);
 		assert.ok(fs.existsSync(file));
