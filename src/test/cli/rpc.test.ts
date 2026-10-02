@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import type { CliIo } from '../../cli/io';
 import { createRpcFrontend } from '../../cli/rpc-frontend';
-import type { HostUi } from '../../core/rpc-protocol';
+import type { HostResponse, HostUi } from '../../core/rpc-protocol';
 import { createCliEventHandler } from '../../vscode/cli-client';
 
 type Recorded = {
@@ -115,6 +115,19 @@ suite('cli rpc bridge', () => {
 			readLine: async () => JSON.stringify({ type: 'response', id: 99, result: true }),
 		};
 		await assert.rejects(async () => createRpcFrontend(io).ui.confirm('Delete?', 'Delete'), /Unexpected RPC response/);
+	});
+
+	test('a prompt the host fails to show is answered as dismissed', async () => {
+		const host = { ...createRecordingHostUi({}), confirm: async (): Promise<boolean> => {
+			throw new Error('modal unavailable');
+		} };
+		const responses: HostResponse[] = [];
+		const handler = createCliEventHandler(host, (response) => responses.push(response));
+
+		await handler.handleLine(JSON.stringify({ type: 'request', id: 7, method: 'confirm', params: ['Delete?', 'Delete'] }));
+
+		assert.deepStrictEqual(responses.map((response) => JSON.stringify(response)), ['{"type":"response","id":7}']);
+		assert.deepStrictEqual(host.rec.logs, ['[error] confirm failed: modal unavailable']);
 	});
 
 	test('host logs non-protocol lines and closes dangling progress on dispose', async () => {
