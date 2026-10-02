@@ -69,8 +69,8 @@ Run `git sweep-pro --help` for every option. A sync paused on conflicts is recor
 
 Git Sweep Pro understands [`git worktree`](https://git-scm.com/docs/git-worktree):
 
-- **Sweep** never tries to delete the branch checked out in the worktree you run it from. Stale branches checked out in *other* worktrees are listed with their location but not pre-selected; selecting one runs `git worktree remove` (which refuses if the worktree has uncommitted changes or is locked) before deleting the branch. `--yes` never selects them for you.
-- **`list`** shows the worktree of each stale branch, and marks a stale current branch. With `--json`, `worktrees` maps each branch to its worktree path and `current` holds the stale current branch (or `null`).
+- **Sweep** never tries to delete the branch checked out in the worktree you run it from, or in the main worktree; it tells you which stale branches it skipped for that reason. Stale branches checked out in *other* worktrees are listed with their location but not pre-selected; selecting one runs `git worktree remove` (which refuses if the worktree has uncommitted changes or is locked) before deleting the branch. `--yes` never selects them for you.
+- **`list`** shows the worktree of each stale branch, and marks the stale branches that are checked out here or in the main worktree. With `--json`, `worktrees` maps each branch to its worktree path, and `checkedOut` lists the branches that a sweep from here skips.
 - Worktrees whose directory was deleted are pruned (`git worktree prune`) along with `git fetch -p`, so their branches become sweepable again.
 - **Post Pull Request Cleanup** in a linked worktree: when the branch to switch to (typically `main`) is checked out in another worktree, it switches to a detached HEAD at the same commit instead, then deletes the merged branch and sweeps.
 - **Sync With Upstream** can rebase onto a local branch checked out in another worktree (it is used as is, without pulling; pick its remote branch for the latest version). A paused sync is tracked per worktree.

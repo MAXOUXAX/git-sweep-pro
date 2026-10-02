@@ -1,5 +1,5 @@
 import { describeGitFailure, toErrorMessage } from './errors';
-import { findStaleBranches } from './stale-branches';
+import { describeCheckedOutBranch, findStaleBranches } from './stale-branches';
 import { isNotFullyMergedError, type SweepMode, type SweepSettings } from './sweep-logic';
 import { formatSweepOutcome, formatSweepSummary, type SelectableBranch } from './sweep-selection';
 
@@ -103,11 +103,11 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		const {
 			stale: candidateBranches,
 			protected: protectedBranches,
-			current,
+			checkedOut,
 			worktrees: worktreeOf,
 		} = await findStaleBranches(workspaceRoot, deps);
 
-		if (candidateBranches.length === 0 && protectedBranches.length === 0 && current === undefined) {
+		if (candidateBranches.length === 0 && protectedBranches.length === 0 && checkedOut.length === 0) {
 			deps.output.appendLine('No stale tracked branches found.');
 			deps.ui.showInformationMessage('No stale branches found.');
 			return 'ok';
@@ -120,18 +120,19 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			}
 		}
 
-		const currentSkipped = current === undefined ? undefined : `"${current}" is stale, but it is the current branch, so it was skipped. Switch to another branch to delete it.`;
-		if (currentSkipped) {
-			deps.output.appendLine(currentSkipped);
-		}
+		const checkedOutNotices = checkedOut.map(describeCheckedOutBranch);
+		checkedOutNotices.forEach((notice) => deps.output.appendLine(notice));
 
 		if (candidateBranches.length === 0) {
-			if (currentSkipped) {
-				deps.ui.showInformationMessage(currentSkipped);
-				return 'ok';
-			}
-			deps.output.appendLine('All stale branches are protected; nothing to do.');
-			deps.ui.showInformationMessage(`All ${protectedBranches.length} stale branch(es) are protected.`);
+			deps.output.appendLine('No stale branch can be deleted from here; nothing to do.');
+			deps.ui.showInformationMessage(
+				checkedOut.length === 0
+					? `All ${protectedBranches.length} stale branch(es) are protected.`
+					: [
+							...checkedOutNotices,
+							...(protectedBranches.length > 0 ? [`${protectedBranches.length} other stale branch(es) are protected.`] : []),
+						].join(' ')
+			);
 			return 'ok';
 		}
 
@@ -163,8 +164,9 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		}
 
 		const summary = formatSweepSummary({
-			totalDetected: candidateBranches.length + protectedBranches.length,
+			totalDetected: candidateBranches.length + protectedBranches.length + checkedOut.length,
 			protectedCount: protectedBranches.length,
+			checkedOutCount: checkedOut.length,
 			selectedCount: branchNames.length,
 			worktreeCount: branchNames.filter((branch) => worktreeOf.has(branch)).length,
 			mode,

@@ -37,6 +37,8 @@ export function describeSweepMode(mode: SweepMode): string {
 export type SweepSummary = {
 	readonly totalDetected: number;
 	readonly protectedCount: number;
+	/** Stale branches skipped because they are checked out here or in the main worktree. */
+	readonly checkedOutCount?: number;
 	readonly selectedCount: number;
 	/** Selected branches checked out in another worktree (removed before deletion). */
 	readonly worktreeCount?: number;
@@ -52,6 +54,9 @@ export function formatSweepSummary(summary: SweepSummary): string {
 	const lines = [`Detected: ${summary.totalDetected} stale branch(es)`];
 	if (summary.protectedCount > 0) {
 		lines.push(`Protected (skipped): ${summary.protectedCount}`);
+	}
+	if (summary.checkedOutCount) {
+		lines.push(`Checked out (skipped): ${summary.checkedOutCount}`);
 	}
 	lines.push(`Selected: ${summary.selectedCount}`);
 	if (summary.worktreeCount) {

@@ -60,7 +60,7 @@ suite('cli app (real git)', function () {
 		assert.deepStrictEqual(JSON.parse(json.out.join('')), {
 			stale: ['feature/a', 'release/1'],
 			protected: [],
-			current: null,
+			checkedOut: [],
 			worktrees: {},
 		});
 
@@ -221,7 +221,7 @@ suite('cli app (real git)', function () {
 			assert.deepStrictEqual(JSON.parse(json.out.join('')), {
 				stale: ['feature/wt'],
 				protected: [],
-				current: 'feature/here',
+				checkedOut: [{ name: 'feature/here', where: 'current' }],
 				worktrees: { 'feature/wt': realWt },
 			});
 		});
@@ -254,6 +254,21 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(await runCli(['--yes'], createFakeIo(fx.repo)), EXIT.ok);
 			assert.ok(!branchExists(fx.repo, 'feature/wt'));
 			assert.strictEqual(git(['worktree', 'list', '--porcelain'], fx.repo).match(/^worktree /gm)?.length, 1);
+		});
+
+		test('sweep run from a linked worktree skips the stale branch of the main worktree', async () => {
+			makeGoneBranch(fx.repo, 'feature/main-wt');
+			makeGoneBranch(fx.repo, 'feature/wt');
+			git(['checkout', '-q', 'feature/main-wt'], fx.repo);
+			const wt = addWorktree('feature/wt');
+			git(['checkout', '-q', '--detach'], wt);
+
+			const { prompter, seen } = createFakePrompter({ multiselect: [0], confirm: true });
+			const io = { ...createFakeIo(wt, { interactive: true }), loadPrompter: async () => prompter };
+			assert.strictEqual(await runCli([], io), EXIT.ok, io.err.join(''));
+			assert.deepStrictEqual(seen.options?.map((option) => option.label), ['feature/wt'], 'the main worktree branch is not offered');
+			assert.ok(branchExists(fx.repo, 'feature/main-wt'));
+			assert.ok(!branchExists(fx.repo, 'feature/wt'));
 		});
 
 		test('sweep run from a linked worktree skips the branch checked out there', async () => {

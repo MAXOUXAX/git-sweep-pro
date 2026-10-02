@@ -544,7 +544,7 @@ suite('sweep workflow', () => {
 		assert.deepStrictEqual(await findStaleBranches('/repo', h.deps), {
 			stale: ['feature/a'],
 			protected: ['release/1'],
-			current: undefined,
+			checkedOut: [],
 			worktrees: new Map(),
 		});
 		assert.deepStrictEqual(h.commands, ['fetch -p', 'worktree prune', GONE_REFS_CMD]);
@@ -567,6 +567,27 @@ suite('sweep workflow', () => {
 			assert.ok(h.outputLines.some((line) => line.startsWith('"feature/here" is stale, but it is the current branch')));
 			assert.ok(!h.commands.includes('branch -d feature/here'));
 			assert.ok(h.commands.includes('branch -d stale/other'));
+		});
+
+		test('skips a stale branch checked out in the main worktree', async () => {
+			const h = createHarness({
+				workspaceRoot: '/work/wt',
+				settings: { protectedBranches: ['release/*'] },
+				git: {
+					[GONE_REFS_CMD]: {
+						stdout: ['feature/main-wt\t[gone]\t \t/repo', 'release/1\t[gone]\t \t', 'feature/wt\t\t*\t/work/wt'].join('\n'),
+					},
+					'worktree list --porcelain': { stdout: 'worktree /repo\nHEAD abc\nbranch refs/heads/feature/main-wt\n\nworktree /work/wt\n' },
+				},
+			});
+
+			assert.strictEqual(await runSweepWorkflow(safeMode, h.deps), 'ok');
+
+			assert.strictEqual(h.quickPickRequests.length, 0);
+			assert.ok(!h.commands.some((cmd) => cmd.startsWith('worktree remove')));
+			assert.deepStrictEqual(h.infoMessages, [
+				'"feature/main-wt" is stale, but it is checked out in the main worktree (/repo), so it was skipped. Switch branches there to delete it. 1 other stale branch(es) are protected.',
+			]);
 		});
 
 		test('explains when the only stale branch is the current one', async () => {
@@ -602,6 +623,7 @@ suite('sweep workflow', () => {
 				{ label: 'stale/plain', picked: true },
 			]);
 			assert.ok(h.confirmRequests[0].message.includes('Worktrees to remove: 1'));
+			assert.ok(h.commands.includes('worktree list --porcelain'));
 			assert.ok(h.outputLines.includes('- feature/wt (removes worktree /work/wt)'));
 			const removeIndex = h.commands.indexOf('worktree remove /work/wt');
 			assert.ok(removeIndex >= 0 && removeIndex < h.commands.indexOf('branch -d feature/wt'));
