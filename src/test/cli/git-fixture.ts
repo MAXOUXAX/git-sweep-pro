@@ -38,6 +38,10 @@ export function createRepoFixture(): RepoFixture {
 	const repo = path.join(dir, 'repo');
 	git(['init', '-q', '--bare', remote], dir);
 	git(['init', '-q', repo], dir);
+	// The CLI under test runs git with the real environment: rebases need an
+	// identity even where none is configured globally (CI runners).
+	git(['config', 'user.name', 'Test'], repo);
+	git(['config', 'user.email', 'test@example.com'], repo);
 	commitFile(repo, 'README.md', '# test\n', 'init');
 	git(['branch', '-M', 'main'], repo);
 	git(['remote', 'add', 'origin', remote], repo);
