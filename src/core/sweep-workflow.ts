@@ -1,5 +1,7 @@
+import { createBranchDeleter } from './branch-deletion';
 import { describeGitFailure, toErrorMessage } from './errors';
-import { GONE_REFS_ARGS, isNotFullyMergedError, isProtectedBranch, parseGoneBranchRefs, type SweepMode, type SweepSettings } from './sweep-logic';
+import { describeCheckedOutBranch, findStaleBranches } from './stale-branches';
+import type { SweepMode, SweepSettings } from './sweep-logic';
 import { formatSweepOutcome, formatSweepSummary, type SelectableBranch } from './sweep-selection';
 
 export type QuickPickItemLike = {
@@ -80,35 +82,6 @@ export function singlePick(
 	return selected === undefined || Array.isArray(selected) ? undefined : (selected as QuickPickItemLike);
 }
 
-export type StaleBranches = {
-	/** Branches whose upstream is gone: the sweep candidates. */
-	readonly stale: string[];
-	/** Branches whose upstream is gone but that match a protected pattern. */
-	readonly protected: string[];
-};
-
-/**
- * Fetches and prunes (unless disabled in the settings), then finds the local
- * branches whose upstream is gone, split by the protected-branch patterns.
- */
-export async function findStaleBranches(workspaceRoot: string, deps: SweepWorkflowDeps): Promise<StaleBranches> {
-	const settings = deps.getSettings();
-	if (settings.autoFetchPrune) {
-		await deps.ui.withProgress(
-			{
-				title: 'Fetching and pruning remote references',
-			},
-			() => deps.runGitCommand(['fetch', '-p'], workspaceRoot)
-		);
-	} else {
-		deps.output.appendLine('Auto fetch/prune disabled; using local ref state.');
-	}
-
-	const gone = parseGoneBranchRefs((await deps.runGitCommand([...GONE_REFS_ARGS], workspaceRoot)).stdout);
-	const isProtected = (branch: string) => isProtectedBranch(branch, settings.protectedBranches);
-	return { stale: gone.filter((branch) => !isProtected(branch)), protected: gone.filter(isProtected) };
-}
-
 function describeDeleteFlag(mode: SweepMode): '-d' | '-D' {
 	return mode.forceDelete ? '-D' : '-d';
 }
@@ -128,9 +101,14 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 	const settings = deps.getSettings();
 
 	try {
-		const { stale: candidateBranches, protected: protectedBranches } = await findStaleBranches(workspaceRoot, deps);
+		const {
+			stale: candidateBranches,
+			protected: protectedBranches,
+			checkedOut,
+			worktrees: worktreeOf,
+		} = await findStaleBranches(workspaceRoot, deps);
 
-		if (candidateBranches.length === 0 && protectedBranches.length === 0) {
+		if (candidateBranches.length === 0 && protectedBranches.length === 0 && checkedOut.length === 0) {
 			deps.output.appendLine('No stale tracked branches found.');
 			deps.ui.showInformationMessage('No stale branches found.');
 			return 'ok';
@@ -143,16 +121,30 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			}
 		}
 
+		const checkedOutNotices = checkedOut.map(describeCheckedOutBranch);
+		checkedOutNotices.forEach((notice) => deps.output.appendLine(notice));
+
 		if (candidateBranches.length === 0) {
-			deps.output.appendLine('All stale branches are protected; nothing to do.');
-			deps.ui.showInformationMessage(`All ${protectedBranches.length} stale branch(es) are protected.`);
+			deps.output.appendLine('No stale branch can be deleted from here; nothing to do.');
+			deps.ui.showInformationMessage(
+				checkedOut.length === 0
+					? `All ${protectedBranches.length} stale branch(es) are protected.`
+					: [
+							...checkedOutNotices,
+							...(protectedBranches.length > 0 ? [`${protectedBranches.length} other stale branch(es) are protected.`] : []),
+						].join(' ')
+			);
 			return 'ok';
 		}
 
-		const quickPickItems: SelectableBranch[] = candidateBranches.map((branch) => ({
-			label: branch,
-			picked: true,
-		}));
+		// Branches living in another worktree are offered but not pre-selected:
+		// deleting them also removes that worktree's directory.
+		const quickPickItems: SelectableBranch[] = candidateBranches.map((branch) => {
+			const worktree = worktreeOf.get(branch);
+			return worktree
+				? { label: branch, picked: false, description: `checked out in worktree ${worktree}` }
+				: { label: branch, picked: true };
+		});
 
 		const selected = await deps.ui.pickBranches({
 			items: quickPickItems,
@@ -160,6 +152,11 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 		});
 
 		const branchNames = [...(selected ?? [])];
+		const keptWorktreeBranches = [...worktreeOf.keys()].filter((branch) => !branchNames.includes(branch));
+		if (selected !== undefined && keptWorktreeBranches.length > 0) {
+			deps.output.appendLine('Not selected (worktree kept):');
+			keptWorktreeBranches.forEach((branch) => deps.output.appendLine(`- ${branch} (worktree ${worktreeOf.get(branch)})`));
+		}
 		if (branchNames.length === 0) {
 			deps.output.appendLine('Operation cancelled or no branches selected.');
 			deps.ui.showInformationMessage('No branches selected.');
@@ -168,13 +165,16 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 
 		deps.output.appendLine(`${mode.dryRun ? '[DRY RUN]' : '[DELETE]'} Selected branches:`);
 		for (const branch of branchNames) {
-			deps.output.appendLine(`- ${branch}`);
+			const worktree = worktreeOf.get(branch);
+			deps.output.appendLine(worktree ? `- ${branch} (removes worktree ${worktree})` : `- ${branch}`);
 		}
 
 		const summary = formatSweepSummary({
-			totalDetected: candidateBranches.length + protectedBranches.length,
+			totalDetected: candidateBranches.length + protectedBranches.length + checkedOut.length,
 			protectedCount: protectedBranches.length,
+			checkedOutCount: checkedOut.length,
 			selectedCount: branchNames.length,
+			worktreeCount: branchNames.filter((branch) => worktreeOf.has(branch)).length,
 			mode,
 		});
 		deps.output.appendLine('Summary:');
@@ -199,26 +199,23 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			}
 		}
 
+		const deleteBranch = createBranchDeleter({
+			runGit: (args) => deps.runGitCommand(args, workspaceRoot),
+			log: (line) => deps.output.appendLine(line),
+			worktrees: worktreeOf,
+		});
 		let deletedCount = 0;
-		const deleteFlag = describeDeleteFlag(mode);
 		const notFullyMerged: string[] = [];
 		const failedBranches: string[] = [];
 
 		for (const branch of branchNames) {
-			try {
-				await deps.runGitCommand(['branch', deleteFlag, branch], workspaceRoot);
+			const result = await deleteBranch(branch, describeDeleteFlag(mode));
+			if (result === 'deleted') {
 				deletedCount += 1;
-			} catch (error) {
-				const message = toErrorMessage(error);
-				if (!mode.forceDelete && isNotFullyMergedError(message)) {
-					notFullyMerged.push(branch);
-					deps.output.appendLine(
-						`[not-fully-merged] ${branch}: commits are not reachable from the current branch (likely squash/rebase merged).`
-					);
-				} else {
-					failedBranches.push(branch);
-					deps.output.appendLine(`[delete-failed] ${branch}: ${message}`);
-				}
+			} else if (result === 'not-fully-merged') {
+				notFullyMerged.push(branch);
+			} else {
+				failedBranches.push(branch);
 			}
 		}
 
@@ -240,13 +237,10 @@ export async function runSweepWorkflow(mode: SweepMode, deps: SweepWorkflowDeps)
 			);
 			if (confirmed) {
 				for (const branch of notFullyMerged) {
-					try {
-						await deps.runGitCommand(['branch', '-D', branch], workspaceRoot);
+					if ((await deleteBranch(branch, '-D')) === 'deleted') {
 						deletedCount += 1;
-					} catch (error) {
-						const message = toErrorMessage(error);
+					} else {
 						failedBranches.push(branch);
-						deps.output.appendLine(`[delete-failed] ${branch}: ${message}`);
 					}
 				}
 			} else {

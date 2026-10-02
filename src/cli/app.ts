@@ -3,8 +3,9 @@ import * as path from 'node:path';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand, type CommandResult } from '../core/git-command';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
+import { findStaleBranches } from '../core/stale-branches';
 import type { SweepSettings } from '../core/sweep-logic';
-import { findStaleBranches, runSweepWorkflow, type SweepWorkflowDeps, type WorkflowOutcome } from '../core/sweep-workflow';
+import { runSweepWorkflow, type SweepWorkflowDeps, type WorkflowOutcome } from '../core/sweep-workflow';
 import type { StateStore } from '../core/sync-with-upstream-state';
 import {
 	runSyncWithUpstreamResumeWorkflow,
@@ -128,14 +129,21 @@ async function runCommand(options: CliOptions, workspaceRoot: string, deps: Swee
 /** `list`: prints stale branches without touching them (`--json` for scripts). */
 async function runList(root: string, deps: SweepWorkflowDeps, options: CliOptions, io: CliIo): Promise<WorkflowOutcome> {
 	try {
-		const { stale, protected: protectedStale } = await findStaleBranches(root, deps);
+		const { stale, protected: protectedStale, checkedOut, worktrees } = await findStaleBranches(root, deps);
 
 		if (options.json) {
-			io.stdout(`${JSON.stringify({ stale, protected: protectedStale }, null, 2)}\n`);
-		} else if (stale.length === 0 && protectedStale.length === 0) {
+			const json = { stale, protected: protectedStale, checkedOut, worktrees: Object.fromEntries(worktrees) };
+			io.stdout(`${JSON.stringify(json, null, 2)}\n`);
+		} else if (stale.length === 0 && protectedStale.length === 0 && checkedOut.length === 0) {
 			io.stderr('No stale branches found.\n');
 		} else {
-			stale.forEach((branch) => io.stdout(`${branch}\n`));
+			stale.forEach((branch) => {
+				const worktree = worktrees.get(branch);
+				io.stdout(worktree ? `${branch} (worktree ${worktree})\n` : `${branch}\n`);
+			});
+			checkedOut.forEach((branch) =>
+				io.stdout(branch.where === 'current' ? `${branch.name} (current branch)\n` : `${branch.name} (main worktree ${branch.worktreePath})\n`)
+			);
 			protectedStale.forEach((branch) => io.stdout(`${branch} (protected)\n`));
 		}
 		return 'ok';
