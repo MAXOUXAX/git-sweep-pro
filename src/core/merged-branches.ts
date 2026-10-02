@@ -77,15 +77,14 @@ export async function findMergedBranches(runGit: RunGit, branches: readonly stri
 		)
 	);
 
-	const result: MergedBranch[] = [];
-	for (const name of branches) {
-		if (name === base.name || atBase.has(name)) {
-			continue;
-		}
-		const how = reachable.has(name) ? 'merged' : await classify(runGit, `refs/heads/${name}`, baseRef);
-		if (how) {
-			result.push({ name, how, into });
-		}
-	}
-	return result;
+	// Each classification runs several git commands: check the branches concurrently.
+	const found = await Promise.all(
+		branches
+			.filter((name) => name !== base.name && !atBase.has(name))
+			.map(async (name) => {
+				const how = reachable.has(name) ? 'merged' : await classify(runGit, `refs/heads/${name}`, baseRef);
+				return how ? [{ name, how, into }] : [];
+			})
+	);
+	return found.flat();
 }
