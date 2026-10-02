@@ -30,6 +30,7 @@ export function createRpcFrontend(io: CliIo): Frontend {
 	};
 
 	return {
+		canPrompt: true,
 		trace: log,
 		output: {
 			show: (preserveFocus) => send({ type: 'showOutput', preserveFocus }),

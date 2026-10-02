@@ -57,6 +57,13 @@ suite('cli args', () => {
 		assert.throws(() => parseArgs(['--yes=1']), /Option --yes does not take a value/);
 		assert.throws(() => parseArgs(['sweep', 'extra']), /Unexpected argument: extra/);
 		assert.throws(() => parseArgs(['sync', 'a', 'b']), /Unexpected argument: b/);
+		assert.throws(() => parseArgs(['restore', 'a', '--dry-run']), /--dry-run cannot be used with restore\./);
+		assert.throws(() => parseArgs(['restore', '-f']), /--force cannot be used with restore\./);
+	});
+
+	test('restore takes any number of branches', () => {
+		assert.deepStrictEqual(parseArgs(['restore']).positionals, []);
+		assert.deepStrictEqual(parseArgs(['restore', 'a', 'b/c']).positionals, ['a', 'b/c']);
 	});
 
 	test('settingsToCliArgs mirrors the extension settings', () => {

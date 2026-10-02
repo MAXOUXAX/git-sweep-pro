@@ -1,12 +1,12 @@
 import { parseArgs as parseArgv, type ParseArgsOptionsConfig } from 'node:util';
 import type { SweepSettings } from '../core/sweep-logic';
 
-export const COMMANDS = ['sweep', 'list', 'post-pr', 'sync', 'resume', 'help', 'version'] as const;
+export const COMMANDS = ['sweep', 'list', 'post-pr', 'sync', 'resume', 'restore', 'help', 'version'] as const;
 export type CommandName = (typeof COMMANDS)[number];
 
 export type CliOptions = {
 	readonly command: CommandName;
-	/** Positional arguments after the command (e.g. the branch for `post-pr`/`sync`). */
+	/** Positional arguments after the command (the branch for `post-pr`/`sync`, the branches for `restore`). */
 	readonly positionals: readonly string[];
 	/** Repository directory (`-C <path>`); defaults to the current directory. */
 	readonly cwd: string | undefined;
@@ -98,7 +98,11 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 	if (command === 'sync' && values.continue) {
 		command = 'resume';
 	}
-	const maxPositionals = command === 'post-pr' || command === 'sync' ? 1 : 0;
+	if (command === 'restore' && (values['dry-run'] || values.force)) {
+		// Restore never overwrites a branch, so there is nothing to force or to preview.
+		throw new UsageError(`${values.force ? '--force' : '--dry-run'} cannot be used with restore.`);
+	}
+	const maxPositionals = command === 'restore' ? Infinity : command === 'post-pr' || command === 'sync' ? 1 : 0;
 	if (args.length > maxPositionals) {
 		throw new UsageError(`Unexpected argument: ${args[maxPositionals]}`);
 	}
@@ -141,6 +145,9 @@ Commands:
   sync [upstream]    Rebase the current branch onto [upstream] and force-push
                      with --force-with-lease (stashes local changes)
   resume             Continue a sync paused on conflicts (alias: sync --continue)
+  restore [branch...]
+                     Recreate branches deleted by git-sweep-pro at their last
+                     commit; without arguments, pick among recent deletions
   help, version
 
 Options:
@@ -152,7 +159,7 @@ Options:
                      from "git config --get-all git-sweep-pro.protected")
       --no-fetch     Skip "git fetch -p" and use local ref state
       --no-confirm   Do not ask before deleting
-      --json         Machine-readable output (list)
+      --json         Machine-readable output (list, restore)
   -C <path>          Run as if started in <path>
   -v, --verbose      Echo every git command and its output
   -h, --help         Show this help

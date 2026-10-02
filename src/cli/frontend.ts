@@ -8,6 +8,8 @@ import { createRpcFrontend } from './rpc-frontend';
 /** Where a CLI run renders its prompts, notifications and output. */
 export type Frontend = {
 	readonly ui: WorkflowUi;
+	/** True when someone answers the prompts; otherwise (pipes, --yes) they take their defaults. */
+	readonly canPrompt: boolean;
 	/** Workflow output: the "Git Sweep" output channel in VS Code. */
 	readonly output: SweepWorkflowDeps['output'];
 	/** Every git command and its output. */
@@ -84,6 +86,7 @@ function findPresetPick(items: readonly QuickPickItemLike[], preset: string): Qu
  */
 export function createPlainFrontend(io: CliIo, options: TerminalOptions): Frontend {
 	return {
+		canPrompt: false,
 		trace: traceTo(io, options),
 		output: {
 			show: () => undefined,
@@ -127,6 +130,7 @@ export function createPlainFrontend(io: CliIo, options: TerminalOptions): Fronte
 /** Interactive widgets (see {@link Prompter}) for a human at the keyboard. */
 export function createInteractiveFrontend(io: CliIo, options: TerminalOptions, prompter: Prompter): Frontend {
 	return {
+		canPrompt: !options.yes,
 		trace: traceTo(io, options),
 		output: {
 			show: () => undefined,
