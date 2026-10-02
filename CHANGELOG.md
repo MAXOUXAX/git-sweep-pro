@@ -4,6 +4,13 @@ All notable changes to the "git-sweep-pro" extension are documented in this file
 
 This project adheres to [Semantic Versioning](https://semver.org) and the changelog is generated automatically from [Conventional Commits](https://www.conventionalcommits.org).
 
+## [1.3.1](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.3.0...v1.3.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **cli:** support explicit non-interactive agent workflows ([#22](https://github.com/MAXOUXAX/git-sweep-pro/issues/22)) ([9a84d36](https://github.com/MAXOUXAX/git-sweep-pro/commit/9a84d36a6c9929d414645bcb195db9eb2b9ed61d))
+
 # [1.3.0](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.2.0...v1.3.0) (2026-10-02)
 
 
