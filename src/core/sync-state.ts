@@ -30,11 +30,11 @@ export function getMemento(context: SyncContext): SyncMemento | undefined {
 }
 
 export async function saveMemento(context: SyncContext, memento: SyncMemento): Promise<void> {
-	await context.state.update(MEMENTO_KEY, memento);
+	await context.state.update(MEMENTO_KEY, () => memento);
 }
 
 export async function clearMemento(context: SyncContext): Promise<void> {
-	await context.state.update(MEMENTO_KEY, undefined);
+	await context.state.update(MEMENTO_KEY, () => undefined);
 }
 
 export function isRebaseInProgress({ gitDir, fileExists }: SyncContext): boolean {

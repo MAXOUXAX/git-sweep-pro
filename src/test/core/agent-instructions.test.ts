@@ -21,9 +21,17 @@ suite('agent instructions', () => {
 			assert.strictEqual(upsertAgentBlock(outdated), `# Rules\n\n${AGENT_BLOCK}\n\n## More\n`);
 		});
 
-		test('ignores an end marker that comes before the start marker', () => {
-			const content = '<!-- END:git-sweep-pro -->\n# Rules\n';
-			assert.strictEqual(upsertAgentBlock(content), `${content}\n${AGENT_BLOCK}\n`);
+		test('refuses unbalanced markers instead of guessing which span to replace', () => {
+			const start = '<!-- BEGIN:git-sweep-pro -->';
+			const end = '<!-- END:git-sweep-pro -->';
+			for (const content of [
+				`# Rules\n${start}\nmine\n`,
+				`${end}\n# Rules\n`,
+				`${end}\nmine\n${start}\n`,
+				`${start}\na\n${end}\n${start}\nb\n${end}\n`,
+			]) {
+				assert.throws(() => upsertAgentBlock(content), /its gsp markers are unbalanced/, content);
+			}
 		});
 
 		test('is idempotent', () => {
@@ -137,6 +145,19 @@ suite('agent instructions', () => {
 			assert.strictEqual(await runAgentsWorkflow(fake.context, ['AGENTS.md']), 'failed');
 
 			assert.ok(!fs.existsSync(outside));
+		});
+
+		test('leaves a file with a lone start marker untouched', async () => {
+			const damaged = '# Rules\n<!-- BEGIN:git-sweep-pro -->\nmy own notes\n';
+			fs.writeFileSync(path.join(root, 'AGENTS.md'), damaged);
+			const fake = createFakeContext({ root });
+
+			assert.strictEqual(await runAgentsWorkflow(fake.context, ['AGENTS.md']), 'failed');
+
+			assert.strictEqual(read('AGENTS.md'), damaged);
+			assert.deepStrictEqual(fake.errorMessages, [
+				'Unable to write AGENTS.md: its gsp markers are unbalanced. Remove them, then run gsp agents again.',
+			]);
 		});
 
 		test('reports a file it cannot write', async () => {

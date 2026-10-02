@@ -199,6 +199,22 @@ suite('sync-with-upstream workflow', () => {
 			assert.ok(h.outputLines.includes(syncMessages.outputComplete));
 		});
 
+		test('a failed stash pop after the push fails the sync, without a success message', async () => {
+			const h = createHarness({
+				fileExists: fileExistsNoRebase,
+				quickPickSelection: { label: 'main' },
+				git: {
+					...baseGitForSync,
+					'status --porcelain -u': { stdout: ' M foo.txt' },
+					'stash pop': new Error('CONFLICT (content): Merge conflict in foo.txt'),
+				},
+			});
+			assert.strictEqual(await runSyncWorkflow(h.context), 'failed');
+
+			assert.deepStrictEqual(h.errorMessages, [syncMessages.rebaseOkStashFailed]);
+			assert.deepStrictEqual(h.infoMessages, []);
+		});
+
 		test('success path with remote branch: creates temp branch, pulls, rebases, skips local update when main exists', async () => {
 			const h = createHarness({
 				workspaceRoot: '/repo',

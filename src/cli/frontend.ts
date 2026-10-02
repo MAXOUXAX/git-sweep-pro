@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import type { NoticeOptions, WorkflowOutcome, WorkflowOutput, WorkflowUi } from '../core/workflow';
+import type { NoticeOptions, PickItem, WorkflowOutcome, WorkflowOutput, WorkflowUi } from '../core/workflow';
 import type { CliOptions } from './args';
 import type { CliIo } from './io';
 import type { Prompter } from './prompter';
@@ -63,6 +63,20 @@ function notice(message: string, options?: NoticeOptions): string {
 	return options?.dryRun ? `Dry run: ${message}` : message;
 }
 
+/** The answer to a single-select picker nobody answers: its default, or a failure. */
+function defaultPick({ items, title }: { readonly items: readonly PickItem[]; readonly title: string }): string {
+	const preselected = items.find((item) => item.picked);
+	if (!preselected) {
+		throw new Error(`${title}: no default available; pass the branch as an argument.`);
+	}
+	return preselected.label;
+}
+
+/** The answer to a multi-select picker nobody answers: its pre-selection. */
+function defaultPicks({ items }: { readonly items: readonly PickItem[] }): string[] {
+	return items.filter((item) => item.picked).map((item) => item.label);
+}
+
 /**
  * Plain text for pipes and CI. Every prompt takes a safe default so the CLI
  * never blocks: pickers keep their pre-selection and confirmations are
@@ -85,14 +99,8 @@ export function createPlainFrontend(io: CliIo, options: TerminalOptions): Fronte
 				printProgress(io, progress.title);
 				return task();
 			},
-			pickOne: async ({ items, title }) => {
-				const preselected = items.find((item) => item.picked);
-				if (!preselected) {
-					throw new Error(`${title}: no default available; pass the branch as an argument.`);
-				}
-				return preselected.label;
-			},
-			pickMany: async ({ items }) => items.filter((item) => item.picked).map((item) => item.label),
+			pickOne: async (pick) => defaultPick(pick),
+			pickMany: async (pick) => defaultPicks(pick),
 			showInformationMessage: (message, notification) => io.stdout(`${notice(message, notification)}\n`),
 			showErrorMessage: (message, notification) => io.stderr(`${pc.red('error:')} ${notice(message, notification)}\n`),
 			confirm: async (message, confirmLabel) => {
@@ -131,6 +139,9 @@ export function createInteractiveFrontend(io: CliIo, options: TerminalOptions, p
 				return prompter.spin(progress.title, task);
 			},
 			pickOne: async ({ items, title }) => {
+				if (options.yes) {
+					return defaultPick({ items, title });
+				}
 				const defaultIndex = items.findIndex((item) => item.picked);
 				const index = await prompter.select(
 					title,
@@ -141,7 +152,7 @@ export function createInteractiveFrontend(io: CliIo, options: TerminalOptions, p
 			},
 			pickMany: async ({ items, title }) => {
 				if (options.yes) {
-					return items.filter((item) => item.picked).map((item) => item.label);
+					return defaultPicks({ items });
 				}
 				const values = await prompter.multiselect(
 					title,

@@ -44,9 +44,12 @@ export function createHarness(options: HarnessOptions = {}) {
 				mementoGets.push(key);
 				return store.get<T>(key);
 			},
-			update: async (key, value) => {
-				mementoUpdates.push({ key, value });
-				await store.update(key, value);
+			update: async <T>(key: string, change: (current: T | undefined) => T | undefined) => {
+				await store.update<T>(key, (current) => {
+					const value = change(current);
+					mementoUpdates.push({ key, value });
+					return value;
+				});
 			},
 		},
 		fileExists: options.fileExists ?? (() => false),

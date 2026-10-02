@@ -28,9 +28,12 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 				errorShown ||= event.method === 'showErrorMessage';
 				invoke(ui, event);
 				return;
-			case 'progressStart':
-				void ui.withProgress({ title: event.title }, () => new Promise<void>((resolve) => openProgress.set(event.id, resolve)));
+			case 'progressStart': {
+				// The host may invoke its task later, after progressEnd or dispose.
+				const done = new Promise<void>((resolve) => openProgress.set(event.id, resolve));
+				void ui.withProgress({ title: event.title }, () => done);
 				return;
+			}
 			case 'progressEnd':
 				openProgress.get(event.id)?.();
 				openProgress.delete(event.id);

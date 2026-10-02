@@ -33,19 +33,26 @@ export type AgentFileChange = 'created' | 'added' | 'updated' | 'unchanged';
 
 /**
  * `content` with the gsp block: replaced in place when the file already has
- * one, appended after a blank line otherwise. Keeps the file's line endings.
+ * one, appended after a blank line otherwise. Keeps the file's line endings,
+ * and throws rather than guess when the markers are unbalanced.
  */
 export function upsertAgentBlock(content: string): string {
 	const eol = content.includes('\r\n') ? '\r\n' : '\n';
 	const block = AGENT_BLOCK.replace(/\n/g, eol);
-	const start = content.indexOf(START_MARKER);
-	// Only an end marker after the start one closes the block.
-	const end = start === -1 ? -1 : content.indexOf(END_MARKER, start);
-	if (end !== -1) {
-		return content.slice(0, start) + block + content.slice(end + END_MARKER.length);
+	const starts = content.split(START_MARKER).length - 1;
+	const ends = content.split(END_MARKER).length - 1;
+	if (starts === 0 && ends === 0) {
+		const separator = content.length === 0 ? '' : content.endsWith(eol) ? eol : eol + eol;
+		return content + separator + block + eol;
 	}
-	const separator = content.length === 0 ? '' : content.endsWith(eol) ? eol : eol + eol;
-	return content + separator + block + eol;
+	const start = content.indexOf(START_MARKER);
+	const end = content.indexOf(END_MARKER);
+	// Anything but one start marker followed by one end marker is ambiguous:
+	// replacing a guessed span could delete the user's own instructions.
+	if (starts !== 1 || ends !== 1 || end < start) {
+		throw new Error('its gsp markers are unbalanced. Remove them, then run gsp agents again.');
+	}
+	return content.slice(0, start) + block + content.slice(end + END_MARKER.length);
 }
 
 /**
