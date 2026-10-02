@@ -39,30 +39,45 @@ export function upsertAgentBlock(content: string): string {
 	const eol = content.includes('\r\n') ? '\r\n' : '\n';
 	const block = AGENT_BLOCK.replace(/\n/g, eol);
 	const start = content.indexOf(START_MARKER);
-	const end = content.indexOf(END_MARKER, start);
-	if (start !== -1 && end !== -1) {
+	// Only an end marker after the start one closes the block.
+	const end = start === -1 ? -1 : content.indexOf(END_MARKER, start);
+	if (end !== -1) {
 		return content.slice(0, start) + block + content.slice(end + END_MARKER.length);
 	}
 	const separator = content.length === 0 ? '' : content.endsWith(eol) ? eol : eol + eol;
 	return content + separator + block + eol;
 }
 
+/**
+ * The file to edit for `file`, or `undefined` when it does not exist yet. A
+ * symbolic link is followed only within the repository (e.g. CLAUDE.md
+ * linked to AGENTS.md): gsp never writes outside it.
+ */
+function resolveAgentFile(root: string, file: AgentFile): string | undefined {
+	const filePath = path.join(root, file);
+	if (!fs.lstatSync(filePath, { throwIfNoEntry: false })) {
+		return undefined;
+	}
+	const target = fs.realpathSync(filePath);
+	const relative = path.relative(fs.realpathSync(root), target);
+	if (relative.startsWith('..') || path.isAbsolute(relative)) {
+		throw new Error(`it links to ${target}, outside the repository.`);
+	}
+	if (!fs.statSync(target).isFile()) {
+		throw new Error('it is not a file.');
+	}
+	return target;
+}
+
 /** Adds the gsp block to `file` in `root`, creating the file if needed. */
 export function writeAgentBlock(root: string, file: AgentFile): AgentFileChange {
-	const filePath = path.join(root, file);
-	let content: string | undefined;
-	try {
-		content = fs.readFileSync(filePath, 'utf8');
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-			throw error;
-		}
-	}
+	const target = resolveAgentFile(root, file);
+	const content = target === undefined ? undefined : fs.readFileSync(target, 'utf8');
 	const updated = upsertAgentBlock(content ?? '');
 	if (updated === content) {
 		return 'unchanged';
 	}
-	fs.writeFileSync(filePath, updated);
+	fs.writeFileSync(target ?? path.join(root, file), updated);
 	return content === undefined ? 'created' : content.includes(START_MARKER) ? 'updated' : 'added';
 }
 
