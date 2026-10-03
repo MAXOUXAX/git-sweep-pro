@@ -13,6 +13,7 @@ import { runResumeWorkflow } from '../core/sync-resume-workflow';
 import type { SyncContext } from '../core/sync-state';
 import { runSyncWorkflow } from '../core/sync-workflow';
 import type { WorkflowContext, WorkflowOutcome } from '../core/workflow';
+import { describeWorktree, listWorktrees, pruneWorktrees, removeWorktree } from '../core/worktrees';
 import { EXIT, parseArgs, USAGE, UsageError, type CliOptions } from './args';
 import { createFrontend, type Frontend } from './frontend';
 import type { CliIo } from './io';
@@ -132,6 +133,8 @@ async function runCommand(options: CliOptions, dir: string, frontend: Frontend, 
 			return runSweepWorkflow(context, options.mode);
 		case 'list':
 			return runList(context, options, io);
+		case 'worktree':
+			return runWorktree(context, options, io, dir);
 		case 'post-pr':
 			return runPostPullRequestWorkflow(context, requested);
 		case 'restore':
@@ -181,6 +184,70 @@ async function runList(context: WorkflowContext, options: CliOptions, io: CliIo)
 			protectedStale.forEach((branch) => io.stdout(`${branch} (protected)\n`));
 		}
 		return 'ok';
+	} catch (error) {
+		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
+		return 'failed';
+	}
+}
+
+/**
+ * `worktree`: list every worktree, prune the registrations whose directory is
+ * gone, or remove one linked worktree. Nothing mutates the repository history.
+ * `dir` is the invocation directory, so a relative removal target is read the
+ * way the user typed it.
+ */
+async function runWorktree(context: WorkflowContext, options: CliOptions, io: CliIo, dir: string): Promise<WorkflowOutcome> {
+	const worktree = options.worktree;
+	if (!worktree) {
+		return 'failed';
+	}
+	try {
+		switch (worktree.subcommand) {
+			case 'list': {
+				const worktrees = await listWorktrees(context);
+				if (options.json) {
+					const json = worktrees.map(({ path, branch, state }) => ({ path, branch: branch ?? null, state }));
+					io.stdout(`${JSON.stringify(json, null, 2)}\n`);
+				} else {
+					worktrees.forEach((entry) => io.stdout(describeWorktree(entry)));
+				}
+				return 'ok';
+			}
+			case 'prune': {
+				const dryRun = options.mode === 'dryRun';
+				const { pruned } = await pruneWorktrees(context, dryRun);
+				if (pruned.length === 0) {
+					io.stderr('No worktree registrations to prune.\n');
+				} else {
+					io.stdout(`${dryRun ? 'Would prune' : 'Pruned'} ${pruned.length} worktree registration(s):\n`);
+					pruned.forEach((path) => io.stdout(`  ${path}\n`));
+				}
+				return 'ok';
+			}
+			case 'remove': {
+				const result = await removeWorktree(context, worktree.target ?? '', options.mode === 'forceDelete', dir);
+				switch (result.kind) {
+					case 'removed':
+						io.stdout(`Removed worktree ${result.worktree.path}.\n`);
+						return 'ok';
+					case 'main':
+						context.ui.showErrorMessage(`Refusing to remove the main worktree (${result.worktree.path}).`, { failed: true });
+						return 'failed';
+					case 'ambiguous': {
+						const [byPath, byBranch] = result.worktrees;
+						context.ui.showErrorMessage(
+							`"${result.target}" is both the worktree ${byPath.path} and the branch ${byBranch.branch} (${byBranch.path}). Remove one by its full path.`,
+							{ failed: true }
+						);
+						return 'failed';
+					}
+					case 'not-found':
+						context.ui.showErrorMessage(`No worktree found for "${result.target}". Run "gsp worktree list" to see them.`, { failed: true });
+						return 'failed';
+				}
+				return 'failed';
+			}
+		}
 	} catch (error) {
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';

@@ -2,13 +2,24 @@ import { parseArgs as parseArgv, type ParseArgsOptionsConfig } from 'node:util';
 import { AGENT_FILE_NAMES, isAgentFile } from '../core/agent-instructions';
 import type { SweepMode, SweepSettings } from '../core/sweep-logic';
 
-export const COMMANDS = ['sweep', 'list', 'post-pr', 'sync', 'resume', 'restore', 'agents', 'help', 'version'] as const;
+export const COMMANDS = ['sweep', 'list', 'worktree', 'post-pr', 'sync', 'resume', 'restore', 'agents', 'help', 'version'] as const;
 export type CommandName = (typeof COMMANDS)[number];
+
+export const WORKTREE_SUBCOMMANDS = ['list', 'prune', 'remove'] as const;
+export type WorktreeSubcommand = (typeof WORKTREE_SUBCOMMANDS)[number];
+
+export type WorktreeArgs = {
+	readonly subcommand: WorktreeSubcommand;
+	/** Path or branch named by `worktree remove`; `undefined` for `list`/`prune`. */
+	readonly target: string | undefined;
+};
 
 export type CliOptions = {
 	readonly command: CommandName;
 	/** Positional arguments after the command (the branch for `post-pr`/`sync`, the branches for `restore`, the files for `agents`). */
 	readonly positionals: readonly string[];
+	/** The `worktree` subcommand and its target, when {@link command} is `worktree`. */
+	readonly worktree: WorktreeArgs | undefined;
 	/** Repository directory (`-C <path>`); defaults to the current directory. */
 	readonly cwd: string | undefined;
 	/** `--dry-run`, `--force`, or a safe delete by default. */
@@ -84,6 +95,29 @@ function rejectInvalidOptions(argv: readonly string[]): void {
 }
 
 /**
+ * Validates a `worktree` invocation: a known subcommand, no extra arguments,
+ * and exactly one target for `remove`. Invalid uses are usage errors (exit 2).
+ */
+function parseWorktreeArgs(args: readonly string[]): WorktreeArgs {
+	const [subcommand, ...rest] = args;
+	if (subcommand === undefined) {
+		throw new UsageError(`worktree requires a subcommand: ${WORKTREE_SUBCOMMANDS.join(', ')}.`);
+	}
+	if (!(WORKTREE_SUBCOMMANDS as readonly string[]).includes(subcommand)) {
+		throw new UsageError(`Unknown worktree subcommand: ${subcommand}. Use ${WORKTREE_SUBCOMMANDS.join(', ')}.`);
+	}
+	const sub = subcommand as WorktreeSubcommand;
+	const maxTargets = sub === 'remove' ? 1 : 0;
+	if (rest.length > maxTargets) {
+		throw new UsageError(`Unexpected argument: ${rest[maxTargets]}`);
+	}
+	if (sub === 'remove' && rest.length === 0) {
+		throw new UsageError('worktree remove requires a path or a branch.');
+	}
+	return { subcommand: sub, target: rest[0] };
+}
+
+/**
  * Parses `gsp` arguments with `util.parseArgs`: no dependency, as the
  * CLI ships inside the VS Code extension, which is packaged without
  * node_modules.
@@ -110,15 +144,27 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 	if (values.rpc && values['non-interactive']) {
 		throw new UsageError('--non-interactive cannot be combined with --rpc.');
 	}
-	if (values.json && command !== 'help' && command !== 'list' && !(command === 'restore' && args.length === 0)) {
-		throw new UsageError('--json requires list or restore without branch arguments.');
+	const worktree = command === 'worktree' ? parseWorktreeArgs(args) : undefined;
+	const jsonAllowed =
+		command === 'help' ||
+		command === 'list' ||
+		(worktree !== undefined && worktree.subcommand === 'list') ||
+		(command === 'restore' && args.length === 0);
+	if (values.json && !jsonAllowed) {
+		throw new UsageError('--json requires list, worktree list, or restore without branch arguments.');
 	}
 	if (command === 'restore' && (values['dry-run'] || values.force)) {
 		// Restore never overwrites a branch, so there is nothing to force or to preview.
 		throw new UsageError(`${values.force ? '--force' : '--dry-run'} cannot be used with restore.`);
 	}
+	if (command === 'worktree' && worktree?.subcommand === 'remove' && values['dry-run']) {
+		// Only `worktree remove` mutates without a preview: refusing the flag
+		// beats silently removing a worktree during a supposedly dry run.
+		// `worktree list` ignores it and `worktree prune` uses it as a preview.
+		throw new UsageError('--dry-run cannot be used with worktree remove.');
+	}
 	const maxPositionals = command === 'restore' || command === 'agents' ? Infinity : command === 'post-pr' || command === 'sync' ? 1 : 0;
-	if (args.length > maxPositionals) {
+	if (command !== 'worktree' && args.length > maxPositionals) {
 		throw new UsageError(`Unexpected argument: ${args[maxPositionals]}`);
 	}
 	const unknownFile = command === 'agents' ? args.find((file) => !isAgentFile(file)) : undefined;
@@ -129,6 +175,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 	return {
 		command,
 		positionals: args,
+		worktree,
 		cwd: values.cwd,
 		mode: values.force ? 'forceDelete' : values['dry-run'] ? 'dryRun' : 'safeDelete',
 		yes: values.yes,
@@ -166,9 +213,20 @@ Safely prune local branches whose remote upstream is gone.
 Also available as "git-sweep-pro" and "git sweep-pro".
 
 Commands:
-  sweep              Detect stale branches, pick, confirm and delete them (default)
+  sweep              Detect stale branches, pick, confirm and delete them
+                     (default); also prunes the worktree registrations whose
+                     directory is gone and removes the worktree of a stale
+                     branch it deletes
   list               Print stale (and, with --merged, merged) branches without
                      deleting anything
+  worktree list      List every worktree with its branch and state (main,
+                     linked, locked, prunable)
+  worktree prune     Forget the worktree registrations whose directory is gone
+                     (never touches an existing worktree)
+  worktree remove <path|branch>
+                     Remove one linked worktree, refusing the main one.
+                     --force removes a dirty worktree; unlock a locked one
+                     first with "git worktree unlock <path>"
   post-pr [branch]   After a merged PR: switch to [branch], delete the old branch,
                      sweep, then pull
   sync [upstream]    Rebase the current branch onto [upstream] and force-push
@@ -183,8 +241,9 @@ Commands:
   help, version
 
 Options:
-  -n, --dry-run      Only report what would be deleted
-  -f, --force        Delete with "git branch -D" instead of "-d"
+  -n, --dry-run      Only report what would be deleted or pruned
+  -f, --force        Delete with "git branch -D" instead of "-d" (for
+                     "worktree remove", pass --force to "git worktree remove")
   -m, --merged       Also offer local branches already merged into the default
                      branch, even squash-merged ones; never pre-selected
   -y, --yes          Accept pre-selected branches and confirm every prompt
@@ -197,8 +256,9 @@ Options:
                      from "git config --get-all git-sweep-pro.protected")
       --no-fetch     Skip "git fetch -p" and use local ref state
       --no-confirm   Do not ask before deleting
-      --json         JSON output without terminal widgets (list, or restore
-                     without branch arguments); diagnostics go to stderr
+      --json         JSON output without terminal widgets (list, worktree list,
+                     or restore without branch arguments); diagnostics go to
+                     stderr
   -C <path>          Run as if started in <path>
   -v, --verbose      Echo every git command and its output
   -h, --help         Show this help
@@ -206,6 +266,8 @@ Options:
 Without a terminal (scripts, coding agents), prompts take their defaults and
 confirmations are refused unless --yes is given:
   gsp list --json           See what a sweep would offer, without deleting
+  gsp worktree list --json  See every worktree and its state
+  gsp worktree prune        Forget registrations whose directory is gone
   gsp --non-interactive --yes
                             Run without terminal widgets, including in a PTY
   gsp --yes                 Delete the pre-selected stale branches (never the
