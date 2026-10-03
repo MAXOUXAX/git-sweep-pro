@@ -24,6 +24,9 @@ gsp                     # pick stale branches, confirm, delete
 gsp --dry-run           # show what would be deleted
 gsp --merged            # also offer branches already merged into main, even squash-merged
 gsp list --json         # what a sweep would offer, for scripts
+gsp worktree list       # every worktree, its branch and its state
+gsp worktree prune      # forget worktree registrations whose directory is gone
+gsp worktree remove <path|branch>   # remove one linked worktree
 gsp post-pr main        # after a merged PR: switch to main, delete the old branch, sweep, pull
 gsp sync origin/main    # rebase onto origin/main, then force-push with a lease
 gsp resume              # continue a sync after resolving its conflicts
@@ -63,11 +66,12 @@ gsp restore feature/x --non-interactive       # recreate a deleted branch
 
 `--yes` selects only stale branches outside worktrees. It accepts every confirmation, including the force-delete fallback for branches Git considers unmerged, such as after squash or rebase merges. Protected branches, merged candidates whose upstream still exists, and branches in other worktrees are never pre-selected. `--non-interactive` alone does not grant permission to delete.
 
-`--json` supports `list` and `restore` without branch arguments. These commands write a single JSON value to stdout and diagnostics to stderr, without terminal widgets. Unsupported uses of `--json` exit with code 2 before running a workflow. Parse stdout only when the command exits with code 0.
+`--json` supports `list`, `worktree list` and `restore` without branch arguments. These commands write a single JSON value to stdout and diagnostics to stderr, without terminal widgets. Unsupported uses of `--json` exit with code 2 before running a workflow. Parse stdout only when the command exits with code 0.
 
 | Command | JSON value |
 | --- | --- |
 | `gsp list --json` | Object with `stale` and `protected` branch-name arrays, `checkedOut` and `merged` detail arrays, and a `worktrees` map of branch names to paths |
+| `gsp worktree list --json` | Array of worktrees, each with `path`, `branch` (`null` when detached) and `state` (`main`, `linked`, `prunable` or `locked`) |
 | `gsp restore --json` | Array of recoverable deletion records, including `branch`, `sha`, `deletedAt` and `source` |
 
 | Exit code | Meaning |
@@ -86,7 +90,7 @@ gsp restore feature/x --non-interactive       # recreate a deleted branch
 - **Safe delete first.** `git branch -d` refuses unmerged work. Force delete (`-D`) is opt-in, or offered afterward for exactly the branches a squash or rebase merge left behind.
 - **Protected branches are never deleted:** `--protect 'release/*'`, `git config --add git-sweep-pro.protected 'release/*'`, or the `gitSweepPro.protectedBranches` setting.
 - **Deletions can be undone.** `gsp restore` recreates any of the last 100 deleted branches, tracking its upstream again if it still exists, until Git garbage-collects its commits (two weeks by default).
-- **Worktree aware.** Branches checked out in another worktree are never pre-selected; selecting one removes its worktree first, and only if it has no uncommitted changes.
+- **Worktree aware.** A sweep prunes the worktree registrations whose directory is gone. When it deletes a stale branch that is checked out in a linked worktree, it removes that worktree first, and only if it has no uncommitted changes. Branches checked out in another worktree are never pre-selected. `gsp worktree list` shows every worktree with its state, `gsp worktree prune` forgets registrations whose directory is gone (never an existing worktree), and `gsp worktree remove <path|branch>` removes one linked worktree, refusing the main one.
 
 ## In VS Code
 
