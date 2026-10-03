@@ -1,0 +1,131 @@
+import * as path from 'node:path';
+import type { WorkflowContext } from './workflow';
+
+/**
+ * How a worktree is registered: the main one, a plain linked one, a linked one
+ * Git locked, or one whose directory is gone and that `git worktree prune`
+ * can forget.
+ */
+export type WorktreeState = 'main' | 'linked' | 'prunable' | 'locked';
+
+export type Worktree = {
+	/** Absolute path of the worktree's working directory, as Git reports it. */
+	readonly path: string;
+	/** Checked-out branch, or `undefined` for a detached HEAD. */
+	readonly branch: string | undefined;
+	readonly state: WorktreeState;
+};
+
+const WORKTREE_PREFIX = 'worktree ';
+const BRANCH_PREFIX = 'branch ';
+const HEADS_PREFIX = 'refs/heads/';
+
+function worktreeState(isMain: boolean, locked: boolean, prunable: boolean): WorktreeState {
+	if (isMain) {
+		return 'main';
+	}
+	if (locked) {
+		return 'locked';
+	}
+	return prunable ? 'prunable' : 'linked';
+}
+
+/**
+ * Parses `git worktree list --porcelain`. Git lists the main worktree first,
+ * then one blank-line separated block per linked worktree:
+ *
+ *     worktree <path>
+ *     HEAD <sha>
+ *     branch <ref> | detached
+ *     [bare] [locked [reason]] [prunable <reason>]
+ *
+ * `locked` and `prunable` can appear together; a locked worktree cannot be
+ * pruned, so it is reported as locked.
+ */
+export function parseWorktrees(porcelain: string): Worktree[] {
+	return porcelain
+		.split(/\n\s*\n/)
+		.map((block) => block.trim())
+		.filter(Boolean)
+		.map((block, index) => {
+			let worktreePath = '';
+			let branch: string | undefined;
+			let locked = false;
+			let prunable = false;
+			for (const line of block.split('\n')) {
+				if (line.startsWith(WORKTREE_PREFIX)) {
+					worktreePath = line.slice(WORKTREE_PREFIX.length);
+				} else if (line.startsWith(BRANCH_PREFIX)) {
+					branch = line.slice(BRANCH_PREFIX.length).replace(HEADS_PREFIX, '');
+				} else if (line.startsWith('locked')) {
+					locked = true;
+				} else if (line.startsWith('prunable')) {
+					prunable = true;
+				}
+			}
+			return { path: worktreePath, branch, state: worktreeState(index === 0, locked, prunable) };
+		});
+}
+
+/** One line for `gsp worktree list`: path, branch (or `detached`) and state. */
+export function describeWorktree({ path: worktreePath, branch, state }: Worktree): string {
+	return `${worktreePath}  ${branch ?? 'detached'} (${state})\n`;
+}
+
+/** Every registered worktree, main first. */
+export async function listWorktrees({ git }: WorkflowContext): Promise<Worktree[]> {
+	const { stdout } = await git(['worktree', 'list', '--porcelain']);
+	return parseWorktrees(stdout);
+}
+
+export type WorktreePrune = {
+	/** Paths of the registrations Git forgot. */
+	readonly pruned: readonly string[];
+};
+
+/**
+ * Runs `git worktree prune`, then diffs the registrations before and after to
+ * report exactly what was forgotten. Only registrations whose directory is
+ * gone are dropped: existing worktrees are never touched.
+ */
+export async function pruneWorktrees(context: WorkflowContext): Promise<WorktreePrune> {
+	const before = await listWorktrees(context);
+	await context.git(['worktree', 'prune']);
+	const remaining = new Set((await listWorktrees(context)).map((worktree) => worktree.path));
+	return { pruned: before.map((worktree) => worktree.path).filter((worktreePath) => !remaining.has(worktreePath)) };
+}
+
+export type WorktreeRemoval =
+	| { readonly kind: 'removed'; readonly worktree: Worktree }
+	| { readonly kind: 'main'; readonly worktree: Worktree }
+	| { readonly kind: 'not-found'; readonly target: string };
+
+/**
+ * Finds a worktree by the path it was registered under (absolute, or relative
+ * to `root`) or by the branch it has checked out.
+ */
+export function resolveWorktree(worktrees: readonly Worktree[], target: string, root: string): Worktree | undefined {
+	const absolute = path.resolve(root, target);
+	return (
+		worktrees.find((worktree) => worktree.path === target) ??
+		worktrees.find((worktree) => path.resolve(worktree.path) === absolute) ??
+		worktrees.find((worktree) => worktree.branch === target)
+	);
+}
+
+/**
+ * Removes one linked worktree. The main worktree is refused, and without
+ * `force` Git refuses a dirty or locked worktree: its reason travels up as the
+ * thrown error.
+ */
+export async function removeWorktree(context: WorkflowContext, target: string, force: boolean): Promise<WorktreeRemoval> {
+	const worktree = resolveWorktree(await listWorktrees(context), target, context.root);
+	if (!worktree) {
+		return { kind: 'not-found', target };
+	}
+	if (worktree.state === 'main') {
+		return { kind: 'main', worktree };
+	}
+	await context.git(['worktree', 'remove', ...(force ? ['--force'] : []), worktree.path]);
+	return { kind: 'removed', worktree };
+}
