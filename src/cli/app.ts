@@ -214,11 +214,12 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 				return 'ok';
 			}
 			case 'prune': {
-				const { pruned } = await pruneWorktrees(context);
+				const dryRun = options.mode === 'dryRun';
+				const { pruned } = await pruneWorktrees(context, dryRun);
 				if (pruned.length === 0) {
 					io.stderr('No worktree registrations to prune.\n');
 				} else {
-					io.stdout(`Pruned ${pruned.length} worktree registration(s):\n`);
+					io.stdout(`${dryRun ? 'Would prune' : 'Pruned'} ${pruned.length} worktree registration(s):\n`);
 					pruned.forEach((path) => io.stdout(`  ${path}\n`));
 				}
 				return 'ok';

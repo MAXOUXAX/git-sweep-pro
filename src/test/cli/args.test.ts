@@ -115,7 +115,13 @@ suite('cli args', () => {
 		assert.throws(() => parseArgs(['worktree', 'prune', 'extra']), /Unexpected argument: extra/);
 		assert.throws(() => parseArgs(['worktree', 'remove']), /worktree remove requires a path or a branch/);
 		assert.throws(() => parseArgs(['worktree', 'remove', 'a', 'b']), /Unexpected argument: b/);
-		assert.throws(() => parseArgs(['worktree', 'remove', 'x', '--dry-run']), /--dry-run cannot be used with worktree/);
+		assert.throws(() => parseArgs(['worktree', 'remove', 'x', '--dry-run']), /--dry-run cannot be used with worktree remove\./);
+	});
+
+	test('--dry-run is refused only for worktree remove, and accepted by the read-only subcommands', () => {
+		assert.strictEqual(parseArgs(['worktree', 'list', '--dry-run']).mode, 'dryRun');
+		assert.strictEqual(parseArgs(['worktree', 'prune', '--dry-run']).mode, 'dryRun');
+		assert.throws(() => parseArgs(['worktree', 'remove', 'feature/x', '--dry-run']), /--dry-run cannot be used with worktree remove\./);
 	});
 
 	test('--force selects a force delete, and modeToCliArgs maps each mode back to its flags', () => {

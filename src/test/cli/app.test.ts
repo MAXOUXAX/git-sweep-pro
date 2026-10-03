@@ -423,6 +423,22 @@ suite('cli app (real git)', function () {
 			assert.ok(io.err.join('').includes('No worktree registrations to prune.'));
 		});
 
+		test('worktree prune --dry-run reports what would be forgotten without forgetting it', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+			const linked = path.join(fs.realpathSync(fx.dir), 'feature-wt');
+			fs.rmSync(wt, { recursive: true, force: true });
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'prune', '--dry-run'], io), EXIT.ok);
+			assert.ok(io.out.join('').includes('Would prune 1 worktree registration(s):'));
+			assert.ok(io.out.join('').includes(linked));
+
+			const after = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'list', '--json'], after), EXIT.ok);
+			assert.strictEqual(JSON.parse(after.out.join('')).at(-1).state, 'prunable', 'the registration is still there');
+		});
+
 		test('worktree remove removes a linked worktree, refuses the main one, and reports an unknown one', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');
@@ -455,6 +471,23 @@ suite('cli app (real git)', function () {
 
 			const forced = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt', '--force'], forced), EXIT.ok);
+			assert.ok(!fs.existsSync(wt));
+		});
+
+		test('worktree remove cannot remove a locked worktree with a single --force, and removes it after unlocking', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+			git(['worktree', 'lock', wt], fx.repo);
+
+			// Git needs two --force flags for a locked worktree; gsp passes one.
+			const locked = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt', '--force'], locked), EXIT.failed);
+			assert.ok(locked.err.join('').includes('locked'));
+			assert.ok(fs.existsSync(wt));
+
+			git(['worktree', 'unlock', wt], fx.repo);
+			const unlocked = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt'], unlocked), EXIT.ok);
 			assert.ok(!fs.existsSync(wt));
 		});
 

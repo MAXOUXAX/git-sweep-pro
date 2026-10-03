@@ -157,10 +157,11 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 		// Restore never overwrites a branch, so there is nothing to force or to preview.
 		throw new UsageError(`${values.force ? '--force' : '--dry-run'} cannot be used with restore.`);
 	}
-	if (command === 'worktree' && values['dry-run']) {
-		// Only `worktree remove` mutates, and it has no preview: refusing the flag
+	if (command === 'worktree' && worktree?.subcommand === 'remove' && values['dry-run']) {
+		// Only `worktree remove` mutates without a preview: refusing the flag
 		// beats silently removing a worktree during a supposedly dry run.
-		throw new UsageError('--dry-run cannot be used with worktree.');
+		// `worktree list` ignores it and `worktree prune` uses it as a preview.
+		throw new UsageError('--dry-run cannot be used with worktree remove.');
 	}
 	const maxPositionals = command === 'restore' || command === 'agents' ? Infinity : command === 'post-pr' || command === 'sync' ? 1 : 0;
 	if (command !== 'worktree' && args.length > maxPositionals) {
@@ -240,7 +241,7 @@ Commands:
   help, version
 
 Options:
-  -n, --dry-run      Only report what would be deleted
+  -n, --dry-run      Only report what would be deleted or pruned
   -f, --force        Delete with "git branch -D" instead of "-d" (for
                      "worktree remove", pass --force to "git worktree remove")
   -m, --merged       Also offer local branches already merged into the default

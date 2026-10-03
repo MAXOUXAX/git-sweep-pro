@@ -2,6 +2,7 @@ import { getDefaultBranch } from './default-branch';
 import { findMergedBranches, type MergedBranch } from './merged-branches';
 import { GONE_REFS_ARGS, isProtectedBranch, parseLocalBranchRefs, type LocalBranchRef, type SweepSettings } from './sweep-logic';
 import type { WorkflowContext } from './workflow';
+import { findMainWorktree } from './worktrees';
 
 /** A stale branch that a sweep run from here cannot delete, because it is checked out. */
 export type CheckedOutBranch =
@@ -26,12 +27,6 @@ export type StaleBranches = {
 	/** Worktree path of each stale or merged branch checked out in a linked worktree (removed before the branch is deleted). */
 	readonly worktrees: ReadonlyMap<string, string>;
 };
-
-/** Path of the main worktree: the first entry of `git worktree list --porcelain`. */
-async function findMainWorktree({ git }: WorkflowContext): Promise<string | undefined> {
-	const { stdout } = await git(['worktree', 'list', '--porcelain']);
-	return /^worktree (.+)$/m.exec(stdout)?.[1];
-}
 
 /**
  * Fetches, prunes remote references and missing worktrees (unless disabled in

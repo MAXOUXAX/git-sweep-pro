@@ -106,6 +106,12 @@ suite('worktrees', () => {
 		assert.deepStrictEqual(commands, ['worktree list --porcelain', 'worktree prune', 'worktree list --porcelain']);
 	});
 
+	test('pruneWorktrees with dryRun reports the prunable registrations without running git prune', async () => {
+		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: PORCELAIN } } });
+		assert.deepStrictEqual(await pruneWorktrees(context, true), { pruned: ['/repo/prunable'] });
+		assert.deepStrictEqual(commands, ['worktree list --porcelain']);
+	});
+
 	test('removeWorktree resolves a branch to its path and removes it', async () => {
 		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: PORCELAIN } } });
 		assert.deepStrictEqual(await removeWorktree(context, 'feature/x', false), { kind: 'removed', worktree: LINKED });

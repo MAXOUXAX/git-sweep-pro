@@ -79,6 +79,11 @@ export async function listWorktrees({ git }: WorkflowContext): Promise<Worktree[
 	return parseWorktrees(stdout);
 }
 
+/** Path of the main worktree: the first entry of the listing, as Git always reports it. */
+export async function findMainWorktree(context: WorkflowContext): Promise<string | undefined> {
+	return (await listWorktrees(context))[0]?.path;
+}
+
 export type WorktreePrune = {
 	/** Paths of the registrations Git forgot. */
 	readonly pruned: readonly string[];
@@ -87,10 +92,14 @@ export type WorktreePrune = {
 /**
  * Runs `git worktree prune`, then diffs the registrations before and after to
  * report exactly what was forgotten. Only registrations whose directory is
- * gone are dropped: existing worktrees are never touched.
+ * gone are dropped: existing worktrees are never touched. With `dryRun`, git is
+ * not run and the prunable registrations are reported instead.
  */
-export async function pruneWorktrees(context: WorkflowContext): Promise<WorktreePrune> {
+export async function pruneWorktrees(context: WorkflowContext, dryRun = false): Promise<WorktreePrune> {
 	const before = await listWorktrees(context);
+	if (dryRun) {
+		return { pruned: before.filter((worktree) => worktree.state === 'prunable').map((worktree) => worktree.path) };
+	}
 	await context.git(['worktree', 'prune']);
 	const remaining = new Set((await listWorktrees(context)).map((worktree) => worktree.path));
 	return { pruned: before.map((worktree) => worktree.path).filter((worktreePath) => !remaining.has(worktreePath)) };
