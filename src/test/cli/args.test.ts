@@ -46,10 +46,22 @@ suite('cli args', () => {
 
 	test('JSON is available only for discovery, never silently ignored by a mutation', () => {
 		assert.strictEqual(parseArgs(['list', '--json']).json, true);
+		assert.strictEqual(parseArgs(['worktree', 'list', '--json']).json, true);
 		assert.strictEqual(parseArgs(['restore', '--json']).json, true);
 		assert.strictEqual(parseArgs(['--json', '--help']).command, 'help');
-		for (const args of [[], ['sweep'], ['post-pr', 'main'], ['sync'], ['resume'], ['restore', 'feature/x'], ['agents'], ['version']]) {
-			assert.throws(() => parseArgs([...args, '--json']), /--json requires list or restore without branch arguments/);
+		for (const args of [
+			[],
+			['sweep'],
+			['worktree', 'prune'],
+			['worktree', 'remove', 'feature/x'],
+			['post-pr', 'main'],
+			['sync'],
+			['resume'],
+			['restore', 'feature/x'],
+			['agents'],
+			['version'],
+		]) {
+			assert.throws(() => parseArgs([...args, '--json']), /--json requires list, worktree list, or restore without branch arguments/);
 		}
 	});
 
@@ -86,6 +98,24 @@ suite('cli args', () => {
 	test('restore takes any number of branches', () => {
 		assert.deepStrictEqual(parseArgs(['restore']).positionals, []);
 		assert.deepStrictEqual(parseArgs(['restore', 'a', 'b/c']).positionals, ['a', 'b/c']);
+	});
+
+	test('parses worktree subcommands and their target', () => {
+		assert.strictEqual(parseArgs(['worktree', 'list']).command, 'worktree');
+		assert.deepStrictEqual(parseArgs(['worktree', 'list']).worktree, { subcommand: 'list', target: undefined });
+		assert.deepStrictEqual(parseArgs(['worktree', 'prune']).worktree, { subcommand: 'prune', target: undefined });
+		assert.deepStrictEqual(parseArgs(['worktree', 'remove', 'feature/x']).worktree, { subcommand: 'remove', target: 'feature/x' });
+		assert.deepStrictEqual(parseArgs(['worktree', 'remove', '/tmp/wt']).worktree, { subcommand: 'remove', target: '/tmp/wt' });
+	});
+
+	test('rejects invalid worktree invocations', () => {
+		assert.throws(() => parseArgs(['worktree']), /worktree requires a subcommand: list, prune, remove/);
+		assert.throws(() => parseArgs(['worktree', 'frobnicate']), /Unknown worktree subcommand: frobnicate\. Use list, prune, remove/);
+		assert.throws(() => parseArgs(['worktree', 'list', 'extra']), /Unexpected argument: extra/);
+		assert.throws(() => parseArgs(['worktree', 'prune', 'extra']), /Unexpected argument: extra/);
+		assert.throws(() => parseArgs(['worktree', 'remove']), /worktree remove requires a path or a branch/);
+		assert.throws(() => parseArgs(['worktree', 'remove', 'a', 'b']), /Unexpected argument: b/);
+		assert.throws(() => parseArgs(['worktree', 'remove', 'x', '--dry-run']), /--dry-run cannot be used with worktree/);
 	});
 
 	test('--force selects a force delete, and modeToCliArgs maps each mode back to its flags', () => {

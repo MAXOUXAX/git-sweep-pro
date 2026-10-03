@@ -361,5 +361,107 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(await runCli(['resume'], createFakeIo(wt)), EXIT.ok);
 			assert.ok(!fs.existsSync(stateFilePath(wtGitDir)));
 		});
+
+		test('worktree list prints every worktree and supports --json', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+			const root = fs.realpathSync(fx.repo);
+			const linked = fs.realpathSync(wt);
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'list'], io), EXIT.ok);
+			assert.deepStrictEqual(io.out.join('').split('\n').filter(Boolean), [`${root}  main (main)`, `${linked}  feature/wt (linked)`]);
+
+			const json = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'list', '--json'], json), EXIT.ok);
+			assert.deepStrictEqual(JSON.parse(json.out.join('')), [
+				{ path: root, branch: 'main', state: 'main' },
+				{ path: linked, branch: 'feature/wt', state: 'linked' },
+			]);
+		});
+
+		test('worktree list marks a registration whose directory is gone as prunable', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+			const linked = path.join(fs.realpathSync(fx.dir), 'feature-wt');
+			fs.rmSync(wt, { recursive: true, force: true });
+
+			const json = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'list', '--json'], json), EXIT.ok);
+			assert.deepStrictEqual(JSON.parse(json.out.join('')).at(-1), { path: linked, branch: 'feature/wt', state: 'prunable' });
+		});
+
+		test('worktree list --json reports a detached worktree with a null branch', async () => {
+			const dir = path.join(fx.dir, 'detached');
+			git(['worktree', 'add', '-q', '--detach', dir, 'HEAD'], fx.repo);
+
+			const json = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'list', '--json'], json), EXIT.ok);
+			assert.deepStrictEqual(JSON.parse(json.out.join('')).at(-1), { path: fs.realpathSync(dir), branch: null, state: 'linked' });
+		});
+
+		test('worktree prune forgets the registration of a deleted worktree', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+			const linked = path.join(fs.realpathSync(fx.dir), 'feature-wt');
+			fs.rmSync(wt, { recursive: true, force: true });
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'prune'], io), EXIT.ok);
+			assert.ok(io.out.join('').includes('Pruned 1 worktree registration(s):'));
+			assert.ok(io.out.join('').includes(linked));
+
+			const after = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'list', '--json'], after), EXIT.ok);
+			assert.deepStrictEqual(JSON.parse(after.out.join('')).map((entry: { path: string }) => entry.path), [fs.realpathSync(fx.repo)]);
+		});
+
+		test('worktree prune reports when there is nothing to forget', async () => {
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'prune'], io), EXIT.ok);
+			assert.deepStrictEqual(io.out, []);
+			assert.ok(io.err.join('').includes('No worktree registrations to prune.'));
+		});
+
+		test('worktree remove removes a linked worktree, refuses the main one, and reports an unknown one', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+
+			const main = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'main'], main), EXIT.failed);
+			assert.ok(main.err.join('').includes('Refusing to remove the main worktree'));
+			assert.ok(fs.existsSync(fx.repo));
+
+			const unknown = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'nope'], unknown), EXIT.failed);
+			assert.ok(unknown.err.join('').includes('No worktree found for "nope"'));
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt'], io), EXIT.ok);
+			assert.ok(!fs.existsSync(wt));
+			assert.ok(branchExists(fx.repo, 'feature/wt'), 'the branch is kept');
+			assert.ok(io.out.join('').includes('Removed worktree'));
+		});
+
+		test('worktree remove refuses a dirty worktree without --force and removes it with --force', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+			fs.writeFileSync(path.join(wt, 'wip.txt'), 'work in progress\n');
+
+			const refused = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt'], refused), EXIT.failed);
+			assert.ok(refused.err.join('').includes('modified or untracked'));
+			assert.ok(fs.existsSync(wt));
+
+			const forced = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt', '--force'], forced), EXIT.ok);
+			assert.ok(!fs.existsSync(wt));
+		});
+
+		test('an unknown worktree subcommand is a usage error', async () => {
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'frobnicate'], io), EXIT.usage);
+			assert.ok(io.err.join('').includes('Unknown worktree subcommand: frobnicate'));
+		});
 	});
 });
