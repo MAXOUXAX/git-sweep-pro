@@ -57,12 +57,41 @@ suite('worktrees', () => {
 		assert.strictEqual(describeWorktree({ path: '/repo/wt', branch: undefined, state: 'linked' }), '/repo/wt  detached (linked)\n');
 	});
 
-	test('resolveWorktree matches a path, a path relative to the root, or a branch', () => {
+	test('resolveWorktree matches a path, a path relative to the base, or a branch', () => {
 		const worktrees = parseWorktrees(PORCELAIN);
-		assert.deepStrictEqual(resolveWorktree(worktrees, '/repo/wt', '/repo'), LINKED);
-		assert.deepStrictEqual(resolveWorktree(worktrees, 'wt', '/repo'), LINKED);
-		assert.deepStrictEqual(resolveWorktree(worktrees, 'feature/x', '/repo'), LINKED);
-		assert.strictEqual(resolveWorktree(worktrees, 'nope', '/repo'), undefined);
+		assert.deepStrictEqual(resolveWorktree(worktrees, '/repo/wt', '/repo'), { kind: 'found', worktree: LINKED });
+		assert.deepStrictEqual(resolveWorktree(worktrees, 'wt', '/repo'), { kind: 'found', worktree: LINKED });
+		assert.deepStrictEqual(resolveWorktree(worktrees, 'feature/x', '/repo'), { kind: 'found', worktree: LINKED });
+		assert.deepStrictEqual(resolveWorktree(worktrees, 'nope', '/repo'), { kind: 'not-found', target: 'nope' });
+	});
+
+	test('resolveWorktree reads a relative path from the invocation directory, not the repository root', () => {
+		const porcelain = ['worktree /repo', 'branch refs/heads/main', '', 'worktree /repo/nested/wt', 'branch refs/heads/feature/x', ''].join('\n');
+		const linked = { path: '/repo/nested/wt', branch: 'feature/x', state: 'linked' };
+		assert.deepStrictEqual(resolveWorktree(parseWorktrees(porcelain), 'wt', '/repo/nested'), { kind: 'found', worktree: linked });
+		assert.deepStrictEqual(resolveWorktree(parseWorktrees(porcelain), 'wt', '/repo'), { kind: 'not-found', target: 'wt' });
+	});
+
+	test('resolveWorktree reports a path and a branch that name different worktrees', () => {
+		const porcelain = [
+			'worktree /repo',
+			'branch refs/heads/main',
+			'',
+			'worktree /repo/feature/x',
+			'branch refs/heads/other',
+			'',
+			'worktree /elsewhere',
+			'branch refs/heads/feature/x',
+			'',
+		].join('\n');
+		const resolution = resolveWorktree(parseWorktrees(porcelain), 'feature/x', '/repo');
+		assert.strictEqual(resolution.kind, 'ambiguous');
+		if (resolution.kind === 'ambiguous') {
+			assert.deepStrictEqual(
+				resolution.worktrees.map((worktree) => worktree.path),
+				['/repo/feature/x', '/elsewhere']
+			);
+		}
 	});
 
 	test('listWorktrees reads the porcelain listing', async () => {
@@ -99,6 +128,30 @@ suite('worktrees', () => {
 	test('removeWorktree reports an unknown target', async () => {
 		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: PORCELAIN } } });
 		assert.deepStrictEqual(await removeWorktree(context, 'nope', false), { kind: 'not-found', target: 'nope' });
+		assert.deepStrictEqual(commands, ['worktree list --porcelain']);
+	});
+
+	test('removeWorktree resolves a relative target from the invocation directory', async () => {
+		const porcelain = ['worktree /repo', 'branch refs/heads/main', '', 'worktree /repo/nested/wt', 'branch refs/heads/feature/x', ''].join('\n');
+		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: porcelain } } });
+		assert.strictEqual((await removeWorktree(context, 'wt', false, '/repo/nested')).kind, 'removed');
+		assert.deepStrictEqual(commands, ['worktree list --porcelain', 'worktree remove /repo/nested/wt']);
+	});
+
+	test('removeWorktree refuses an ambiguous target instead of picking one silently', async () => {
+		const porcelain = [
+			'worktree /repo',
+			'branch refs/heads/main',
+			'',
+			'worktree /repo/feature/x',
+			'branch refs/heads/other',
+			'',
+			'worktree /elsewhere',
+			'branch refs/heads/feature/x',
+			'',
+		].join('\n');
+		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: porcelain } } });
+		assert.strictEqual((await removeWorktree(context, 'feature/x', false, '/repo')).kind, 'ambiguous');
 		assert.deepStrictEqual(commands, ['worktree list --porcelain']);
 	});
 

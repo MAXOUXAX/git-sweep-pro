@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { WorkflowContext } from './workflow';
 
@@ -95,37 +96,60 @@ export async function pruneWorktrees(context: WorkflowContext): Promise<Worktree
 	return { pruned: before.map((worktree) => worktree.path).filter((worktreePath) => !remaining.has(worktreePath)) };
 }
 
-export type WorktreeRemoval =
-	| { readonly kind: 'removed'; readonly worktree: Worktree }
-	| { readonly kind: 'main'; readonly worktree: Worktree }
+/** Absolute, symlink-resolved path when it exists, otherwise the lexical absolute path. */
+function canonical(absolutePath: string): string {
+	try {
+		return fs.realpathSync(absolutePath);
+	} catch {
+		return path.resolve(absolutePath);
+	}
+}
+
+export type WorktreeResolution =
+	| { readonly kind: 'found'; readonly worktree: Worktree }
+	/** The target names a path and a branch that belong to different worktrees. */
+	| { readonly kind: 'ambiguous'; readonly target: string; readonly worktrees: readonly [Worktree, Worktree] }
 	| { readonly kind: 'not-found'; readonly target: string };
 
 /**
  * Finds a worktree by the path it was registered under (absolute, or relative
- * to `root`) or by the branch it has checked out.
+ * to `baseDir`: the directory the command was invoked from) or by the branch it
+ * has checked out. Git reports canonical paths, so both sides are compared
+ * through symlinks. A path and a branch that name different worktrees are
+ * ambiguous rather than silently picking one.
  */
-export function resolveWorktree(worktrees: readonly Worktree[], target: string, root: string): Worktree | undefined {
-	const absolute = path.resolve(root, target);
-	return (
-		worktrees.find((worktree) => worktree.path === target) ??
-		worktrees.find((worktree) => path.resolve(worktree.path) === absolute) ??
-		worktrees.find((worktree) => worktree.branch === target)
-	);
+export function resolveWorktree(worktrees: readonly Worktree[], target: string, baseDir: string): WorktreeResolution {
+	const targetPath = canonical(path.resolve(baseDir, target));
+	const byPath =
+		worktrees.find((worktree) => worktree.path === target) ?? worktrees.find((worktree) => canonical(worktree.path) === targetPath);
+	const byBranch = worktrees.find((worktree) => worktree.branch === target);
+	if (byPath && byBranch && byPath !== byBranch) {
+		return { kind: 'ambiguous', target, worktrees: [byPath, byBranch] };
+	}
+	const worktree = byPath ?? byBranch;
+	return worktree ? { kind: 'found', worktree } : { kind: 'not-found', target };
 }
+
+export type WorktreeRemoval =
+	| { readonly kind: 'removed'; readonly worktree: Worktree }
+	| { readonly kind: 'main'; readonly worktree: Worktree }
+	| { readonly kind: 'ambiguous'; readonly target: string; readonly worktrees: readonly [Worktree, Worktree] }
+	| { readonly kind: 'not-found'; readonly target: string };
 
 /**
  * Removes one linked worktree. The main worktree is refused, and without
  * `force` Git refuses a dirty or locked worktree: its reason travels up as the
- * thrown error.
+ * thrown error. `baseDir` is the directory the command was invoked from, so a
+ * relative path is read the way the user typed it.
  */
-export async function removeWorktree(context: WorkflowContext, target: string, force: boolean): Promise<WorktreeRemoval> {
-	const worktree = resolveWorktree(await listWorktrees(context), target, context.root);
-	if (!worktree) {
-		return { kind: 'not-found', target };
+export async function removeWorktree(context: WorkflowContext, target: string, force: boolean, baseDir = context.root): Promise<WorktreeRemoval> {
+	const resolution = resolveWorktree(await listWorktrees(context), target, baseDir);
+	if (resolution.kind !== 'found') {
+		return resolution;
 	}
-	if (worktree.state === 'main') {
-		return { kind: 'main', worktree };
+	if (resolution.worktree.state === 'main') {
+		return { kind: 'main', worktree: resolution.worktree };
 	}
-	await context.git(['worktree', 'remove', ...(force ? ['--force'] : []), worktree.path]);
-	return { kind: 'removed', worktree };
+	await context.git(['worktree', 'remove', ...(force ? ['--force'] : []), resolution.worktree.path]);
+	return { kind: 'removed', worktree: resolution.worktree };
 }

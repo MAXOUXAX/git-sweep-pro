@@ -458,6 +458,32 @@ suite('cli app (real git)', function () {
 			assert.ok(!fs.existsSync(wt));
 		});
 
+		test('worktree remove reads a relative path from the directory the command ran in', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = path.join(fx.repo, 'nested', 'wt');
+			git(['worktree', 'add', '-q', wt, 'feature/wt'], fx.repo);
+
+			// From repo/nested, "wt" means repo/nested/wt, not repo/wt.
+			const io = createFakeIo(path.join(fx.repo, 'nested'));
+			assert.strictEqual(await runCli(['worktree', 'remove', 'wt'], io), EXIT.ok, io.err.join(''));
+			assert.ok(!fs.existsSync(wt));
+		});
+
+		test('worktree remove refuses a target that names two different worktrees', async () => {
+			git(['branch', 'other'], fx.repo);
+			const byPath = path.join(fx.repo, 'feature', 'x');
+			git(['worktree', 'add', '-q', byPath, 'other'], fx.repo);
+			const byBranch = path.join(fx.dir, 'wt');
+			git(['branch', 'feature/x'], fx.repo);
+			git(['worktree', 'add', '-q', byBranch, 'feature/x'], fx.repo);
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/x'], io), EXIT.failed);
+			assert.ok(io.err.join('').includes('is both the worktree'));
+			assert.ok(fs.existsSync(byPath));
+			assert.ok(fs.existsSync(byBranch));
+		});
+
 		test('an unknown worktree subcommand is a usage error', async () => {
 			const io = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['worktree', 'frobnicate'], io), EXIT.usage);

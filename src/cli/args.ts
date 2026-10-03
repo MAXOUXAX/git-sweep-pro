@@ -223,8 +223,9 @@ Commands:
   worktree prune     Forget the worktree registrations whose directory is gone
                      (never touches an existing worktree)
   worktree remove <path|branch>
-                     Remove one linked worktree, refusing the main one; without
-                     --force, Git refuses a dirty or locked worktree
+                     Remove one linked worktree, refusing the main one.
+                     --force removes a dirty worktree; unlock a locked one
+                     first with "git worktree unlock <path>"
   post-pr [branch]   After a merged PR: switch to [branch], delete the old branch,
                      sweep, then pull
   sync [upstream]    Rebase the current branch onto [upstream] and force-push

@@ -134,7 +134,7 @@ async function runCommand(options: CliOptions, dir: string, frontend: Frontend, 
 		case 'list':
 			return runList(context, options, io);
 		case 'worktree':
-			return runWorktree(context, options, io);
+			return runWorktree(context, options, io, dir);
 		case 'post-pr':
 			return runPostPullRequestWorkflow(context, requested);
 		case 'restore':
@@ -193,8 +193,10 @@ async function runList(context: WorkflowContext, options: CliOptions, io: CliIo)
 /**
  * `worktree`: list every worktree, prune the registrations whose directory is
  * gone, or remove one linked worktree. Nothing mutates the repository history.
+ * `dir` is the invocation directory, so a relative removal target is read the
+ * way the user typed it.
  */
-async function runWorktree(context: WorkflowContext, options: CliOptions, io: CliIo): Promise<WorkflowOutcome> {
+async function runWorktree(context: WorkflowContext, options: CliOptions, io: CliIo, dir: string): Promise<WorkflowOutcome> {
 	const worktree = options.worktree;
 	if (!worktree) {
 		return 'failed';
@@ -222,7 +224,7 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 				return 'ok';
 			}
 			case 'remove': {
-				const result = await removeWorktree(context, worktree.target ?? '', options.mode === 'forceDelete');
+				const result = await removeWorktree(context, worktree.target ?? '', options.mode === 'forceDelete', dir);
 				switch (result.kind) {
 					case 'removed':
 						io.stdout(`Removed worktree ${result.worktree.path}.\n`);
@@ -230,6 +232,14 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 					case 'main':
 						context.ui.showErrorMessage(`Refusing to remove the main worktree (${result.worktree.path}).`, { failed: true });
 						return 'failed';
+					case 'ambiguous': {
+						const [byPath, byBranch] = result.worktrees;
+						context.ui.showErrorMessage(
+							`"${result.target}" is both the worktree ${byPath.path} and the branch ${byBranch.branch} (${byBranch.path}). Remove one by its full path.`,
+							{ failed: true }
+						);
+						return 'failed';
+					}
 					case 'not-found':
 						context.ui.showErrorMessage(`No worktree found for "${result.target}". Run "gsp worktree list" to see them.`, { failed: true });
 						return 'failed';
