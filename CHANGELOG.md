@@ -4,6 +4,13 @@ All notable changes to the "git-sweep-pro" extension are documented in this file
 
 This project adheres to [Semantic Versioning](https://semver.org) and the changelog is generated automatically from [Conventional Commits](https://www.conventionalcommits.org).
 
+# [1.4.0](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.3.1...v1.4.0) (2026-10-03)
+
+
+### Features
+
+* add a gsp worktree command ([#23](https://github.com/MAXOUXAX/git-sweep-pro/issues/23)) ([9dfd0a8](https://github.com/MAXOUXAX/git-sweep-pro/commit/9dfd0a8796cf915903805526b9a126d13a7a8cc9))
+
 ## [1.3.1](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.3.0...v1.3.1) (2026-10-02)
 
 
