@@ -4,7 +4,7 @@ import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
-import { formatBranchLines, formatSummary, type CleanReport } from '../core/clean-plan';
+import { applyCommand, CLEAN_SCHEMA, formatBranchLines, formatSummary, type CleanReport } from '../core/clean-plan';
 import { runCleanWorkflow, UnknownBranchError, type CleanOutcome } from '../core/clean-workflow';
 import { createGhRunner } from '../core/github-signal';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
@@ -86,6 +86,9 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 		options = parseArgs(argv);
 	} catch (error) {
 		if (error instanceof UsageError) {
+			if (argv.includes('--json')) {
+				printJsonError(io, error.message, 'usage');
+			}
 			io.stderr(`error: ${error.message}\n\n${USAGE}\n`);
 			return EXIT.usage;
 		}
@@ -103,6 +106,9 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 
 	const requestedDir = path.resolve(io.cwd, options.cwd ?? '.');
 	if (!fs.existsSync(requestedDir)) {
+		if (options.json) {
+			printJsonError(io, `no such directory: ${requestedDir}`, 'no-such-directory');
+		}
 		io.stderr(`error: no such directory: ${requestedDir}\n`);
 		return EXIT.failed;
 	}
@@ -124,6 +130,22 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	}
 	// Nobody could answer: the prompt was refused for lack of --yes, not cancelled.
 	return outcome.outcome === 'cancelled' && !frontend.canPrompt ? EXIT.notApplied : EXIT_CODES[outcome.outcome];
+}
+
+/** Why a command stopped before producing its JSON document. */
+type JsonErrorCode = 'usage' | 'no-such-directory' | 'unknown-branch' | 'not-a-repository' | 'failed';
+
+/**
+ * With `--json`, a fatal error is still one JSON document on stdout, so a
+ * script parsing it gets the reason, not an empty string. The message also
+ * goes to stderr as usual.
+ */
+function printJsonError(io: CliIo, message: string, code: JsonErrorCode): void {
+	io.stdout(`${JSON.stringify({ schema: CLEAN_SCHEMA, error: { message, code } }, null, 2)}\n`);
+}
+
+function gitErrorCode(message: string): JsonErrorCode {
+	return message.toLowerCase().includes('not a git repository') ? 'not-a-repository' : 'failed';
 }
 
 /** How a command ended: a workflow outcome, a `clean` outcome, or an exit code decided on the spot. */
@@ -204,6 +226,9 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 	try {
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
+		if (options.json) {
+			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return EXIT.failed;
 	}
@@ -227,8 +252,14 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		return { kind: 'clean', outcome };
 	} catch (error) {
 		if (error instanceof UnknownBranchError) {
+			if (options.json) {
+				printJsonError(io, error.message, 'unknown-branch');
+			}
 			io.stderr(`error: ${error.message}\n`);
 			return EXIT.usage;
+		}
+		if (options.json) {
+			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return EXIT.failed;
@@ -236,14 +267,35 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 }
 
 /** What to do next when the plan was not applied, or `undefined` when there is nothing to say. */
-function nextStep(report: CleanReport, outcome: CleanOutcome): string | undefined {
+function nextStep(report: CleanReport, outcome: CleanOutcome, options: CliOptions): string | undefined {
 	if (outcome !== 'not-applied') {
 		return undefined;
 	}
 	if (report.summary.delete > 0 && !report.branches.some((branch) => branch.result !== undefined)) {
-		return 'Nothing was changed. To apply this plan, run: gsp clean --yes';
+		const command = applyCommand(report.branches, {
+			...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+			patterns: options.positionals,
+			protectedPatterns: options.protect,
+			github: options.github,
+			fetch: options.fetch,
+		});
+		return `Nothing was changed. To apply this plan, run: ${command}`;
 	}
-	return 'Branches with work found nowhere else were kept: add --force to delete them, as shown above.';
+	const count = (test: (branch: CleanReport['branches'][number]) => boolean) => report.branches.filter(test).length;
+	const unpushed = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'dead');
+	const unmerged = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'alive');
+	const ignored = count((branch) => branch.reason === 'ignored-files');
+	const kept = [
+		...(unpushed > 0 ? [`${unpushed} with commits found nowhere else`] : []),
+		...(unmerged > 0 ? [`${unmerged} named but not merged`] : []),
+		...(ignored > 0 ? [`${ignored} whose worktree holds ignored files`] : []),
+	];
+	const changed = count((branch) => branch.reason === 'plan-changed' || branch.reason === 'fetch-failed' || branch.reason === 'worktree-changed');
+	const lines = [
+		...(kept.length > 0 ? [`Kept without --force: ${kept.join(', ')}. Each line above gives the command.`] : []),
+		...(changed > 0 ? [`${changed} changed while applying: run gsp clean again.`] : []),
+	];
+	return lines.length > 0 ? lines.join('\n') : undefined;
 }
 
 function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: CliOptions, frontend: Frontend, io: CliIo): void {
@@ -253,7 +305,7 @@ function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: C
 	}
 	const lines = formatBranchLines(report);
 	const summary = outcome === 'cancelled' ? 'Cancelled. Nothing was deleted.' : formatSummary(report);
-	const next = nextStep(report, outcome);
+	const next = nextStep(report, outcome, options);
 	if (options.rpc || frontend.canPrompt) {
 		lines.forEach((line) => frontend.output.appendLine(line));
 		const message = next ? `${summary}\n${next}` : summary;

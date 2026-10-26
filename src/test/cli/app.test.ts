@@ -60,11 +60,11 @@ suite('cli app (real git)', function () {
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['list', '--protect', 'release/*'], io), EXIT.notApplied);
 		assert.deepStrictEqual(io.out.join('').split('\n').filter(Boolean), [
-			'delete  feature/a  no commits beyond origin/main',
-			'skip    release/1  protected (no commits beyond origin/main)',
+			'delete  feature/a  already in origin/main',
+			'skip    release/1  protected (already in origin/main)',
 			'keep    main       default branch',
 			'1 to delete (1 empty) · 1 skipped',
-			'Nothing was changed. To apply this plan, run: gsp clean --yes',
+			"Nothing was changed. To apply this plan, run: gsp clean feature/a --protect 'release/*' --yes",
 		]);
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 
@@ -80,7 +80,7 @@ suite('cli app (real git)', function () {
 		const planned = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli([], planned), EXIT.notApplied);
 		assert.ok(branchExists(fx.repo, 'feature/a'));
-		assert.ok(planned.out.join('').includes('To apply this plan, run: gsp clean --yes'));
+		assert.ok(planned.out.join('').includes('To apply this plan, run: gsp clean feature/a --yes'));
 
 		const accepted = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['sweep', '--yes'], accepted), EXIT.ok);
@@ -190,7 +190,7 @@ suite('cli app (real git)', function () {
 		assert.ok(branchExists(fx.repo, 'keep/me'));
 		assert.ok(branchExists(fx.repo, 'opted/out'));
 		assert.ok(io.out.join('').includes('branch.opted/out.deleteMerged is false'));
-		assert.ok(io.out.join('').includes('→ git config --unset branch.opted/out.deleteMerged'));
+		assert.ok(!io.out.join('').includes('→ git config --unset'), 'deliberate: no hint');
 		assert.ok(io.out.join('').includes('Nothing to clean · 3 skipped.'));
 	});
 
@@ -225,6 +225,7 @@ suite('cli app (real git)', function () {
 		const result = JSON.parse(applied.out.join(''));
 		assert.deepStrictEqual([result.checks.remote.source, result.checks.remote.reason, result.checks.fetched], ['local-refs', 'unreachable', false]);
 		assert.ok(!branchExists(fx.repo, 'feature/a'), 'a proven branch is still deleted');
+		assert.strictEqual(applied.err.join('').split('Could not reach the remote').length - 1, 1, 'the warning is printed once');
 	});
 
 	test('a repository without a remote is cleaned from its local branches', async () => {
@@ -237,6 +238,24 @@ suite('cli app (real git)', function () {
 		assert.deepStrictEqual(report.checks.remote, { source: 'local-refs', reason: 'no-remote' });
 		assert.strictEqual(report.checks.base.ref, 'refs/heads/main');
 		assert.ok(!branchExists(fx.repo, 'feature/a'));
+	});
+
+	test('the picker offers branches needing --force only with --force, never pre-selected', async () => {
+		makeGoneBranch(fx.repo, 'feature/a');
+		git(['checkout', '-q', '-b', 'feature/gone'], fx.repo);
+		commitFile(fx.repo, 'gone.txt', 'gone\n', 'gone');
+		git(['push', '-q', '-u', 'origin', 'feature/gone'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['push', '-q', 'origin', '--delete', 'feature/gone'], fx.repo);
+
+		const safe = createFakePrompter({});
+		await runCli([], { ...createFakeIo(fx.repo, { interactive: true }), loadPrompter: async () => safe.prompter });
+		assert.deepStrictEqual(safe.seen.options?.map((option) => option.label), ['feature/a'], 'proven branches only');
+
+		const forced = createFakePrompter({});
+		await runCli(['--force'], { ...createFakeIo(fx.repo, { interactive: true }), loadPrompter: async () => forced.prompter });
+		assert.deepStrictEqual(forced.seen.options?.map((option) => option.label), ['feature/a', 'feature/gone']);
+		assert.deepStrictEqual(forced.seen.initial, [0], 'the one needing --force is not pre-selected');
 	});
 
 	test('an interactive cancel exits 4 and deletes nothing', async () => {
@@ -352,8 +371,8 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(await runCli(['list', '--no-fetch'], io), EXIT.notApplied);
 			const realWt = fs.realpathSync(wt);
 			const lines = io.out.join('').split('\n');
-			assert.ok(lines.includes(`delete  feature/wt    no commits beyond origin/main, removes worktree ${realWt}`), lines.join('\n'));
-			assert.ok(lines.includes('skip    feature/here  current branch (no commits beyond origin/main) → gsp post-pr main'), lines.join('\n'));
+			assert.ok(lines.includes(`delete  feature/wt    already in origin/main, removes worktree ${realWt}`), lines.join('\n'));
+			assert.ok(lines.includes('skip    feature/here  current branch (already in origin/main) → gsp post-pr main'), lines.join('\n'));
 
 			const json = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['list', '--json', '--no-fetch'], json), EXIT.notApplied);
@@ -362,7 +381,7 @@ suite('cli app (real git)', function () {
 			const byName = new Map(
 				(report.branches as Array<{ name: string; worktree: unknown; reason: string }>).map((branch) => [branch.name, branch])
 			);
-			assert.deepStrictEqual(byName.get('feature/wt')?.worktree, { path: realWt, isMain: false, dirty: false, locked: false, prunable: false });
+			assert.deepStrictEqual(byName.get('feature/wt')?.worktree, { path: realWt, isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] } });
 			assert.strictEqual(byName.get('feature/here')?.reason, 'current-branch');
 		});
 
@@ -391,7 +410,64 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(await runCli(['--yes'], io), EXIT.ok);
 			assert.ok(fs.existsSync(path.join(wt, 'wip.txt')));
 			assert.ok(branchExists(fx.repo, 'feature/wt'));
-			assert.ok(io.out.join('').includes(`has uncommitted changes (no commits beyond origin/main) → gsp worktree remove ${fs.realpathSync(wt)} --force`));
+			assert.ok(
+				io.out.join('').includes(`has uncommitted changes (already in origin/main) → git -C ${fs.realpathSync(wt)} stash --include-untracked && gsp clean feature/wt --yes`),
+				io.out.join('')
+			);
+		});
+
+		test('a worktree holding ignored files is kept unless they are regenerable; --force removes it', async () => {
+			fs.writeFileSync(path.join(fx.repo, '.gitignore'), '.env\nnode_modules/\ndist/\n');
+			git(['add', '.gitignore'], fx.repo);
+			git(['commit', '-q', '-m', 'ignore'], fx.repo);
+			git(['push', '-q', 'origin', 'main'], fx.repo);
+			makeGoneBranch(fx.repo, 'feature/env');
+			makeGoneBranch(fx.repo, 'feature/deps');
+			const env = addWorktree('feature/env');
+			const deps = addWorktree('feature/deps');
+			fs.writeFileSync(path.join(env, '.env'), 'TOKEN=1\n');
+			for (const dir of [deps, env]) {
+				fs.mkdirSync(path.join(dir, 'node_modules', 'pkg'), { recursive: true });
+				fs.writeFileSync(path.join(dir, 'node_modules', 'pkg', 'index.js'), '\n');
+				fs.mkdirSync(path.join(dir, 'dist'));
+			}
+
+			const plan = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--json'], plan), EXIT.notApplied);
+			const byName = new Map(
+				(JSON.parse(plan.out.join('')).branches as Array<{ name: string; reason: string; worktree: { ignoredFiles: unknown } }>).map((branch) => [branch.name, branch])
+			);
+			assert.strictEqual(byName.get('feature/env')?.reason, 'ignored-files');
+			assert.deepStrictEqual(byName.get('feature/env')?.worktree.ignoredFiles, { count: 1, sample: ['.env'] });
+			assert.deepStrictEqual(byName.get('feature/deps')?.worktree.ignoredFiles, { count: 0, sample: [] });
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--yes'], io), EXIT.notApplied, '--force would delete more');
+			assert.ok(!fs.existsSync(deps), 'only regenerable files: removed');
+			assert.ok(fs.existsSync(path.join(env, '.env')));
+			assert.ok(branchExists(fx.repo, 'feature/env'));
+			assert.ok(io.out.join('').includes(`removing worktree ${fs.realpathSync(env)} would delete 1 ignored file (.env), needs --force`), io.out.join(''));
+
+			assert.strictEqual(await runCli(['clean', 'feature/env', '--yes', '--force'], createFakeIo(fx.repo)), EXIT.ok);
+			assert.ok(!fs.existsSync(env));
+			assert.ok(!branchExists(fx.repo, 'feature/env'));
+		});
+
+		test('a clean worktree in the middle of a rebase is never removed, nor its branch deleted, even with --force', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+			// Stop the rebase right away on a "break": the worktree stays clean, HEAD detached.
+			git(['-c', 'sequence.editor=f() { printf "break\\n" > "$1"; }; f', 'rebase', '-q', '-i', 'main'], wt);
+			assert.strictEqual(git(['status', '--porcelain'], wt), '');
+
+			for (const args of [['--yes'], ['clean', 'feature/wt', '--yes', '--force']]) {
+				const io = createFakeIo(fx.repo);
+				assert.strictEqual(await runCli(args, io), EXIT.ok, args.join(' '));
+				assert.ok(fs.existsSync(wt), args.join(' '));
+				assert.ok(branchExists(fx.repo, 'feature/wt'), args.join(' '));
+				assert.ok(io.out.join('').includes(`a rebase is in progress in ${fs.realpathSync(wt)}`), io.out.join(''));
+			}
+			git(['rebase', '--abort'], wt);
 		});
 
 		test('branches of worktrees whose directory was deleted are cleaned', async () => {

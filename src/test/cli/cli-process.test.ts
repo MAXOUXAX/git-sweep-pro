@@ -125,9 +125,9 @@ suite('cli process client (real git)', function () {
 		const plan = run([]);
 		assert.strictEqual(plan.status, EXIT.notApplied, plan.stderr);
 		assert.ok(plan.stdout.includes('delete  feature/squash     squash-merged into origin/main'), plan.stdout);
-		assert.ok(plan.stdout.includes('delete  feature/elsewhere  no commits beyond origin/main'), plan.stdout);
+		assert.ok(plan.stdout.includes('delete  feature/elsewhere  already in origin/main'), plan.stdout);
 		assert.ok(plan.stdout.includes('2 to delete (1 empty, 1 squash-merged) · 1 worktree registration to prune'), plan.stdout);
-		assert.ok(plan.stdout.includes('Nothing was changed. To apply this plan, run: gsp clean --yes'));
+		assert.ok(plan.stdout.includes('Nothing was changed. To apply this plan, run: gsp clean feature/elsewhere feature/squash --yes'), plan.stdout);
 
 		const json = run(['--dry-run', '--yes', '--json']);
 		assert.strictEqual(json.status, EXIT.notApplied, json.stderr);
@@ -140,6 +140,31 @@ suite('cli process client (real git)', function () {
 
 		assert.strictEqual(run(['list']).status, EXIT.notApplied);
 		assert.deepStrictEqual(snapshot(), before, 'plan mode writes nothing');
+	});
+
+	test('with --json, a fatal error is still one JSON document on stdout', () => {
+		const unknown = run(['clean', 'nope', '--json']);
+		assert.strictEqual(unknown.status, EXIT.usage);
+		assert.deepStrictEqual(JSON.parse(unknown.stdout), {
+			schema: 2,
+			error: { message: 'No local branch named "nope". Run "gsp clean --dry-run" to see them.', code: 'unknown-branch' },
+		});
+
+		const outside = run(['--json'], fx.dir);
+		assert.strictEqual(outside.status, EXIT.failed);
+		assert.deepStrictEqual(JSON.parse(outside.stdout).error, { message: NOT_A_REPOSITORY, code: 'not-a-repository' });
+
+		const usage = run(['--json', '--bogus']);
+		assert.strictEqual(usage.status, EXIT.usage);
+		assert.deepStrictEqual(JSON.parse(usage.stdout).error, { message: 'Unknown option: --bogus', code: 'usage' });
+	});
+
+	test('the help says what exit code 5 means for clean and for the other commands', () => {
+		const help = run(['help']);
+		assert.strictEqual(help.status, EXIT.ok);
+		assert.ok(help.stdout.includes('5  clean: some planned deletions were not applied (no --yes, or --force\n     needed); the output says what was done.'), help.stdout);
+		assert.ok(help.stdout.includes('confirmation was needed but nobody could answer; rerun with --yes'), help.stdout);
+		assert.ok(!help.stdout.includes('nothing was changed'));
 	});
 
 	test('--yes deletes a squash-merged branch and its clean worktree', () => {
