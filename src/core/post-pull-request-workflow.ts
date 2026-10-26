@@ -285,17 +285,16 @@ type PositionalFacts = {
 	readonly base: { readonly name: string; readonly remote: string | null } | null;
 	readonly plan: BranchPlan;
 	readonly localBranches: readonly string[];
-	/** The branch checked out in the main checkout, when gsp runs in another worktree. */
-	readonly mainCheckoutBranch: string | undefined;
 };
 
 /**
  * What the branch named on the command line asks for. The positional never
  * lifts protection: the old form named the branch to go back to
- * (`gsp post-pr main`), so the default branch, a protected branch, or the
- * branch of the main checkout when gsp runs elsewhere is read as that form,
- * and the current branch is finished. A branch missing locally is already
- * deleted only when something knows it existed: otherwise it is a typo.
+ * (`gsp post-pr main`), so the default branch or a protected branch is read
+ * as that form, and the current branch is finished. Any other branch named is
+ * the one to finish, wherever it is checked out. A branch missing locally is
+ * reported as having no local branch only when something knows it existed:
+ * otherwise it is a typo.
  */
 async function readPositional(context: PostPrContext, options: PostPrOptions, facts: PositionalFacts): Promise<Positional> {
 	const { name, current, into, intoRemote, base, plan } = facts;
@@ -322,9 +321,6 @@ async function readPositional(context: PostPrContext, options: PostPrOptions, fa
 			return deprecated(`${name} is protected, ${oldForm}. If the pull request was merged into ${name}, run "gsp post-pr --into ${name}"`);
 		}
 		throw new PostPrUsageError(`${name} is protected: gsp post-pr never deletes it. To finish a branch merged into ${name}, run "gsp post-pr <branch> --into ${name}".`);
-	}
-	if (name === facts.mainCheckoutBranch && canFinishCurrent) {
-		return deprecated(`${name} is checked out in the main checkout, ${oldForm}. To finish ${name}, run gsp post-pr from the main checkout`);
 	}
 	if (facts.localBranches.includes(name)) {
 		return { requested: name };
@@ -394,7 +390,6 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		base,
 		plan,
 		localBranches,
-		mainCheckoutBranch: main && canonical(main.path) !== canonical(context.root) ? main.branch : undefined,
 	});
 	const targetName = gone ? undefined : (requested ?? (current !== 'HEAD' && current !== into ? current : undefined));
 

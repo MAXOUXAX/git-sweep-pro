@@ -122,7 +122,7 @@ Undo with: gsp restore feature/x
 The worktree you ran gsp in was removed. Continue in the main checkout: cd /work/repo
 ```
 
-`gsp post-pr main`, the old form naming the branch to switch to, still works and prints a deprecation note; so does `gsp post-pr origin/main`. The branch named never lifts protection: a protected branch, or the branch of the main checkout when gsp runs in another worktree, is read as that old form and the current branch is finished. With no current branch to finish, a protected name is a usage error that points to `--into`.
+`gsp post-pr main`, the old form naming the branch to switch to, still works and prints a deprecation note; so does `gsp post-pr origin/main`. The branch named never lifts protection: a protected branch is read as that old form and the current branch is finished. Any other branch named is the one to finish, wherever it is checked out. With no current branch to finish, a protected name is a usage error that points to `--into`.
 
 ### Exit codes
 

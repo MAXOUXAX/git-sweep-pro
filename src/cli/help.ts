@@ -135,8 +135,8 @@ Any other missing <branch> is an error (exit 2).
 
 <branch> never names a protected branch: "gsp post-pr main", the old form
 naming the branch to go back to, still finishes the current branch, with a
-deprecation note. So does a protected branch, or the branch of the main
-checkout when gsp runs in another worktree.
+deprecation note. So does any other protected branch. Any other <branch>
+is the one to finish, wherever it is checked out.
 Works from any worktree:
   - run from the branch's own linked worktree, gsp removes it, carries on
     from the main checkout and tells you where to "cd" next;

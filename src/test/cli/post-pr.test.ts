@@ -315,14 +315,30 @@ suite('cli post-pr (real git)', function () {
 		assert.ok(!branchExists(fx.repo, 'feature/x'));
 	});
 
-	test('from a linked worktree, the branch of the main checkout is read as the old form', async () => {
+	test('from a linked worktree, naming the branch of the main checkout finishes that branch', async () => {
+		mergedCurrentBranch('feature/b');
+		const wt = addFeatureWorktree('feature/a');
+
+		const io = createFakeIo(wt);
+		assert.strictEqual(await runCli(['post-pr', 'feature/b', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
+		assert.ok(!io.err.join('').includes('deprecated'), io.err.join(''));
+		const report = json(io.out);
+		assert.strictEqual(report.branch?.name, 'feature/b');
+		assert.deepStrictEqual(report.worktree, { path: mainCheckout(), removed: false, switched: true });
+		assert.strictEqual(headOf(fx.repo), 'main');
+		assert.ok(!branchExists(fx.repo, 'feature/b'));
+		assert.ok(branchExists(fx.repo, 'feature/a'), 'the current branch is left alone');
+		assert.strictEqual(headOf(wt), 'feature/a');
+	});
+
+	test('from a linked worktree, a protected branch of the main checkout is read as the old form', async () => {
 		git(['checkout', '-q', '-b', 'develop'], fx.repo);
 		const wt = addFeatureWorktree('feature/x');
 		squashMergeOnRemote('feature/x');
 
 		const io = createFakeIo(wt);
-		assert.strictEqual(await runCli(['post-pr', 'develop', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
-		assert.ok(io.err.join('').includes('develop is checked out in the main checkout'), io.err.join(''));
+		assert.strictEqual(await runCli(['post-pr', 'develop', '--protect', 'develop', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
+		assert.ok(io.err.join('').includes('develop is protected, so "gsp post-pr develop" is read as the deprecated'), io.err.join(''));
 		assert.strictEqual(json(io.out).branch?.name, 'feature/x');
 		assert.ok(branchExists(fx.repo, 'develop'));
 		assert.strictEqual(headOf(fx.repo), 'develop');
