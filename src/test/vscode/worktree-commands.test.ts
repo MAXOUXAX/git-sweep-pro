@@ -119,6 +119,16 @@ suite('worktree commands', () => {
 		assert.deepStrictEqual(fake.copied, [next]);
 	});
 
+	test('Remove Worktree: a worktree kept for its submodules also names the ignored files it holds', async () => {
+		const kept = removal(clean, { removed: false, reason: 'submodules', ignoredFiles: { count: 1, sample: ['notes.local'] }, hint: 'check the submodules…', next: null });
+		const { client } = createFakeClient([ok(list(main, clean)), ok(kept, 5)]);
+		const fake = createFakeUi({ pickOne: (items) => items[0].value });
+		await runRemoveWorktreeCommand(deps(client, fake.ui), '/repo');
+		assert.deepStrictEqual(fake.notices, [
+			{ kind: 'warning', message: '/work/wt-a was kept: it holds submodules, and 1 ignored file a build does not recreate: notes.local.', actions: [] },
+		]);
+	});
+
 	test('Prune Worktrees: nothing to prune, or prunes; a list error is shown', async () => {
 		const nothing = createFakeClient([ok(list(main, clean))]);
 		const nothingUi = createFakeUi();

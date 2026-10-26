@@ -102,7 +102,9 @@ export function describeKept(document: WorktreeRemoveDocument): string {
 		case 'dirty-worktree':
 			return document.changedFiles ? `it has uncommitted changes to ${plural(document.changedFiles.count, 'file')}: ${describeIgnoredFiles(document.changedFiles)}` : 'it has uncommitted changes';
 		case 'submodules':
-			return 'it holds submodules';
+			return document.ignoredFiles?.count
+				? `it holds submodules, and ${plural(document.ignoredFiles.count, 'ignored file')} a build does not recreate: ${describeIgnoredFiles(document.ignoredFiles)}`
+				: 'it holds submodules';
 		case 'ignored-files':
 			return document.ignoredFiles
 				? `it holds ${plural(document.ignoredFiles.count, 'ignored file')} a build does not recreate: ${describeIgnoredFiles(document.ignoredFiles)}`
