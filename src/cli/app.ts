@@ -589,24 +589,37 @@ async function runAgentsCheck(options: CliOptions, dir: string, frontend: Fronte
 	const named = options.positionals.length > 0;
 	const files = named ? options.positionals : AGENT_FILE_NAMES.filter((file) => fs.existsSync(path.join(root, file)));
 	const absolute = (file: string) => path.resolve(named ? dir : root, file);
-	const missing = files.find((file) => !fs.statSync(absolute(file), { throwIfNoEntry: false })?.isFile());
-	if (missing !== undefined) {
-		const message = `No such file: ${missing}`;
+	const fail = (message: string, code: JsonErrorCode) => {
 		if (options.json) {
-			printJsonError(io, options.rpc, message, 'usage');
+			printJsonError(io, options.rpc, message, code);
 		}
 		io.stderr(`error: ${message}\n`);
-		return EXIT.usage;
-	}
+		return code === 'usage' ? EXIT.usage : EXIT.failed;
+	};
 	// gsp agents only writes the instruction files at the repository's root.
 	const writable = (file: string) => isAgentFile(path.basename(file)) && absolute(file) === path.join(root, path.basename(file));
 	// A file read twice, as CLAUDE.md linked to AGENTS.md, is reported once.
 	const seen = new Set<string>();
-	const unique = files.filter((file) => {
-		const real = fs.realpathSync(absolute(file));
-		return !seen.has(real) && Boolean(seen.add(real));
-	});
-	const findings = unique.flatMap((file) => checkAgentAdvice(file, fs.readFileSync(absolute(file), 'utf8'), writable(file)));
+	const unique: string[] = [];
+	const findings: AdviceFinding[] = [];
+	for (const file of files) {
+		let text: string | undefined;
+		try {
+			if (!fs.statSync(absolute(file), { throwIfNoEntry: false })?.isFile()) {
+				return fail(`No such file: ${file}`, 'usage');
+			}
+			const real = fs.realpathSync(absolute(file));
+			text = seen.has(real) ? undefined : fs.readFileSync(real, 'utf8');
+			seen.add(real);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			return fail(`Cannot read ${file}: ${code === 'EACCES' || code === 'EPERM' ? 'permission denied' : toErrorMessage(error)}`, 'failed');
+		}
+		if (text !== undefined) {
+			unique.push(file);
+			findings.push(...checkAgentAdvice(file, text, writable(file)));
+		}
+	}
 	if (options.json) {
 		printJson(io, options.rpc, { schema: CLEAN_SCHEMA, command: 'agents --check', files: unique, findings } satisfies AgentsCheckDocument);
 	} else {

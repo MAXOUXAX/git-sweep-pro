@@ -374,6 +374,26 @@ suite('cli app (real git)', function () {
 		assert.ok(missing.err.join('').includes('No such file: nope.md'));
 	});
 
+	test('agents --check reports a file it cannot read, in text and JSON', async function () {
+		if (process.platform === 'win32' || process.getuid?.() === 0) {
+			this.skip();
+		}
+		const locked = path.join(fx.dir, 'locked.md');
+		fs.writeFileSync(locked, 'Run `git branch -D x`.\n');
+		fs.chmodSync(locked, 0o000);
+		try {
+			const text = createFakeIo(fx.dir);
+			assert.strictEqual(await runCli(['agents', '--check', 'locked.md'], text), EXIT.failed);
+			assert.ok(text.err.join('').includes('error: Cannot read locked.md: permission denied'));
+
+			const json = createFakeIo(fx.dir);
+			assert.strictEqual(await runCli(['agents', '--check', 'locked.md', '--json'], json), EXIT.failed);
+			assert.deepStrictEqual(JSON.parse(json.out.join('')).error, { message: 'Cannot read locked.md: permission denied', code: 'failed' });
+		} finally {
+			fs.chmodSync(locked, 0o600);
+		}
+	});
+
 	test('--rpc emits NDJSON events', async () => {
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['list', '--rpc', '--json'], io), EXIT.ok);
