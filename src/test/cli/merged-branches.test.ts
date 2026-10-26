@@ -1,10 +1,9 @@
 import * as assert from 'assert';
 import { runCli } from '../../cli/app';
 import { EXIT, parseArgs, settingsToCliArgs } from '../../cli/args';
+import { analyzeBranches } from '../../core/branch-analysis';
+import { describeVerdict } from '../../core/clean-plan';
 import { runGitCommand } from '../../core/git-command';
-import { getDefaultBranch } from '../../core/default-branch';
-import { describeMergedBranch, findMergedBranches } from '../../core/merged-branches';
-import { GONE_REFS_ARGS, parseLocalBranchRefs } from '../../core/sweep-logic';
 import { DEFAULT_SETTINGS } from '../fake-context';
 import { branchExists, commitFile, createFakeIo, createRepoFixture, git, type RepoFixture } from './git-fixture';
 
@@ -23,11 +22,11 @@ suite('merged branch detection (real git)', function () {
 	const detect = async () => {
 		const runGit = (args: readonly string[]) => runGitCommand(args, fx.repo, { appendLine: () => undefined });
 		git(['fetch', '-q'], fx.repo);
-		const base = await getDefaultBranch(runGit);
-		assert.ok(base, 'origin/HEAD is set by the fixture');
-		const branches = parseLocalBranchRefs((await runGit(GONE_REFS_ARGS)).stdout).map((ref) => ref.name);
-		const merged = await findMergedBranches(runGit, branches, base);
-		return Object.fromEntries(merged.map((branch) => [branch.name, describeMergedBranch(branch)]));
+		const { checks, branches } = await analyzeBranches({ git: runGit }, { github: false });
+		assert.strictEqual(checks.base?.source, 'remote-head', 'origin/HEAD is set by the fixture');
+		// Merged work only: a branch with no commits of its own is not a merge.
+		const merged = branches.filter((branch) => branch.verdict === 'dead' && branch.reason !== 'empty');
+		return Object.fromEntries(merged.map((branch) => [branch.name, describeVerdict({ ...branch, verdictReason: branch.reason })]));
 	};
 
 	/** Local-only branch with commits touching `file`, then back on main. */
