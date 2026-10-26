@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { IgnoredFiles } from './clean-plan';
 import type { RunGit } from './git-command';
 
@@ -5,7 +7,7 @@ import type { RunGit } from './git-command';
  * `git worktree remove` deletes the ignored files of a worktree, and
  * `gsp restore` cannot bring them back. Those that a build or an install
  * recreates are fine to lose; any other one (a `.env`, local notes, a
- * database) blocks the removal unless `--force` is given.
+ * database) blocks the removal unless `--discard-changes` is given.
  */
 
 /**
@@ -40,10 +42,17 @@ export const REGENERABLE_FOLDERS: readonly string[] = [
 	'.gradle',
 	'.dart_tool',
 	'DerivedData',
+	'.vscode-test',
+	'.expo',
+	'storybook-static',
+	'.angular',
+	'.nx',
+	'.yarn/cache',
+	'.terraform',
 ];
 
 /** Files a tool recreates, matched against the file name. */
-export const REGENERABLE_FILES: readonly string[] = ['*.tsbuildinfo', '.DS_Store'];
+export const REGENERABLE_FILES: readonly string[] = ['*.tsbuildinfo', '.DS_Store', '.eslintcache'];
 
 /** Names that look like secrets, matched against the file name, ignoring case: never regenerable, wherever they are. */
 export const SECRET_FILES: readonly string[] = ['.env', '.env.*', '*.pem', '*.key', '*credentials*', '*secret*', '.npmrc', '.netrc'];
@@ -55,8 +64,11 @@ export const SECRET_FILES: readonly string[] = ['.env', '.env.*', '*.pem', '*.ke
  */
 const SECRET_FILES_IN_FOLDERS: readonly string[] = ['.env', '.env.*', '*.pem', '*.key', '.npmrc', '.netrc'];
 
-/** Regenerable folders installed from a registry: packages ship `.env` or `.npmrc` files of their own, so they are not searched. */
-const DEPENDENCY_FOLDERS: ReadonlySet<string> = new Set(['node_modules', '.pnpm-store', 'vendor/bundle', '.venv', 'venv']);
+/**
+ * Regenerable folders downloaded from a registry: packages ship `.env` or
+ * `.pem` files of their own, so they are not searched.
+ */
+const DEPENDENCY_FOLDERS: ReadonlySet<string> = new Set(['node_modules', '.pnpm-store', 'vendor/bundle', '.venv', 'venv', '.yarn/cache', '.terraform', '.vscode-test']);
 
 /** How many ignored files a plan names; the rest are only counted. */
 export const IGNORED_SAMPLE_SIZE = 10;
@@ -74,14 +86,19 @@ const isSecretLike = (name: string) => SECRET_FILES.some((pattern) => matchesFil
 
 /**
  * True when `relativePath`, an entry of `git status --ignored=matching`, is
- * regenerable: a regenerable file, or a wholly ignored regenerable folder
- * (ending with `/`). A secret-like name never is.
+ * regenerable: a regenerable file, a wholly ignored regenerable folder
+ * (ending with `/`), or a symbolic link, which removing the worktree only
+ * unlinks (Git reports a linked `node_modules` without the `/`). A
+ * secret-like name never is.
  */
-export function isRegenerable(relativePath: string): boolean {
+export function isRegenerable(relativePath: string, symlink = false): boolean {
 	const segments = relativePath.split('/').filter(Boolean);
 	const name = segments.at(-1) ?? '';
 	if (isSecretLike(name)) {
 		return false;
+	}
+	if (symlink) {
+		return true;
 	}
 	if (!relativePath.endsWith('/')) {
 		return REGENERABLE_FILES.some((pattern) => matchesFileName(name, pattern));
@@ -140,7 +157,8 @@ export async function listIgnoredFiles(git: RunGit, worktreePath: string): Promi
 				).stdout
 					.split('\0')
 					.filter(Boolean);
-	return [...entries.filter((entry) => !isRegenerable(entry)), ...secrets].sort();
+	const isSymlink = (entry: string) => !entry.endsWith('/') && (fs.lstatSync(path.join(worktreePath, entry), { throwIfNoEntry: false })?.isSymbolicLink() ?? false);
+	return [...entries.filter((entry) => !isRegenerable(entry, isSymlink(entry))), ...secrets].sort();
 }
 
 /** What a plan shows of `paths`: how many, and the first few. */

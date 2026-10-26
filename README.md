@@ -128,11 +128,11 @@ A dead branch checked out in a clean, unlocked linked worktree is deleted with i
 
 Removing a worktree deletes its ignored files, and `gsp restore` cannot bring them back. A worktree holding ignored files is skipped with `ignored-files`, and the plan lists them, unless they are all regenerable: a build or an install recreates them. Only `--force` removes it anyway, once you have moved what you need out of it. These folders are regenerable, at any depth, when the whole folder is ignored:
 
-`node_modules`, `.pnpm-store`, `vendor/bundle`, `dist`, `build`, `out`, `.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.cache`, `.parcel-cache`, `.vite`, `coverage`, `target`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.venv`, `venv`, `.gradle`, `.dart_tool`, `DerivedData`
+`node_modules`, `.pnpm-store`, `vendor/bundle`, `dist`, `build`, `out`, `.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.cache`, `.parcel-cache`, `.vite`, `coverage`, `target`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.venv`, `venv`, `.gradle`, `.dart_tool`, `DerivedData`, `.vscode-test`, `.expo`, `storybook-static`, `.angular`, `.nx`, `.yarn/cache`, `.terraform`
 
-and so are `*.tsbuildinfo` and `.DS_Store` files. An ignored file inside a tracked folder with one of these names (`tools/build/credentials.json`) is not.
+and so are `*.tsbuildinfo`, `.DS_Store` and `.eslintcache` files, and any ignored symbolic link (removing the worktree only removes the link, not what it points to). An ignored file inside a tracked folder with one of these names (`tools/build/credentials.json`) is not.
 
-Secret-like files are never regenerable, wherever they are: `.env`, `.env.*`, `*.pem`, `*.key`, `*credentials*`, `*secret*`, `.npmrc` and `.netrc`. Inside an ignored build or cache folder, `gsp clean` also looks for `.env`, `.env.*`, `*.pem`, `*.key`, `.npmrc` and `.netrc` files (a compiler never writes one there). Dependency folders (`node_modules`, `.pnpm-store`, `vendor/bundle`, `.venv`, `venv`) are not searched: packages ship such files of their own.
+Secret-like files are never regenerable, wherever they are, even as symbolic links: `.env`, `.env.*`, `*.pem`, `*.key`, `*credentials*`, `*secret*`, `.npmrc` and `.netrc`. Inside an ignored build or cache folder, `gsp clean` also looks for `.env`, `.env.*`, `*.pem`, `*.key`, `.npmrc` and `.netrc` files (a compiler never writes one there). Dependency folders (`node_modules`, `.pnpm-store`, `vendor/bundle`, `.venv`, `venv`, `.yarn/cache`, `.terraform`, `.vscode-test`) are not searched: packages ship such files of their own.
 
 Every deletion is recorded: `gsp restore <branch>` recreates any of the last 100 deleted branches, tracking its upstream again if it still exists, until Git garbage-collects its commits (two weeks by default). Like after `git branch -D`, the rest of the branch's configuration (its description, `pushRemote`, `rebase` and other `branch.<name>.*` settings) is not restored.
 
