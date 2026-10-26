@@ -175,6 +175,16 @@ suite('cli args', () => {
 		assert.throws(() => parseArgs(['worktree', 'remove', 'feature/x', '--dry-run']), /--dry-run cannot be used with worktree remove\./);
 	});
 
+	test('--discard-changes goes with clean, post-pr and worktree remove; worktree remove rejects --force', () => {
+		assert.strictEqual(parseArgs(['clean', '--discard-changes']).discardChanges, true);
+		assert.strictEqual(parseArgs(['post-pr', '--discard-changes']).discardChanges, true);
+		assert.strictEqual(parseArgs(['worktree', 'remove', '/tmp/x', '--discard-changes']).discardChanges, true);
+		assert.strictEqual(parseArgs(['clean']).discardChanges, false);
+		assert.throws(() => parseArgs(['restore', '--discard-changes']), /--discard-changes can only be used with clean, post-pr or worktree remove\./);
+		assert.throws(() => parseArgs(['worktree', 'list', '--discard-changes']), UsageError);
+		assert.throws(() => parseArgs(['worktree', 'remove', '/tmp/x', '--force']), /use --discard-changes\./);
+	});
+
 	test('--force selects a force delete', () => {
 		assert.strictEqual(parseArgs(['-f']).mode, 'forceDelete');
 	});
