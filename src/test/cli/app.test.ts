@@ -327,6 +327,18 @@ suite('cli app (real git)', function () {
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['list', '--rpc', '--json'], io), EXIT.ok);
 		assert.ok(io.out.some((line) => line.startsWith('{"type":"log","line":"$ git')));
+		// Every stdout line is one event: the document comes as the last one, unindented.
+		const events = io.out.map((line) => JSON.parse(line) as { type: string; document?: { schema: number; mode: string } });
+		assert.deepStrictEqual(events.filter((event) => event.type === 'result').map((event) => [event.document?.schema, event.document?.mode]), [[2, 'plan']]);
+	});
+
+	test('--rpc --json sends a usage error as a result event too', async () => {
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', '--rpc', '--json', '--nope'], io), EXIT.usage);
+		assert.deepStrictEqual(JSON.parse(io.out.join('')), {
+			type: 'result',
+			document: { schema: 2, error: { message: 'Unknown option: --nope', code: 'usage' } },
+		});
 	});
 
 	suite('worktrees', () => {
@@ -636,6 +648,58 @@ suite('cli app (real git)', function () {
 			assert.ok(listed.out.join('').startsWith('origin/feature/r (remote)  '), listed.out.join(''));
 		});
 
+		test('clean --expect deletes a branch only at the tip it was read at, and skips one that moved or is gone', async () => {
+			for (const name of ['feature/a', 'feature/b', 'feature/c']) {
+				git(['branch', name], fx.repo);
+			}
+			const tip = git(['rev-parse', 'main'], fx.repo).trim();
+			const moved = 'f'.repeat(40);
+			const io = createFakeIo(fx.repo);
+			const args = ['clean', '--json', '--yes', '--no-github', '--expect', `feature/a=${tip}`, '--expect', `feature/b=${moved}`, '--expect', `feature/gone=${tip}`];
+			assert.strictEqual(await runCli(args, io), EXIT.notApplied);
+			const document = JSON.parse(io.out.join(''));
+			const outcome = (name: string) => {
+				const branch = document.branches.find((candidate: { name: string }) => candidate.name === name);
+				return branch && [branch.action, branch.reason, branch.result ?? null];
+			};
+			assert.deepStrictEqual(outcome('feature/a'), ['delete', 'empty', 'deleted']);
+			assert.deepStrictEqual(outcome('feature/b'), ['skip', 'plan-changed', null]);
+			assert.deepStrictEqual(outcome('feature/gone'), ['skip', 'plan-changed', null]);
+			assert.strictEqual(outcome('feature/c'), undefined, 'only the expected branches are considered');
+			assert.ok(!branchExists(fx.repo, 'feature/a'));
+			assert.ok(branchExists(fx.repo, 'feature/b') && branchExists(fx.repo, 'feature/c'));
+			assert.strictEqual(document.next, 'gsp clean feature/a feature/b feature/gone --no-github --dry-run');
+
+			const usage = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', '--expect', 'feature/b=abc123'], usage), EXIT.usage);
+			assert.match(usage.err.join(''), /Invalid --expect "feature\/b=abc123"/);
+			assert.strictEqual(await runCli(['post-pr', '--expect', `feature/b=${tip}`], createFakeIo(fx.repo)), EXIT.usage);
+		});
+
+		test('clean --remote --expect holds a remote branch to the tip it was read at', async () => {
+			git(['push', '-q', 'origin', 'main:refs/heads/feature/r'], fx.repo);
+			const tip = git(['rev-parse', 'main'], fx.repo).trim();
+
+			const moved = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', '--json', '--remote', '--yes', '--no-github', '--expect', `origin/feature/r=${'e'.repeat(40)}`], moved), EXIT.notApplied);
+			const held = JSON.parse(moved.out.join('')).remoteBranches.find((branch: { name: string }) => branch.name === 'feature/r');
+			assert.deepStrictEqual([held.action, held.reason], ['skip', 'plan-changed']);
+
+			const applied = createFakeIo(fx.repo);
+			assert.strictEqual(
+				await runCli(['clean', '--json', '--remote', '--yes', '--no-github', '--expect', `origin/feature/r=${tip}`, '--expect', `origin/feature/gone=${tip}`], applied),
+				EXIT.notApplied
+			);
+			const document = JSON.parse(applied.out.join(''));
+			const outcome = (name: string) => {
+				const branch = document.remoteBranches.find((candidate: { name: string }) => candidate.name === name);
+				return [branch.action, branch.reason, branch.result ?? null];
+			};
+			assert.deepStrictEqual(outcome('feature/r'), ['delete', 'empty', 'deleted']);
+			assert.deepStrictEqual(outcome('feature/gone'), ['skip', 'plan-changed', null]);
+			assert.deepStrictEqual(document.branches, []);
+		});
+
 		test('worktree list --json gives each worktree its state, and what gsp clean would do with its branch', async () => {
 			makeGoneBranch(fx.repo, 'feature/clean');
 			const clean = addWorktree('feature/clean');
@@ -791,6 +855,20 @@ suite('cli app (real git)', function () {
 			const after = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['worktree', 'list', '--json'], after), EXIT.ok);
 			assert.strictEqual(JSON.parse(after.out.join('')).worktrees.at(-1).prunable, true, 'the registration is still there');
+		});
+
+		test('worktree prune and remove write only protocol events to stdout with --rpc', async () => {
+			makeGoneBranch(fx.repo, 'feature/gone');
+			fs.rmSync(addWorktree('feature/gone'), { recursive: true, force: true });
+			makeGoneBranch(fx.repo, 'feature/wt');
+			addWorktree('feature/wt');
+
+			for (const args of [['worktree', 'prune', '--rpc'], ['worktree', 'remove', 'feature/wt', '--rpc']]) {
+				const io = createFakeIo(fx.repo);
+				assert.strictEqual(await runCli(args, io), EXIT.ok);
+				const events = io.out.join('').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { type: string; line?: string });
+				assert.ok(events.some((event) => event.type === 'log' && /^(Pruned|Removed)/.test(event.line ?? '')), JSON.stringify(events));
+			}
 		});
 
 		test('worktree remove removes a linked worktree, refuses the main one, and reports an unknown one', async () => {

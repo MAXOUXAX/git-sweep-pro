@@ -184,6 +184,14 @@ gsp restore --json                # list recoverable deletions
 gsp restore feature/x --non-interactive
 ```
 
+To apply exactly what you read in a plan, pass each branch with the tip the plan gave, as `--expect <branch>=<tip>` (`<remote>/<branch>=<tip>` for a branch on the remote):
+
+```sh
+gsp clean --json --yes --expect feature/x=4f9c2e1… --expect feature/y=a07d3b8…
+```
+
+Only those branches are considered. Each is deleted only if its tip is still that commit and it is still proven (or `--force` is given); one that moved or no longer exists is skipped with `plan-changed`, and the others go ahead.
+
 `--non-interactive` never prompts, even in a pseudo-terminal. It does not grant permission to delete: only `--yes` does.
 
 ### JSON
@@ -232,7 +240,7 @@ gsp restore feature/x --non-interactive
 | `mode` | `plan` (nothing changed) or `apply` |
 | `checks.remote.source` | `fetch` (apply), `ls-remote` (plan), or `local-refs` with a `reason`: `no-fetch`, `no-remote` or `unreachable` |
 | `branches[].action` | `delete`, `keep` (its work exists nowhere else) or `skip` (a rule or a missing flag stops it) |
-| `branches[].reason` | For `skip`: `protected`, `delete-merged-false`, `rebase-in-progress`, `bisect-in-progress`, `current-branch`, `main-worktree`, `locked-worktree`, `dirty-worktree`, `submodules`, `ignored-files`, `needs-force`, `tracked-by-kept-branch`, `not-selected`, and while applying `plan-changed`, `fetch-failed`, `worktree-changed`. Otherwise the same as `verdictReason` |
+| `branches[].reason` | For `skip`: `protected`, `delete-merged-false`, `rebase-in-progress`, `bisect-in-progress`, `current-branch`, `main-worktree`, `locked-worktree`, `dirty-worktree`, `submodules`, `ignored-files`, `needs-force`, `tracked-by-kept-branch`, `not-selected`, and while applying `plan-changed`, `fetch-failed`, `worktree-changed`. With `--expect`, `plan-changed` also marks a branch whose tip is not the expected one, and one that no longer exists (`verdictReason` `analysis-failed`, `tip` the expected commit). Otherwise the same as `verdictReason` |
 | `branches[].verdictReason` | Dead: `empty`, `merged`, `rebase-merged`, `squash-merged`, `pr-merged`, `commits-merged`, `upstream-gone`. Alive: `default-branch`, `open-pr`, `open-pr-base` (remote branches only: an open pull request targets it; `evidence.match` is `base`), `unmerged-commits`, `no-base`, `analysis-failed` (`evidence` is `{ "method": "error", "message" }`) |
 | `branches[].worktree` | `null`, or `path`, `isMain`, `dirty`, `locked`, `prunable`, `inProgress` (`rebase`, `bisect` or `null`) and `ignoredFiles`: `{ count, sample }` for the ignored files removing it would delete (at most 10 in `sample`; a trailing `/` is a whole folder), and `submodules`: whether it holds submodules. Both are `null` when they were not looked for |
 | `branches[].protected` | Why it is kept whatever its verdict, or `null`: `{ "by": "default-branch" }`, `{ "by": "pattern", "pattern" }`, `{ "by": "branch-config", "key" }` (`deleteMerged` is false) or `{ "by": "default-name" }` (`main`, `master`, `trunk` or `develop`, not named exactly) |
@@ -268,24 +276,28 @@ Other JSON outputs:
 
 ## In VS Code
 
-Every command runs the same CLI, rendered with VS Code pickers and dialogs. Open the Command Palette and type **Git Sweep Pro**:
+Every command runs the same CLI: the extension reads its `--json` plan, shows it with VS Code pickers and dialogs, then applies exactly what you picked. Open the Command Palette and type **Git Sweep Pro**:
 
 | Command | Does |
 | --- | --- |
-| Sweep Stale Branches | Pick a mode, then `gsp clean`: pick branches, confirm |
-| Preview Stale Branches (Dry Run) | `gsp clean --dry-run` |
-| Post Pull Request Cleanup | `gsp post-pr` |
+| Sweep Stale Branches | Shows the plan of `gsp clean`: proven deletions selected, skipped branches below with why (and a button that copies the command fixing it). Confirm, then the picked branches are deleted, with an Undo in the notification. The title-bar button also offers the branches that need a forced delete, never selected |
+| Preview Stale Branches (Dry Run) | The same plan, read-only |
+| Finish Merged Pull Request | Previews `gsp post-pr`, then finishes it. When it removes the worktree this window has open, offers to open the main checkout |
+| Show Worktrees | Every worktree with its state, and what Sweep Stale Branches would do with it; open, remove or prune one |
+| Remove Worktree / Prune Worktrees | `gsp worktree remove` / `gsp worktree prune`. A worktree with uncommitted changes or ignored files a build doesn't recreate is only removed after two confirmations |
 | Sync Branch With Upstream / Resume Sync With Upstream | `gsp sync` / `gsp resume` |
 | Restore Deleted Branches | `gsp restore` |
 | Add Instructions for Coding Agents | `gsp agents` |
 
 | Setting | Default | |
 | --- | --- | --- |
-| `gitSweepPro.defaultMode` | `safeDelete` | Mode offered first: `dryRun`, `safeDelete` or `forceDelete` (`--force`) |
+| `gitSweepPro.defaultMode` | `safeDelete` | How Sweep Stale Branches opens: `safeDelete`, `forceDelete` (branches that need a forced delete on offer) or `dryRun` (the preview) |
 | `gitSweepPro.protectedBranches` | `[]` | Globs never deleted (`*` and `?`) |
-| `gitSweepPro.autoFetchPrune` | `true` | Run `git fetch -p` first |
-| `gitSweepPro.confirmBeforeDelete` | `true` | Ask before deleting |
-| `gitSweepPro.includeMergedBranches` | `false` | Deprecated: merged branches are always offered |
+| `gitSweepPro.cleanRemoteBranches` | `false` | Also offer the merged branches on the remote (`--remote`), confirmed separately |
+| `gitSweepPro.github` | `true` | Use the GitHub CLI for pull requests; off is `--no-github` |
+| `gitSweepPro.autoFetchPrune` | `true` | Read the remote before planning and fetch before deleting; off is `--no-fetch` |
+| `gitSweepPro.confirmBeforeDelete` | `true` | Ask before deleting proven branches. Forced and remote deletions are always confirmed |
+| `gitSweepPro.includeMergedBranches` | `false` | Deprecated, does nothing: merged branches are always offered |
 | `gitSweepPro.cli.addToTerminalPath` | `true` | Put `gsp` on the integrated terminals' `PATH` |
 
 Every git command and its output goes to the **Git Sweep** output channel.

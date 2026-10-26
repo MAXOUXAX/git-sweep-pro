@@ -9,7 +9,8 @@ import type { WorkflowUi } from './workflow';
  * to stdout; the host answers each `request` with exactly one
  * {@link HostResponse} line on the CLI's stdin. Requests are strictly
  * sequential: the CLI waits for the answer before sending anything else that
- * needs one, so ids only guard against protocol bugs.
+ * needs one, so ids only guard against protocol bugs. With `--json`, the
+ * document arrives as a `result` event.
  */
 
 /** The {@link WorkflowUi} calls the host answers. */
@@ -31,7 +32,9 @@ export type CliEvent =
 	| { readonly type: 'progressStart'; readonly id: number; readonly title: string }
 	| { readonly type: 'progressEnd'; readonly id: number }
 	| ({ readonly type: 'notify' } & UiCall<NotifyMethod>)
-	| ({ readonly type: 'request'; readonly id: number } & UiCall<PromptMethod>);
+	| ({ readonly type: 'request'; readonly id: number } & UiCall<PromptMethod>)
+	/** The `--json` document of the run, sent once instead of the indented JSON a terminal gets. */
+	| { readonly type: 'result'; readonly document: unknown };
 
 export type HostResponse<K extends PromptMethod = PromptMethod> = {
 	readonly type: 'response';

@@ -1,13 +1,19 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { EXIT, modeToCliArgs, settingsToCliArgs } from './cli/args';
+import { EXIT, settingsToCliArgs } from './cli/args';
 import { runGitCommand } from './core/git-command';
+import type { HostUi } from './core/rpc-protocol';
 import type { SweepMode, SweepSettings } from './core/sweep-logic';
+import { runCleanCommand } from './vscode/clean-command';
 import { runCliProcess } from './vscode/cli-client';
+import type { CommandDeps } from './vscode/command-ui';
+import { createGspClient, type RunOptions } from './vscode/gsp-client';
 import { createVscodeHostUi } from './vscode/host-ui';
-import { orderModeActions, resolveSweepModeAction } from './vscode/sweep-mode';
+import { runPostPrCommand } from './vscode/post-pr-command';
 import { applyTerminalPath } from './vscode/terminal-path';
+import { createVscodeCommandUi } from './vscode/vscode-command-ui';
 import { resolveTargetRepository, resolveWorkspaceRoot, type RepositoryResolution } from './vscode/workspace';
+import { runPruneWorktreesCommand, runRemoveWorktreeCommand, runWorktreeListCommand } from './vscode/worktree-commands';
 
 const OUTPUT_CHANNEL_NAME = 'Git Sweep';
 const LAST_REPO_STATE_KEY = 'gitSweepPro.lastSelectedRepo';
@@ -27,9 +33,19 @@ function getSweepSettings(): SweepSettings {
 	};
 }
 
+/** The CLI flags every run gets from the settings. */
+function settingsArgs(): string[] {
+	return [...settingsToCliArgs(getSweepSettings()), ...(config().get<boolean>('github', true) ? [] : ['--no-github'])];
+}
+
 export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
 	const hostUi = createVscodeHostUi(outputChannel);
+	// A --json run has its own UI (picker, progress): the CLI's steps only show in the status bar.
+	const jsonHostUi: HostUi = {
+		...hostUi,
+		withProgress: (options, task) => vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: `Git Sweep Pro: ${options.title}` }, task),
+	};
 	const silentOutput = { appendLine: () => undefined };
 
 	// Resolves which repository the command should target. In a multi-root
@@ -81,7 +97,7 @@ export function activate(context: vscode.ExtensionContext) {
 			hostUi.showErrorMessage('No workspace folder is open.');
 			return;
 		}
-		const cliArgs = [...args, ...settingsToCliArgs(getSweepSettings())];
+		const cliArgs = [...args, ...settingsArgs()];
 		outputChannel.show(true);
 		outputChannel.appendLine(`> gsp ${cliArgs.join(' ')}`);
 		const { exitCode, errorShown } = await runCliProcess({
@@ -105,6 +121,26 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	};
 
+	// Leaves the information messages to the command, which says what happened in its own words.
+	const quietHostUi: HostUi = { ...hostUi, showInformationMessage: () => undefined };
+	const runQuiet = (root: string, args: readonly string[], options: RunOptions = {}) => {
+		outputChannel.appendLine(`> gsp ${args.join(' ')}`);
+		const ui = args.includes('--json') ? jsonHostUi : options.quiet ? quietHostUi : hostUi;
+		return runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: root, args, ui, ...(options.signal ? { signal: options.signal } : {}) });
+	};
+	const deps: CommandDeps = {
+		client: createGspClient(runQuiet, settingsArgs),
+		ui: createVscodeCommandUi(outputChannel),
+		windowFolders: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+	};
+	const cleanOptions = (root: string, readOnly: boolean) => ({
+		root,
+		readOnly: readOnly || config().get<SweepMode>('defaultMode', 'safeDelete') === 'dryRun',
+		force: config().get<SweepMode>('defaultMode', 'safeDelete') === 'forceDelete',
+		remote: config().get<boolean>('cleanRemoteBranches', false),
+		confirm: config().get<boolean>('confirmBeforeDelete', true),
+	});
+
 	/** Registers a command that first resolves the target repository, then runs `handler` on it. */
 	const registerRepoCommand = (
 		command: string,
@@ -117,6 +153,17 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 		});
 
+	/** Runs `handler` on the repository, or says no folder is open. */
+	const withRoot =
+		(handler: (root: string) => Promise<void>) =>
+		async (root: string | undefined): Promise<void> => {
+			if (!root) {
+				hostUi.showErrorMessage('No workspace folder is open.');
+				return;
+			}
+			await handler(root);
+		};
+
 	applyTerminalPath(context);
 
 	context.subscriptions.push(
@@ -126,19 +173,12 @@ export function activate(context: vscode.ExtensionContext) {
 				applyTerminalPath(context);
 			}
 		}),
-		registerRepoCommand('git-sweep-pro.run', async (root) => {
-			const action = await vscode.window.showInformationMessage(
-				'Git Sweep Pro: Choose execution mode',
-				{ modal: true },
-				...orderModeActions(config().get<SweepMode>('defaultMode', 'safeDelete'))
-			);
-			const mode = resolveSweepModeAction(action);
-			if (mode) {
-				await runCli(root, ['sweep', ...modeToCliArgs(mode)]);
-			}
-		}),
-		registerRepoCommand('git-sweep-pro.dryRun', (root) => runCli(root, ['sweep', '--dry-run'])),
-		registerRepoCommand('git-sweep-pro.postPullRequest', (root) => runCli(root, ['post-pr'])),
+		registerRepoCommand('git-sweep-pro.run', withRoot((root) => runCleanCommand(deps, cleanOptions(root, false)))),
+		registerRepoCommand('git-sweep-pro.dryRun', withRoot((root) => runCleanCommand(deps, cleanOptions(root, true)))),
+		registerRepoCommand('git-sweep-pro.postPullRequest', withRoot((root) => runPostPrCommand(deps, root))),
+		registerRepoCommand('git-sweep-pro.worktrees', withRoot((root) => runWorktreeListCommand(deps, root))),
+		registerRepoCommand('git-sweep-pro.pruneWorktrees', withRoot((root) => runPruneWorktreesCommand(deps, root))),
+		registerRepoCommand('git-sweep-pro.removeWorktree', withRoot((root) => runRemoveWorktreeCommand(deps, root))),
 		registerRepoCommand('git-sweep-pro.syncWithUpstream', (root) => runCli(root, ['sync'])),
 		registerRepoCommand('git-sweep-pro.syncWithUpstreamResume', (root) => runCli(root, ['resume'])),
 		registerRepoCommand('git-sweep-pro.restore', (root) => runCli(root, ['restore'])),

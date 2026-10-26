@@ -7,8 +7,8 @@ import * as vscode from 'vscode';
 /*
  * A genuine multi-root end-to-end test. VS Code opens a real .code-workspace
  * referencing two real git repositories. The test drives the real extension
- * command, stubs only the VS Code prompts (repository picker, mode picker,
- * confirmation, branch quick-pick), and verifies that the extension operates on
+ * command, stubs only the VS Code prompts (repository picker, confirmation,
+ * branch quick-pick), and verifies that the extension operates on
  * exactly the repository the user selected — leaving the other one untouched.
  */
 
@@ -66,7 +66,9 @@ function makeFakeQuickPick() {
 		onDidTriggerItemButton: () => noopDisposable,
 		onDidChangeValue: () => noopDisposable,
 		show() {
-			setTimeout(() => acceptListeners.forEach((cb) => cb()), 0);
+			// The picker is busy until the plan arrives: accept once it is filled.
+			const accept = () => (quickPick.busy ? setTimeout(accept, 20) : acceptListeners.forEach((cb) => cb()));
+			setTimeout(accept, 0);
 		},
 		hide() {
 			hideListeners.forEach((cb) => cb());
@@ -153,16 +155,7 @@ suite('E2E (multi-root): sweep targets the selected repository', () => {
 		infoMessages.length = 0;
 		errorMessages.length = 0;
 
-		// Auto-confirm the modal mode picker with the safe-delete option; record
-		// any other informational message.
-		(vscode.window as { showInformationMessage: unknown }).showInformationMessage = (
-			message: string,
-			...rest: unknown[]
-		) => {
-			const items = rest.filter((r): r is string => typeof r === 'string');
-			if (items.includes('Delete Proven Branches')) {
-				return Promise.resolve('Delete Proven Branches');
-			}
+		(vscode.window as { showInformationMessage: unknown }).showInformationMessage = (message: string) => {
 			infoMessages.push(message);
 			return Promise.resolve(undefined);
 		};
@@ -211,7 +204,7 @@ suite('E2E (multi-root): sweep targets the selected repository', () => {
 			'the unselected repository (repoA) must be left untouched'
 		);
 		assert.ok(
-			infoMessages.some((m) => m.includes('1 deleted')),
+			infoMessages.some((m) => m === 'Git Sweep Pro: Deleted feature/b-stale.'),
 			`expected a deletion confirmation; got ${JSON.stringify(infoMessages)}`
 		);
 		assert.deepStrictEqual(errorMessages, [], 'no error messages expected');
