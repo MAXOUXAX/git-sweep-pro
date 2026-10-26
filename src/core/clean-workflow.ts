@@ -1,4 +1,4 @@
-import { analyzeBranches, type BranchAnalysis, type BranchAnalysisResult } from './branch-analysis';
+import { analyzeBranches, type AnalysisChecks, type BranchAnalysis, type BranchAnalysisResult } from './branch-analysis';
 import {
 	CLEAN_SCHEMA,
 	decideActions,
@@ -160,16 +160,14 @@ async function markGoneUpstreams(
 }
 
 /**
- * Applying only: `git fetch --prune`, following a renamed remote default
- * branch (Git 2.48+; older versions ignore the setting). A failure is not
- * fatal: the local remote-tracking refs are used instead.
+ * Applying only: `git fetch --prune`. `remote.<name>.followRemoteHEAD` is
+ * the user's: when it moves the remote HEAD, the default branch changes, and
+ * the plan no longer holds (see {@link holdToBase}). A failure is not fatal:
+ * the local remote-tracking refs are used instead.
  */
 async function fetchAndPrune(context: CleanContext, remotes: readonly string[]): Promise<RemoteCheck> {
-	const follow = remotes.flatMap((remote) => ['-c', `remote.${remote}.followRemoteHEAD=always`]);
 	try {
-		await context.ui.withProgress({ title: 'Fetching and pruning remote references' }, () =>
-			context.git([...follow, 'fetch', '--prune', '--multiple', ...remotes])
-		);
+		await context.ui.withProgress({ title: 'Fetching and pruning remote references' }, () => context.git(['fetch', '--prune', '--multiple', ...remotes]));
 		return { source: 'fetch', remotes };
 	} catch (error) {
 		return { source: 'local-refs', reason: 'unreachable', detail: gitFailureReason(error) };
@@ -328,6 +326,38 @@ export function holdToPlan(planned: readonly CleanBranch[], current: readonly Cl
 	});
 }
 
+type Base = AnalysisChecks['base'];
+
+const baseLabel = (base: Base) => (base ? base.ref.replace(/^refs\/(heads|remotes)\//, '') : 'none');
+
+/**
+ * Checks the default branch found after the fetch against the one the plan
+ * was made on. Every proof compares with it: when it changed (the fetch moved
+ * the remote HEAD, for instance), no deletion is proven the way the plan said,
+ * so every deletion is skipped as `plan-changed`. Whatever happens, the plan's
+ * default branch is never deleted. Returns the message explaining a change,
+ * if any.
+ */
+export function holdToBase(branches: readonly CleanBranch[], planned: Base, current: Base): { branches: CleanBranch[]; message?: string } {
+	const changed = planned?.name !== current?.name || planned?.ref !== current?.ref;
+	const held = branches.map((branch) => {
+		if (branch.action !== 'delete') {
+			return branch;
+		}
+		if (planned && branch.name === planned.name) {
+			return skipped(branch, 'protected', null);
+		}
+		return changed ? skipped(branch, 'plan-changed', 'gsp clean --dry-run') : branch;
+	});
+	if (!changed) {
+		return { branches: held };
+	}
+	return {
+		branches: held,
+		message: `The default branch changed from ${baseLabel(planned)} to ${baseLabel(current)} during the fetch, so nothing was deleted. Review the new plan with gsp clean --dry-run.`,
+	};
+}
+
 function buildReport(
 	mode: CleanMode,
 	analysis: BranchAnalysisResult,
@@ -401,7 +431,8 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 		({ analysis, remote } = await ui.withProgress({ title: 'Checking remote branches' }, () => markGoneUpstreams(git, analysis, upstreams, remotes)));
 	}
 	warnIfUnreachable(remote);
-	const decideOptions: DecideOptions = { force: options.force, named, defaultBranch: analysis.checks.base?.name };
+	const plannedBase = analysis.checks.base;
+	const decideOptions: DecideOptions = { force: options.force, named, defaultBranch: plannedBase?.name };
 	let planned = await withIgnoredFiles(git, analysis.branches, named);
 	let branches = decideActions(planned, decideOptions);
 	let worktreesPruned: readonly string[] = apply ? [] : prunable;
@@ -450,6 +481,11 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	analysis = await analyse(remote.source === 'fetch');
 	planned = await withIgnoredFiles(git, analysis.branches, named);
 	branches = holdToPlan(branches, decideActions(planned, decideOptions), remote, !options.yes);
+	const held = holdToBase(branches, plannedBase, analysis.checks.base);
+	branches = held.branches;
+	if (held.message) {
+		output.appendLine(held.message);
+	}
 
 	const recorder = createDeletionRecorder(context.deletionLog, 'sweep', output.appendLine);
 	const applied: CleanBranch[] = [];

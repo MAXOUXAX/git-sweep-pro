@@ -133,26 +133,42 @@ suite('merged branch detection (real git)', function () {
 		assert.deepStrictEqual(await detect(), {});
 	});
 
-	test('follows a remote default branch that was renamed (Git 2.48+)', async function () {
+	/** The remote switches its default branch to trunk, which holds main and feature/on-trunk; origin/HEAD still says main. */
+	const moveRemoteHeadToTrunk = () => {
+		git(['push', '-q', 'origin', 'main:trunk'], fx.repo);
+		git(['symbolic-ref', 'HEAD', 'refs/heads/trunk'], fx.remote);
+		makeLocalBranch('feature/on-trunk', 't.txt', ['t\n']);
+		git(['push', '-q', 'origin', 'feature/on-trunk:trunk'], fx.repo);
+	};
+
+	test('the fetch leaves origin/HEAD alone unless remote.<name>.followRemoteHEAD says otherwise', async () => {
+		moveRemoteHeadToTrunk();
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', '--yes', '--json'], io), EXIT.ok);
+		const report = JSON.parse(io.out.join(''));
+		assert.strictEqual(report.checks.base.ref, 'refs/remotes/origin/main');
+		assert.ok(report.branches.every((branch: { result?: string }) => branch.result === undefined));
+		assert.strictEqual(git(['symbolic-ref', 'refs/remotes/origin/HEAD'], fx.repo).trim(), 'refs/remotes/origin/main');
+	});
+
+	test('when the fetch moves the default branch, --yes deletes nothing, not even the old default branch (Git 2.48+)', async function () {
 		const [major, minor] = (/(\d+)\.(\d+)/.exec(git(['version'], fx.repo)) ?? []).slice(1).map(Number);
 		if (major < 2 || (major === 2 && minor < 48)) {
 			this.skip();
 		}
-		// The remote switches its default branch to trunk; origin/HEAD still says main.
-		git(['push', '-q', 'origin', 'main:trunk'], fx.repo);
-		git(['symbolic-ref', 'HEAD', 'refs/heads/trunk'], fx.remote);
-		makeLocalBranch('feature/on-trunk', 't.txt', ['t\n']);
-		git(['checkout', '-q', '-b', 'later', 'feature/on-trunk'], fx.repo);
-		commitFile(fx.repo, 'later.txt', 'later\n', 'later');
-		git(['push', '-q', 'origin', 'later:trunk'], fx.repo);
-		git(['checkout', '-q', 'main'], fx.repo);
-		git(['branch', '-q', '-D', 'later'], fx.repo);
+		moveRemoteHeadToTrunk();
+		// The user follows the remote HEAD; main is not checked out, and it is all in origin/trunk.
+		git(['config', 'remote.origin.followRemoteHEAD', 'always'], fx.repo);
+		git(['checkout', '-q', '--detach'], fx.repo);
 
-		// The plan, made before fetching, cannot see the new default branch; `--yes` applies what the fetch proves.
 		const io = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['clean', 'feature/on-trunk', '--yes', '--json'], io), EXIT.ok);
-		const [branch] = JSON.parse(io.out.join('')).branches;
-		assert.deepStrictEqual([branch.result, branch.reason, branch.evidence.base], ['deleted', 'empty', 'refs/remotes/origin/trunk']);
+		assert.strictEqual(await runCli(['clean', '--yes', '--json'], io), EXIT.notApplied);
+		const report = JSON.parse(io.out.join(''));
+		assert.strictEqual(report.checks.base.ref, 'refs/remotes/origin/trunk');
+		const actions = Object.fromEntries(report.branches.map((branch: { name: string; action: string; reason: string }) => [branch.name, [branch.action, branch.reason]]));
+		assert.deepStrictEqual(actions, { 'feature/on-trunk': ['skip', 'plan-changed'], main: ['skip', 'protected'] });
+		assert.ok(branchExists(fx.repo, 'main') && branchExists(fx.repo, 'feature/on-trunk'));
+		assert.ok(io.err.join('').includes('The default branch changed from origin/main to origin/trunk during the fetch, so nothing was deleted.'), io.err.join(''));
 	});
 
 	test('with --yes, a squash merge only the fetch reveals is deleted in the same run', async () => {

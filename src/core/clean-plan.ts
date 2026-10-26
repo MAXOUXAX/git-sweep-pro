@@ -44,7 +44,7 @@ export type SkipReason =
 	| 'tracked-by-kept-branch'
 	/** Left out of the interactive picker. */
 	| 'not-selected'
-	/** Applying: the analysis after the fetch no longer matches the plan that was shown or picked from. */
+	/** Applying: the analysis after the fetch no longer matches the plan that was shown or picked from, or the default branch changed. */
 	| 'plan-changed'
 	/** Applying: the fetch failed, and the only proof relies on remote-tracking refs that may be out of date. */
 	| 'fetch-failed'
@@ -435,7 +435,7 @@ function describeSkip(branch: CleanBranch): string {
 		case 'not-selected':
 			return 'not selected';
 		case 'plan-changed':
-			return 'changed since the plan was made: run gsp clean again';
+			return 'changed since the plan was made';
 		case 'fetch-failed':
 			return 'the fetch failed, and only the remote-tracking refs prove it';
 		case 'worktree-changed':

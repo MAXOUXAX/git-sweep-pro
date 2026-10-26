@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { decideActions, type CleanBranch, type PlannedBranch, type RemoteCheck } from '../../core/clean-plan';
-import { holdToPlan, runCleanWorkflow, type CleanOptions } from '../../core/clean-workflow';
+import { holdToBase, holdToPlan, runCleanWorkflow, type CleanOptions } from '../../core/clean-workflow';
 import { gitFailureReason } from '../../core/errors';
 import { isRegenerable } from '../../core/ignored-files';
 import { branchExists, commitFile, createRepoFixture, git, makeGoneBranch, type RepoFixture } from '../cli/git-fixture';
@@ -74,20 +74,20 @@ suite('clean workflow (real git)', function () {
 		const { outcome } = await runCleanWorkflow(fake.context, { ...APPLY, yes: false, canPrompt: true });
 		assert.strictEqual(outcome, 'cancelled');
 		assert.strictEqual(fake.pickManyRequests.length, 1);
-		assert.ok(!fake.commands.some((command) => command.includes(' fetch ') || command.startsWith('worktree prune')), fake.commands.join('\n'));
+		assert.ok(!fake.commands.some((command) => /^(.* )?fetch /.test(command) || command.startsWith('worktree prune')), fake.commands.join('\n'));
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 
 		// Approved: the fetch only comes after the picker.
 		let fetchedBeforePicking = false;
 		const approved = contextFor({
 			pickMany: (items) => {
-				fetchedBeforePicking = approved.commands.some((command) => command.includes(' fetch '));
+				fetchedBeforePicking = approved.commands.some((command) => /^(.* )?fetch /.test(command));
 				return items.map((item) => item.label);
 			},
 		});
 		assert.strictEqual((await runCleanWorkflow(approved.context, { ...APPLY, yes: false, canPrompt: true })).outcome, 'done');
 		assert.strictEqual(fetchedBeforePicking, false);
-		assert.ok(approved.commands.some((command) => command.includes(' fetch --prune')));
+		assert.ok(approved.commands.some((command) => command.startsWith('fetch --prune')));
 		assert.ok(!branchExists(fx.repo, 'feature/a'));
 	});
 
@@ -101,7 +101,7 @@ suite('clean workflow (real git)', function () {
 		git(['push', '-q', 'origin', '--delete', 'feature/x'], fx.repo);
 
 		const { context, appendedLines } = contextFor({
-			git: { '-c remote.origin.followRemoteHEAD=always fetch --prune --multiple origin': new Error('fatal: unable to access the remote') },
+			git: { 'fetch --prune --multiple origin': new Error('fatal: unable to access the remote') },
 		});
 		const { report, outcome } = await runCleanWorkflow(context, APPLY);
 		const branch = report.branches.find((entry) => entry.name === 'feature/x');
@@ -221,6 +221,19 @@ suite('clean workflow', () => {
 		});
 		const noFetch: RemoteCheck = { source: 'local-refs', reason: 'no-fetch' };
 		assert.strictEqual(holdToPlan(decide(branches), decide(branches), noFetch)[0].action, 'delete', '--no-fetch is a choice');
+	});
+
+	test('a default branch that changed holds back every deletion, and the planned one is never deleted', () => {
+		const base = (name: string) => ({ name, ref: `refs/remotes/origin/${name}`, remote: 'origin', tip: 'b'.repeat(40), source: 'remote-head' as const });
+		const branches = decide([branch('main'), branch('feature/a')]);
+		assert.deepStrictEqual(actions(holdToBase(branches, base('main'), base('main')).branches), {
+			main: ['skip', 'protected', null],
+			'feature/a': ['delete', 'squash-merged', 'gsp clean feature/a --yes'],
+		});
+		const moved = holdToBase(branches, base('main'), base('develop'));
+		assert.deepStrictEqual(actions(moved.branches), { main: ['skip', 'protected', null], 'feature/a': ['skip', 'plan-changed', 'gsp clean --dry-run'] });
+		assert.match(moved.message ?? '', /^The default branch changed from origin\/main to origin\/develop during the fetch/);
+		assert.strictEqual(holdToBase(branches, null, base('main')).branches[0].reason, 'plan-changed');
 	});
 
 	test("Git's own reason is kept, not Node's command line", () => {
