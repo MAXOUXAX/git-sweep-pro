@@ -295,6 +295,29 @@ suite('clean --remote (real git)', function () {
 		assert.strictEqual(report.summary.remote?.remote, 'upstream', 'the only remote');
 	});
 
+	test('from the picker, local branches go and remote ones wait for --yes', async () => {
+		pushBranch('feature/both', 'b.txt', ['b\n'], { keep: true, track: true });
+		git(['merge', '-q', '--no-ff', '-m', 'merge', 'feature/both'], fx.repo);
+		git(['push', '-q', 'origin', 'main'], fx.repo);
+
+		const fake = contextFor({ pickMany: (items) => items.map((item) => item.label) });
+		const { report, outcome } = await runCleanWorkflow(fake.context, { ...APPLY, yes: false, canPrompt: true });
+		assert.strictEqual(outcome, 'not-applied');
+		assert.strictEqual(report.branches.find((branch) => branch.name === 'feature/both')?.result, 'deleted');
+		assert.deepStrictEqual(actions(report.remoteBranches)['feature/both'], ['delete', 'merged', 'gsp clean feature/both --remote --yes']);
+		assert.ok(remoteHas('feature/both'));
+		assert.ok(!fake.commands.some((command) => command.startsWith('push')));
+		assert.strictEqual(formatSummary(report), '1 deleted (1 merged) · on origin: 1 needs --yes · restore with gsp restore feature/both');
+
+		// Cancelled: the local branch it tracks stays, so the remote one would too.
+		pushBranch('feature/next', 'n.txt', ['n\n'], { keep: true, track: true });
+		git(['merge', '-q', '--no-ff', '-m', 'merge', 'feature/next'], fx.repo);
+		git(['push', '-q', 'origin', 'main'], fx.repo);
+		const cancelled = await runCleanWorkflow(contextFor().context, { ...APPLY, yes: false, canPrompt: true });
+		assert.strictEqual(cancelled.outcome, 'cancelled');
+		assert.deepStrictEqual(actions(cancelled.report.remoteBranches)['feature/next'][1], 'tracked-by-kept-branch');
+	});
+
 	test('when the fetch fails or the default branch changes, no remote branch is deleted', () => {
 		const entry: CleanRemoteBranch = {
 			remote: 'origin',

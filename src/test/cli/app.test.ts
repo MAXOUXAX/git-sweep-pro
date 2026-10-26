@@ -621,6 +621,46 @@ suite('cli app (real git)', function () {
 			assert.ok(!fs.existsSync(stateFilePath(wtGitDir)));
 		});
 
+		test('clean --remote --json: remote branches in their own array, and the next command keeps --remote', async () => {
+			git(['checkout', '-q', '-b', 'feature/r'], fx.repo);
+			commitFile(fx.repo, 'r.txt', 'r\n', 'r');
+			git(['push', '-q', 'origin', 'feature/r'], fx.repo);
+			git(['checkout', '-q', 'main'], fx.repo);
+			git(['merge', '-q', '--no-ff', '-m', 'merge r', 'feature/r'], fx.repo);
+			git(['push', '-q', 'origin', 'main'], fx.repo);
+			git(['branch', '-q', '-D', 'feature/r'], fx.repo);
+
+			const plan = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', '--remote', '--json', '--no-github'], plan), EXIT.notApplied);
+			const document = JSON.parse(plan.out.join(''));
+			assert.deepStrictEqual(
+				document.remoteBranches.map((branch: { name: string; action: string }) => [branch.name, branch.action]),
+				[
+					['feature/r', 'delete'],
+					['main', 'keep'],
+				]
+			);
+			assert.deepStrictEqual(document.summary.remote, { remote: 'origin', delete: 1, deleted: 0, failed: 0, skipped: 0, kept: 1 });
+			assert.strictEqual(document.next, 'gsp clean feature/r --no-github --remote --yes');
+
+			const human = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', '--remote', '--no-github'], human), EXIT.notApplied);
+			const out = human.out.join('');
+			assert.ok(out.includes('\nOn origin:\ndelete  feature/r  merged into origin/main\n'), out);
+			assert.ok(out.includes('Nothing was changed. To apply this plan, run: gsp clean feature/r --no-github --remote --yes'), out);
+
+			const unknown = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', '--remote=upstream', '--json'], unknown), EXIT.usage);
+			assert.strictEqual(JSON.parse(unknown.out.join('')).error.code, 'unknown-remote');
+
+			const applied = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', 'feature/r', '--remote', '--yes', '--no-github'], applied), EXIT.ok);
+			assert.ok(applied.out.join('').includes('on origin: 1 deleted · restore with gsp restore origin/feature/r'), applied.out.join(''));
+			const listed = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['restore'], listed), EXIT.ok);
+			assert.ok(listed.out.join('').startsWith('origin/feature/r  '), listed.out.join(''));
+		});
+
 		test('worktree list --json gives each worktree its state, and what gsp clean would do with its branch', async () => {
 			makeGoneBranch(fx.repo, 'feature/clean');
 			const clean = addWorktree('feature/clean');
