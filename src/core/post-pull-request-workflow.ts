@@ -29,7 +29,7 @@ import {
 } from './post-pull-request-plan';
 import { canonical, listWorktrees, type Worktree } from './worktrees';
 
-export type PostPrOptions = Pick<CleanOptions, 'dryRun' | 'yes' | 'force' | 'fetch' | 'github' | 'protectedPatterns' | 'canPrompt' | 'confirm'> & {
+export type PostPrOptions = Pick<CleanOptions, 'dryRun' | 'yes' | 'force' | 'discardChanges' | 'fetch' | 'github' | 'protectedPatterns' | 'canPrompt' | 'confirm'> & {
 	/** The merged branch; the branch checked out where gsp runs when undefined. */
 	readonly branch: string | undefined;
 	/** The branch it was merged into; the default branch when undefined. */
@@ -426,6 +426,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 			unproven && branch.unpushedCommits === 0 && !remoteAhead ? await findMergedElsewhere(context, branch, into, intoRef, intoRemote ?? null) : undefined;
 		return decideTarget(branch, {
 			force: options.force,
+			discardChanges: options.discardChanges,
 			into,
 			mainCheckoutDirty: worktree?.isMain ? await hasTrackedChanges(git, worktree.path) : false,
 			remoteAhead,
@@ -447,7 +448,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	const decideOthers = (planned: readonly PlannedBranch[]) =>
 		decideActions(
 			planned.filter((branch) => !excluded.has(branch.name)),
-			{ force: false, named: new Set(), defaultBranch: base?.name }
+			{ force: false, discardChanges: false, named: new Set(), defaultBranch: base?.name }
 		);
 	let others = decideOthers(plan.planned);
 	let { analysis, remote } = plan;

@@ -33,8 +33,13 @@ export type CliOptions = {
 	readonly into: string | undefined;
 	/** Repository directory (`-C <path>`); defaults to the current directory. */
 	readonly cwd: string | undefined;
-	/** `--dry-run`, `--force`, or a safe delete by default. */
+	/** `--dry-run`, `--force` (lifts the proof that a branch's work exists elsewhere), or a safe delete by default. */
 	readonly mode: SweepMode;
+	/**
+	 * `--discard-changes` (clean, post-pr, worktree remove): a removed worktree
+	 * may take uncommitted changes and ignored files with it, for good.
+	 */
+	readonly discardChanges: boolean;
 	readonly yes: boolean;
 	/** Never load terminal widgets, even when an agent uses a pseudo-terminal. */
 	readonly nonInteractive: boolean;
@@ -79,6 +84,7 @@ export const EXIT = {
 const OPTIONS = {
 	'dry-run': { type: 'boolean', short: 'n', default: false },
 	force: { type: 'boolean', short: 'f', default: false },
+	'discard-changes': { type: 'boolean', default: false },
 	yes: { type: 'boolean', short: 'y', default: false },
 	'non-interactive': { type: 'boolean', default: false },
 	merged: { type: 'boolean', short: 'm', default: false },
@@ -223,6 +229,14 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 		// `worktree list` ignores it and `worktree prune` uses it as a preview.
 		throw new UsageError('--dry-run cannot be used with worktree remove.');
 	}
+	if (worktree?.subcommand === 'remove' && values.force) {
+		throw new UsageError(
+			'--force cannot be used with worktree remove, which deletes no branch. To delete the uncommitted changes and ignored files of the worktree with it, use --discard-changes.'
+		);
+	}
+	if (values['discard-changes'] && !(command === 'clean' || command === 'post-pr' || worktree?.subcommand === 'remove')) {
+		throw new UsageError('--discard-changes can only be used with clean, post-pr or worktree remove.');
+	}
 	if (values.remote !== undefined && command !== 'clean') {
 		throw new UsageError('--remote can only be used with clean.');
 	}
@@ -258,6 +272,7 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 		into: values.into,
 		cwd: values.cwd,
 		mode: values.force ? 'forceDelete' : values['dry-run'] || requested === 'list' ? 'dryRun' : 'safeDelete',
+		discardChanges: values['discard-changes'],
 		yes: values.yes,
 		nonInteractive: values['non-interactive'],
 		fetch: !values['no-fetch'],
@@ -305,6 +320,7 @@ function helpOptions(topic: CommandName | undefined): CliOptions {
 		into: undefined,
 		cwd: undefined,
 		mode: 'safeDelete',
+		discardChanges: false,
 		yes: false,
 		nonInteractive: false,
 		fetch: true,

@@ -74,7 +74,8 @@ main, master, trunk or develop unless named exactly, branches with
 bisected, the current branch, a branch checked out in the main worktree or
 in a dirty or locked worktree, and a branch another kept branch tracks.
 A worktree holding ignored files that a build does not recreate (a .env,
-notes) is kept too, unless --force is given.
+notes) is kept too, unless --discard-changes is given. For a dirty worktree
+or one holding submodules, run "gsp worktree remove" first.
 
 Without a terminal, gsp clean prints the plan and changes nothing unless
 --yes is given. In a terminal, it lets you pick the branches first. The
@@ -85,8 +86,11 @@ Options:
   -n, --dry-run      Print the plan and change nothing (no fetch, no prune)
   -y, --yes          Apply the plan without asking
   -f, --force        Also delete branches with unpushed or unmerged work
-                     (named exactly, or listed as needing --force), and
-                     worktrees holding ignored files
+                     (named exactly, or listed as needing --force).
+                     "gsp restore" brings them back
+      --discard-changes
+                     Also remove worktrees holding ignored files a build
+                     does not recreate. They are deleted for good
       --json         Print the plan or the result as one JSON document
       --remote[=<name>]
                      Also delete the branches on <name> (origin by default)
@@ -142,15 +146,19 @@ Options:
                      remote-tracking refs
       --no-github    worktree list: do not ask GitHub through gh
   -n, --dry-run      worktree prune: only print what would be forgotten
-  -f, --force        worktree remove: remove it anyway, deleting what it
-                     holds. Unlock a locked one first with
+      --discard-changes
+                     worktree remove: remove it anyway, deleting for good
+                     its uncommitted changes, untracked and ignored files,
+                     submodules, and a rebase or bisect in progress. A
+                     locked one stays: unlock it with
                      "git worktree unlock <path>"
 ${GLOBAL_OPTIONS}
 
 Common tasks:
   gsp worktree list --json                 Every worktree and its state
   gsp worktree remove /tmp/review          Remove a scratch worktree
-  gsp worktree remove /tmp/review --force  Also discard what it holds
+  gsp worktree remove /tmp/review --discard-changes
+                                           Also delete what it holds
   gsp worktree prune                       Forget worktrees already deleted
 
 ${EXIT_CODES}`;
@@ -165,10 +173,12 @@ would.
 <branch> is deleted only when its work is proven to be in the default
 branch, with the rules of "gsp clean". Otherwise nothing is changed on it,
 gsp says why and what may prove it (fetching, pushing, --into), and exits
-with 5; the same when its worktree has uncommitted changes. A <branch> that
-has no local branch is reported as such, and the rest goes on, when
-gsp deleted it, a remote branch of that name is still listed, or GitHub
-shows its pull request merged (gh pr merge --delete-branch deletes it).
+with 5; the same when its worktree has uncommitted changes, or ignored
+files a build does not recreate (--discard-changes deletes them). A
+<branch> that has no local branch is reported as such, and the rest goes
+on, when gsp deleted it, a remote branch of that name is still listed, or
+GitHub shows its pull request merged (gh pr merge --delete-branch deletes
+it).
 Any other missing <branch> is an error (exit 2).
 
 <branch> never names a protected branch: "gsp post-pr main", the old form
@@ -193,6 +203,9 @@ Options:
   -n, --dry-run      Print the plan and change nothing (no fetch, no switch)
   -y, --yes          Apply without asking
   -f, --force        Delete <branch> even when it is not proven merged
+      --discard-changes
+                     Remove its worktree even when it holds ignored files a
+                     build does not recreate. They are deleted for good
       --json         Print the plan or the result as one JSON document
   -p, --protect <glob>
                      Never delete branches matching <glob> (repeatable)

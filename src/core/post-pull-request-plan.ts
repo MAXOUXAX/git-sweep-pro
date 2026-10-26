@@ -1,5 +1,6 @@
 import {
 	CLEAN_SCHEMA,
+	approvalFlags,
 	decideActions,
 	formatBranchLines,
 	formatSummary,
@@ -122,6 +123,8 @@ export function postPrCommand(scope: PostPrScope, branch: string | undefined, ..
 export type DecideTargetOptions = {
 	/** `--force`: a branch that is not merged, or holds unpushed commits, is deleted too. */
 	readonly force: boolean;
+	/** `--discard-changes`: its worktree goes even with ignored files a build does not recreate. */
+	readonly discardChanges: boolean;
 	/** The branch the pull request was merged into. */
 	readonly into: string;
 	/** For a branch checked out in the main checkout: whether that checkout has uncommitted changes to tracked files. */
@@ -149,16 +152,20 @@ export function decideTarget(branch: PlannedBranch, options: DecideTargetOptions
 	const inMain = worktree?.isMain === true;
 	const [decided] = decideActions(
 		[{ ...branch, current: false, worktree: worktree && inMain ? { ...worktree, isMain: false, dirty: options.mainCheckoutDirty } : branch.worktree }],
-		{ force: options.force, named: new Set([branch.name]), defaultBranch: options.into }
+		{ force: options.force, discardChanges: options.discardChanges, named: new Set([branch.name]), defaultBranch: options.into }
 	);
 	const again = (...flags: string[]) => postPrCommand(options.scope, branch.name, '--yes', ...flags);
 	// The main checkout is switched, never removed.
 	const shown = inMain ? (decided.action === 'delete' || !decided.worktree ? null : { ...decided.worktree, isMain: true }) : decided.worktree;
 	if (decided.action === 'delete') {
-		return { ...decided, worktree: shown, hint: again(...(decided.needsForce ? ['--force'] : [])) };
+		return { ...decided, worktree: shown, hint: again(...approvalFlags([decided])) };
 	}
 	if (decided.reason === 'needs-force') {
 		return { ...decided, worktree: shown, hint: proveFirst(branch, options) ?? again('--force') };
+	}
+	if (inMain && decided.reason === 'dirty-worktree' && worktree) {
+		// The main checkout is only switched: its changes are put aside, never removed with it.
+		return { ...decided, worktree: shown, hint: `${cmd('git', '-C', worktree.path, 'stash', '--include-untracked')} && ${again()}` };
 	}
 	// Hints that rerun gsp clean on this branch rerun post-pr instead.
 	return { ...decided, worktree: shown, hint: decided.hint?.split(cmd('gsp', 'clean', branch.name, '--yes')).join(again()) ?? null };
@@ -283,7 +290,7 @@ export function postPrNextCommand(report: PostPrReport, scope: PostPrScope): str
 	const target = hasNoLocalBranch(report.branch) ? null : report.branch;
 	const rerun = (...flags: string[]) => postPrCommand(scope, report.branch?.name, ...flags);
 	if (report.mode === 'plan') {
-		return wouldChange(report) ? rerun('--yes', ...(target?.action === 'delete' && target.needsForce ? ['--force'] : [])) : null;
+		return wouldChange(report) ? rerun('--yes', ...(target?.action === 'delete' ? approvalFlags([target]) : [])) : null;
 	}
 	return heldBack(report) > 0 ? rerun('--dry-run') : null;
 }

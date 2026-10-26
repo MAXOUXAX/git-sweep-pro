@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { AGENT_FILE_NAMES, checkAgentAdvice, isAgentFile, runAgentsWorkflow, type AdviceFinding } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion, describeDeletionTarget } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
-import { runGitCommand } from '../core/git-command';
+import { quoteShellArg, runGitCommand } from '../core/git-command';
 import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, nextCommand, type CleanDocument, type CleanReport, type JsonErrorCode, type JsonErrorDocument } from '../core/clean-plan';
 import type { CliEvent } from '../core/rpc-protocol';
 import { PushUrlMismatchError, runCleanWorkflow, UnknownBranchError, UnknownRemoteError, type CleanOutcome } from '../core/clean-workflow';
@@ -18,7 +18,7 @@ import type { SyncContext } from '../core/sync-state';
 import { runSyncWorkflow } from '../core/sync-workflow';
 import type { WorkflowContext, WorkflowOutcome } from '../core/workflow';
 import { formatWorktreeLines, listWorktreeStates } from '../core/worktree-list';
-import { pruneWorktrees, removeWorktree, worktreeRemoveDocument, type WorktreeKeptReason } from '../core/worktrees';
+import { pruneWorktrees, removeWorktree, worktreeRemoveDocument, type WorktreeKeptReason, type WorktreeRemoval } from '../core/worktrees';
 import { EXIT, parseArgs, UsageError, type CliOptions } from './args';
 import { createFrontend, type Frontend } from './frontend';
 import { helpFor, USAGE } from './help';
@@ -257,6 +257,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 				dryRun: options.mode === 'dryRun',
 				yes: options.yes,
 				force: options.mode === 'forceDelete',
+				discardChanges: options.discardChanges,
 				fetch: options.fetch,
 				github: options.github,
 				protectedPatterns: options.protect,
@@ -306,16 +307,13 @@ function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | nul
 	const unpushed = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'dead');
 	const unmerged = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'alive');
 	const ignored = count((branch) => branch.reason === 'ignored-files');
-	const kept = [
-		...(unpushed > 0 ? [`${unpushed} with commits found nowhere else`] : []),
-		...(unmerged > 0 ? [`${unmerged} named but not merged`] : []),
-		...(ignored > 0 ? [`${ignored} whose worktree holds ignored files`] : []),
-	];
+	const kept = [...(unpushed > 0 ? [`${unpushed} with commits found nowhere else`] : []), ...(unmerged > 0 ? [`${unmerged} named but not merged`] : [])];
 	const changed = [...report.branches, ...remoteBranches].filter(
 		(branch) => branch.reason === 'plan-changed' || branch.reason === 'fetch-failed' || branch.reason === 'worktree-changed'
 	).length;
 	const lines = [
 		...(kept.length > 0 ? [`Kept without --force: ${kept.join(', ')}. Each line above gives the command.`] : []),
+		...(ignored > 0 ? [`Kept without --discard-changes: ${ignored} whose worktree holds ignored files. Move what you need out first, as each line above says.`] : []),
 		...(unapplied > 0 && remote && next ? [`Branches on ${remote.remote} are only deleted with --yes. To delete them, run: ${next}`] : []),
 		...(changed > 0 && next ? [`${changed} not deleted, as things changed while applying. Review them with: ${next}`] : []),
 	];
@@ -391,6 +389,7 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 				dryRun: options.mode === 'dryRun',
 				yes: options.yes,
 				force: options.mode === 'forceDelete',
+				discardChanges: options.discardChanges,
 				fetch: options.fetch,
 				github: options.github,
 				protectedPatterns: options.protect,
@@ -503,7 +502,7 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
  * or two different ones is an invalid argument (exit 2).
  */
 async function runWorktreeRemove(context: WorkflowContext, options: CliOptions, io: CliIo, dir: string, target: string): Promise<CommandOutcome> {
-	const result = await removeWorktree(context, target, options.mode === 'forceDelete', dir);
+	const result = await removeWorktree(context, target, options.discardChanges, dir);
 	const refuse = (message: string, code: JsonErrorCode): CommandOutcome => {
 		if (options.json) {
 			printJsonError(io, options.rpc, message, code);
@@ -532,35 +531,34 @@ async function runWorktreeRemove(context: WorkflowContext, options: CliOptions, 
 	}
 	if (result.kind === 'removed') {
 		if (!options.json) {
-			const line = `Removed worktree ${result.worktree.path}.`;
+			const lines = [`Removed worktree ${result.worktree.path}.`, ...(result.nextCwd ? [`It was the directory you ran gsp in. Continue in the main checkout: cd ${quoteShellArg(result.nextCwd)}`] : [])];
 			// With --rpc, stdout carries only protocol events.
-			if (options.rpc) {
-				context.output.appendLine(line);
-			} else {
-				io.stdout(`${line}\n`);
-			}
+			lines.forEach((line) => (options.rpc ? context.output.appendLine(line) : io.stdout(`${line}\n`)));
 		}
 		return { kind: 'workflow', outcome: 'ok' };
 	}
-	context.ui.showErrorMessage(`Kept ${result.worktree.path}: ${KEPT_WORKTREE_MESSAGES[result.reason](result.ignoredFiles)}`);
-	if (!options.json && result.hint) {
+	// Kept is an answer, not a failure: it says why and what to run (exit 5).
+	if (!options.json) {
+		io.stderr(`Kept ${result.worktree.path}: ${KEPT_WORKTREE_MESSAGES[result.reason](result)}\n`);
 		io.stderr(`To remove it: ${result.hint}\n`);
 	}
 	return { kind: 'clean', outcome: 'not-applied' };
 }
 
-const KEPT_WORKTREE_MESSAGES: Record<WorktreeKeptReason, (ignoredFiles: readonly string[]) => string> = {
+const KEPT_WORKTREE_MESSAGES: Record<WorktreeKeptReason, (kept: Extract<WorktreeRemoval, { kind: 'kept' }>) => string> = {
 	'locked-worktree': () => 'it is locked.',
 	'rebase-in-progress': () => 'a rebase is in progress there.',
 	'bisect-in-progress': () => 'a bisect is in progress there.',
-	'dirty-worktree': () => 'it has uncommitted changes or untracked files. Commit or stash them, or add --force to discard them.',
-	submodules: () => 'it holds submodules, which would be deleted with it. Add --force to remove it anyway.',
-	'ignored-files': (files) => {
-		const { sample, count } = summarizeIgnored(files);
-		const more = count > sample.length ? `\n  and ${count - sample.length} more` : '';
-		return `removing it would delete ignored files a build does not recreate:\n${sample.map((file) => `  ${file}`).join('\n')}${more}\nMove what you need, then add --force.`;
-	},
+	'dirty-worktree': ({ changedFiles }) => `removing it would delete uncommitted changes or untracked files:\n${listed(changedFiles)}`,
+	submodules: () => 'it holds submodules, which would be deleted with it.',
+	'ignored-files': ({ ignoredFiles }) => `removing it would delete ignored files a build does not recreate:\n${listed(ignoredFiles)}`,
 };
+
+/** Up to {@link IGNORED_SAMPLE_SIZE} files, one per line, then how many more. */
+function listed(files: readonly string[]): string {
+	const { sample, count } = summarizeIgnored(files);
+	return [...sample.map((file) => `  ${file}`), ...(count > sample.length ? [`  and ${count - sample.length} more`] : [])].join('\n');
+}
 
 /** The `--json` document of `gsp agents --check`. */
 type AgentsCheckDocument = {

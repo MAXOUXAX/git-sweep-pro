@@ -14,6 +14,7 @@ const APPLY: CleanOptions = {
 	dryRun: false,
 	yes: true,
 	force: false,
+	discardChanges: false,
 	fetch: true,
 	github: false,
 	protectedPatterns: [],
@@ -70,7 +71,7 @@ suite('clean workflow (real git)', function () {
 		assert.ok(branchExists(fx.repo, 'feature/wt'));
 	});
 
-	test('an ignored file that replaces one the plan showed counts as a change, even with --force', async () => {
+	test('an ignored file that replaces one the plan showed counts as a change, even with --discard-changes', async () => {
 		makeGoneBranch(fx.repo, 'feature/wt');
 		const wt = path.join(fx.dir, 'wt');
 		git(['worktree', 'add', '-q', wt, 'feature/wt'], fx.repo);
@@ -85,7 +86,7 @@ suite('clean workflow (real git)', function () {
 				}
 			},
 		});
-		const { report, outcome } = await runCleanWorkflow(context, { ...APPLY, force: true, patterns: ['feature/wt'] });
+		const { report, outcome } = await runCleanWorkflow(context, { ...APPLY, discardChanges: true, patterns: ['feature/wt'] });
 		const [branch] = report.branches;
 		assert.deepStrictEqual([branch.action, branch.reason, branch.worktree?.ignoredFiles], ['skip', 'worktree-changed', { count: 1, sample: ['other.local'] }]);
 		assert.strictEqual(outcome, 'not-applied');
@@ -221,7 +222,7 @@ suite('clean workflow', () => {
 		...overrides,
 	});
 	const decide = (branches: PlannedBranch[], picked?: ReadonlySet<string>) =>
-		decideActions(branches, { force: false, named: new Set(), defaultBranch: 'main', ...(picked ? { picked } : {}) });
+		decideActions(branches, { force: false, discardChanges: false, named: new Set(), defaultBranch: 'main', ...(picked ? { picked } : {}) });
 	const fetched: RemoteCheck = { source: 'fetch', remotes: ['origin'] };
 	const actions = (branches: readonly CleanBranch[]) => Object.fromEntries(branches.map((entry) => [entry.name, [entry.action, entry.reason, entry.hint]]));
 
@@ -238,7 +239,11 @@ suite('clean workflow', () => {
 		assert.deepStrictEqual(actions(holdToPlan(planned, current, fetched)), {
 			kept: ['delete', 'squash-merged', 'gsp clean kept --yes'],
 			'now-alive': ['skip', 'plan-changed', 'gsp clean now-alive'],
-			'now-dirty': ['skip', 'dirty-worktree', 'git -C /wt stash --include-untracked && gsp clean now-dirty --yes'],
+			'now-dirty': [
+				'skip',
+				'dirty-worktree',
+				'git -C /wt stash --include-untracked && gsp clean now-dirty --yes, or, to delete them for good: gsp worktree remove /wt --discard-changes && gsp clean now-dirty --yes',
+			],
 			unpicked: ['skip', 'not-selected', 'gsp clean unpicked'],
 			alive: ['skip', 'not-selected', 'gsp clean alive'],
 			new: ['skip', 'plan-changed', 'gsp clean new'],
