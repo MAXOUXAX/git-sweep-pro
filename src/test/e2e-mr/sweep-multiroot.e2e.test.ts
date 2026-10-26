@@ -211,7 +211,7 @@ suite('E2E (multi-root): sweep targets the selected repository', () => {
 			'the unselected repository (repoA) must be left untouched'
 		);
 		assert.ok(
-			infoMessages.some((m) => m.includes('Deleted 1 branch')),
+			infoMessages.some((m) => m.includes('1 deleted')),
 			`expected a deletion confirmation; got ${JSON.stringify(infoMessages)}`
 		);
 		assert.deepStrictEqual(errorMessages, [], 'no error messages expected');

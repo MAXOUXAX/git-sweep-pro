@@ -126,8 +126,8 @@ function makeSquashMergedGoneBranch(repo: string, name: string, file: string): v
 	git(['-c', 'commit.gpgsign=false', 'commit', '-m', `work on ${name}`], repo);
 	git(['push', '-u', 'origin', name], repo);
 	git(['checkout', 'main'], repo);
-	// The "squashed" result lands on main as an unrelated commit.
-	fs.writeFileSync(path.join(repo, file), `squashed ${name}\n`);
+	// The squash lands on main as a new commit with the same content.
+	fs.writeFileSync(path.join(repo, file), `work on ${name}\n`);
 	git(['add', file], repo);
 	git(['-c', 'commit.gpgsign=false', 'commit', '-m', `squash-merge ${name}`], repo);
 	git(['push', 'origin', 'main'], repo);
@@ -255,7 +255,7 @@ suite('E2E: sweep against a real git repository', () => {
 			'feature/stale should be deleted from the real repo after the sweep'
 		);
 		assert.ok(
-			infoMessages.includes('Git Sweep Pro: Deleted 1 branch(es); 0 skipped, 0 failed.'),
+			infoMessages.some((m) => m.startsWith('Git Sweep Pro: 1 deleted (1 empty)')),
 			`expected a deletion confirmation; got ${JSON.stringify(infoMessages)}`
 		);
 		assert.deepStrictEqual(errorMessages, [], 'no error messages expected');
@@ -273,7 +273,7 @@ suite('E2E: sweep against a real git repository', () => {
 			'dry run must not delete the branch'
 		);
 		assert.ok(
-			infoMessages.includes('Git Sweep Pro (dry run): 1 branch(es) would be deleted.'),
+			infoMessages.some((m) => m.startsWith('Git Sweep Pro (dry run): 1 to delete (1 empty)')),
 			`expected a dry-run summary; got ${JSON.stringify(infoMessages)}`
 		);
 
@@ -293,7 +293,7 @@ suite('E2E: sweep against a real git repository', () => {
 			'clearing the selection must leave the branch in place'
 		);
 		assert.ok(
-			infoMessages.some((m) => m.includes('No branches selected')),
+			infoMessages.some((m) => m.includes('Cancelled. Nothing was deleted.')),
 			`expected a no-selection message; got ${JSON.stringify(infoMessages)}`
 		);
 		assert.deepStrictEqual(errorMessages, []);
@@ -311,7 +311,7 @@ suite('E2E: sweep against a real git repository', () => {
 		await vscode.commands.executeCommand('git-sweep-pro.dryRun');
 
 		assert.ok(
-			infoMessages.some((m) => m.includes('No stale branches found')),
+			infoMessages.some((m) => m.includes('Nothing to clean.')),
 			`expected a no-stale-branches message; got ${JSON.stringify(infoMessages)}`
 		);
 		assert.deepStrictEqual(errorMessages, []);
@@ -332,7 +332,7 @@ suite('E2E: sweep against a real git repository', () => {
 				'a protected branch must never be deleted'
 			);
 			assert.ok(
-				infoMessages.some((m) => m.includes('protected')),
+				infoMessages.some((m) => m.includes('Nothing to clean · 1 skipped.')),
 				`expected a protected-branch notice; got ${JSON.stringify(infoMessages)}`
 			);
 			assert.deepStrictEqual(errorMessages, []);
@@ -342,21 +342,20 @@ suite('E2E: sweep against a real git repository', () => {
 		}
 	});
 
-	test('force-deletes a squash/rebase-merged branch that safe delete refuses', async function () {
+	test('deletes a squash- or rebase-merged branch that git branch -d refuses', async function () {
 		this.timeout(120000);
 
 		makeSquashMergedGoneBranch(repoDir, 'feature/squashed', 'squashed.txt');
 		assert.ok(branchExists(repoDir, 'feature/squashed'), 'branch should exist before the sweep');
 
-		// The setup() stub auto-confirms the force-delete escalation modal.
 		await vscode.commands.executeCommand('git-sweep-pro.run');
 
 		assert.ok(
 			!branchExists(repoDir, 'feature/squashed'),
-			'a squash-merged branch should be force-deleted after confirmation'
+			'a squash-merged branch should be deleted after confirmation'
 		);
 		assert.ok(
-			infoMessages.some((m) => m.includes('Deleted 1 branch')),
+			infoMessages.some((m) => m.includes('1 deleted (1 rebase-merged)')),
 			`expected a deletion confirmation; got ${JSON.stringify(infoMessages)}`
 		);
 		assert.deepStrictEqual(errorMessages, [], 'no error messages expected');
