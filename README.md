@@ -49,6 +49,8 @@ The plan is made first, read-only, even when applying. Once you approve it (pick
 
 If the fetch fails, a branch proven only by its gone upstream is skipped with `fetch-failed`: the local remote-tracking refs may be out of date.
 
+The fetch follows your `remote.<name>.followRemoteHEAD` setting. If it changes the default branch, every proof the plan showed was made against another branch: nothing is deleted, each planned deletion is skipped with `plan-changed`, and `gsp clean --dry-run` shows the new plan. The default branch the plan was made on is never deleted.
+
 ### What gets deleted
 
 `--yes` deletes a branch only with proof that its work exists elsewhere:
@@ -80,7 +82,7 @@ and so are `*.tsbuildinfo` and `.DS_Store` files. An ignored file inside a track
 
 Secret-like files are never regenerable, wherever they are: `.env`, `.env.*`, `*.pem`, `*.key`, `*credentials*`, `*secret*`, `.npmrc` and `.netrc`. Inside an ignored build or cache folder, `gsp clean` also looks for `.env`, `.env.*`, `*.pem`, `*.key`, `.npmrc` and `.netrc` files (a compiler never writes one there). Dependency folders (`node_modules`, `.pnpm-store`, `vendor/bundle`, `.venv`, `venv`) are not searched: packages ship such files of their own.
 
-Every deletion is recorded: `gsp restore <branch>` recreates any of the last 100 deleted branches, tracking its upstream again if it still exists, until Git garbage-collects its commits (two weeks by default).
+Every deletion is recorded: `gsp restore <branch>` recreates any of the last 100 deleted branches, tracking its upstream again if it still exists, until Git garbage-collects its commits (two weeks by default). Like after `git branch -D`, the rest of the branch's configuration (its description, `pushRemote`, `rebase` and other `branch.<name>.*` settings) is not restored.
 
 ### Output
 
@@ -104,7 +106,7 @@ keep    main            default branch
 | 2 | Invalid arguments, or a branch that does not exist |
 | 3 | Sync paused on conflicts. Resolve them, stage the files, then run `gsp resume` |
 | 4 | Cancelled at a prompt |
-| 5 | `clean`: some planned deletions were not applied (no `--yes`, or `--force` needed); the output says what was done. `sync`, `agents`, `restore`, `post-pr`: a confirmation was needed but nobody could answer; rerun with `--yes` |
+| 5 | `clean`: some planned deletions were not applied; the output says why and what to run next (`next` in the JSON). `sync`, `agents`, `restore`, `post-pr`: a confirmation was needed but nobody could answer; rerun with `--yes` |
 
 ## With coding agents
 

@@ -162,8 +162,8 @@ suite('cli process client (real git)', function () {
 	test('the help says what exit code 5 means for clean and for the other commands', () => {
 		const help = run(['help']);
 		assert.strictEqual(help.status, EXIT.ok);
-		assert.ok(help.stdout.includes('5  clean: some planned deletions were not applied (no --yes, or --force\n     needed); the output says what was done.'), help.stdout);
-		assert.ok(help.stdout.includes('confirmation was needed but nobody could answer; rerun with --yes'), help.stdout);
+		assert.ok(help.stdout.includes('5  clean: some planned deletions were not applied; the output says why\n     and what to run next.'), help.stdout);
+		assert.ok(help.stdout.includes('Other commands: a confirmation was needed\n     but nobody could answer; rerun with --yes'), help.stdout);
 		assert.ok(!help.stdout.includes('nothing was changed'));
 	});
 
