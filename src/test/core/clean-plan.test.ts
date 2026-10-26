@@ -359,7 +359,7 @@ suite('clean plan', () => {
 
 	test('a forced deletion says so, and a half-done one says what is left', () => {
 		const [forced] = decide([branch('feature/gone', { reason: 'upstream-gone', unpushedCommits: 1 })], { force: true });
-		const halfDone: CleanBranch = { ...forced, worktree: { ...worktree({ path: '/wt/g' }), ignoredFiles: null }, result: 'worktree-removed', error: 'boom' };
+		const halfDone: CleanBranch = { ...forced, worktree: { ...worktree({ path: '/wt/g' }), ignoredFiles: null, submodules: null }, result: 'worktree-removed', error: 'boom' };
 		assert.deepStrictEqual(formatBranchLines(report([forced], 'plan')), [
 			'delete  feature/gone  upstream origin/feature/gone is gone, 1 commit found nowhere else, forced',
 		]);
@@ -393,7 +393,7 @@ suite('clean plan', () => {
 				unpushedCommits: 0,
 				upstream: 'origin/feature/a',
 				upstreamState: 'gone',
-				worktree: { path: '/wt/a', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: null },
+				worktree: { path: '/wt/a', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: null, submodules: null },
 				needsForce: false,
 				hint: null,
 				result: 'deleted',

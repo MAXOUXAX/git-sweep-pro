@@ -389,7 +389,7 @@ suite('cli app (real git)', function () {
 			const byName = new Map(
 				(report.branches as Array<{ name: string; worktree: unknown; reason: string }>).map((branch) => [branch.name, branch])
 			);
-			assert.deepStrictEqual(byName.get('feature/wt')?.worktree, { path: realWt, isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] } });
+			assert.deepStrictEqual(byName.get('feature/wt')?.worktree, { path: realWt, isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false });
 			assert.strictEqual(byName.get('feature/here')?.reason, 'current-branch');
 		});
 
@@ -497,6 +497,33 @@ suite('cli app (real git)', function () {
 				// Packages ship their own `.env` files: dependency folders are not searched.
 				'feature/deps': ['empty', { count: 0, sample: [] }],
 			});
+		});
+
+		test('a worktree holding a checked-out submodule is skipped, not left to fail', async () => {
+			const lib = path.join(fx.dir, 'lib');
+			git(['init', '-q', lib], fx.dir);
+			commitFile(lib, 'lib.txt', 'lib\n', 'lib');
+			git(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', lib, 'lib'], fx.repo);
+			git(['commit', '-q', '-m', 'add lib'], fx.repo);
+			git(['push', '-q', 'origin', 'main'], fx.repo);
+			makeGoneBranch(fx.repo, 'feature/sub');
+			makeGoneBranch(fx.repo, 'feature/bare');
+			const sub = addWorktree('feature/sub');
+			const bare = addWorktree('feature/bare');
+			git(['-c', 'protocol.file.allow=always', 'submodule', 'update', '-q', '--init'], sub);
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--yes'], io), EXIT.ok);
+			assert.ok(fs.existsSync(path.join(sub, 'lib', 'lib.txt')));
+			assert.ok(branchExists(fx.repo, 'feature/sub'));
+			assert.ok(!fs.existsSync(bare), 'its submodule is not checked out: removed');
+			const real = fs.realpathSync(sub);
+			assert.ok(
+				io.out.join('').includes(
+					`skip    feature/sub   worktree ${real} holds submodules, which git worktree remove refuses to delete (already in origin/main) → check the submodules of ${real}`
+				),
+				io.out.join('')
+			);
 		});
 
 		test('a clean worktree in the middle of a rebase is never removed, nor its branch deleted, even with --force', async () => {

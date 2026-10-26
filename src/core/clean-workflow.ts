@@ -23,7 +23,7 @@ import type { RunGh } from './github-signal';
 import { listIgnoredFiles, summarizeIgnored } from './ignored-files';
 import { isNotFullyMergedError } from './sweep-logic';
 import type { PickItem, WorkflowContext } from './workflow';
-import { listWorktrees, parseWorktrees, pruneWorktrees, WORKTREE_REMOVE } from './worktrees';
+import { hasSubmodules, listWorktrees, parseWorktrees, pruneWorktrees, WORKTREE_REMOVE } from './worktrees';
 
 export type CleanOptions = {
 	/** Branch names or globs; only the matching branches are considered. All branches when empty. */
@@ -175,12 +175,13 @@ async function fetchAndPrune(context: CleanContext, remotes: readonly string[]):
 }
 
 /**
- * Looks for the ignored files of the linked worktrees that deleting a
- * candidate would remove, and records all of them per branch in `found`.
- * Worktrees that are kept anyway (main, locked, dirty, mid-rebase) are not
- * read. A worktree that cannot be read counts as dirty, as in the analysis.
+ * Looks into the linked worktrees that deleting a candidate would remove:
+ * for submodules, which Git refuses to remove, and for ignored files, all of
+ * them recorded per branch in `found`. Worktrees that are kept anyway (main,
+ * locked, dirty, mid-rebase) are not read. A worktree that cannot be read
+ * counts as dirty, as in the analysis.
  */
-async function withIgnoredFiles(
+async function inspectWorktrees(
 	git: RunGit,
 	branches: readonly BranchAnalysis[],
 	named: ReadonlySet<string>,
@@ -194,9 +195,9 @@ async function withIgnoredFiles(
 				return branch;
 			}
 			try {
-				const ignored = await listIgnoredFiles(git, worktree.path);
+				const [ignored, submodules] = await Promise.all([listIgnoredFiles(git, worktree.path), hasSubmodules(git, worktree.path)]);
 				found.set(branch.name, ignored);
-				return { ...branch, worktree: { ...worktree, ignoredFiles: summarizeIgnored(ignored) } };
+				return { ...branch, worktree: { ...worktree, ignoredFiles: summarizeIgnored(ignored), submodules } };
 			} catch {
 				return { ...branch, worktree: { ...worktree, dirty: true } };
 			}
@@ -450,7 +451,7 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	const plannedBase = analysis.checks.base;
 	const decideOptions: DecideOptions = { force: options.force, named, defaultBranch: plannedBase?.name };
 	const plannedIgnored = new Map<string, readonly string[]>();
-	let planned = await withIgnoredFiles(git, analysis.branches, named, plannedIgnored);
+	let planned = await inspectWorktrees(git, analysis.branches, named, plannedIgnored);
 	let branches = decideActions(planned, decideOptions);
 	let worktreesPruned: readonly string[] = apply ? [] : prunable;
 	const report = (outcome: CleanOutcome, restored: readonly string[] = []): CleanRun => ({
@@ -499,7 +500,7 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	// The worktrees as the plan showed them, to check them against before removing one.
 	const shown = new Map(branches.map((branch) => [branch.name, branch]));
 	const fetchedIgnored = new Map<string, readonly string[]>();
-	planned = await withIgnoredFiles(git, analysis.branches, named, fetchedIgnored);
+	planned = await inspectWorktrees(git, analysis.branches, named, fetchedIgnored);
 	branches = holdToPlan(branches, decideActions(planned, decideOptions), remote, !options.yes);
 	const held = holdToBase(branches, plannedBase, analysis.checks.base);
 	branches = held.branches;

@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { RunGit } from './git-command';
 import type { WorkflowContext } from './workflow';
 
 /**
@@ -137,6 +138,24 @@ export function resolveWorktree(worktrees: readonly Worktree[], target: string, 
 	}
 	const worktree = byPath ?? byBranch;
 	return worktree ? { kind: 'found', worktree } : { kind: 'not-found', target };
+}
+
+/**
+ * True when the linked worktree at `worktreePath` holds submodules, which
+ * `git worktree remove` refuses without `--force`. Same test as Git's:
+ * a `modules` folder in the worktree's Git directory, or a submodule checked
+ * out in it. Read-only.
+ */
+export async function hasSubmodules(git: RunGit, worktreePath: string): Promise<boolean> {
+	const modules = path.resolve(worktreePath, (await git(['-C', worktreePath, 'rev-parse', '--git-path', 'modules'])).stdout.trim());
+	if (fs.existsSync(modules)) {
+		return true;
+	}
+	const { stdout } = await git(['-C', worktreePath, 'ls-files', '--stage', '-z']);
+	return stdout
+		.split('\0')
+		.filter((entry) => entry.startsWith('160000 '))
+		.some((entry) => fs.existsSync(path.join(worktreePath, entry.slice(entry.indexOf('\t') + 1), '.git')));
 }
 
 /**

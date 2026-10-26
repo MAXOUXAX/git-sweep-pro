@@ -36,6 +36,8 @@ export type SkipReason =
 	| 'main-worktree'
 	| 'locked-worktree'
 	| 'dirty-worktree'
+	/** Its worktree holds submodules, which `git worktree remove` refuses to delete. */
+	| 'submodules'
 	/** Its worktree holds ignored files that are not regenerable (see `ignoredFiles`): removing it would delete them. `--force` lifts it. */
 	| 'ignored-files'
 	/** Holds commits found nowhere else, or is alive and named explicitly: only `--force` deletes it. */
@@ -58,12 +60,12 @@ export type IgnoredFiles = {
 	readonly sample: readonly string[];
 };
 
-/** A branch's worktree, with its ignored files when they were looked for (linked worktrees of candidates). */
-export type CleanWorktree = BranchWorktree & { readonly ignoredFiles: IgnoredFiles | null };
+/** A branch's worktree, with its ignored files and whether it holds submodules, when they were looked for (linked worktrees of candidates). */
+export type CleanWorktree = BranchWorktree & { readonly ignoredFiles: IgnoredFiles | null; readonly submodules: boolean | null };
 
-/** An analysed branch, its worktree's ignored files attached when they were looked for. */
+/** An analysed branch, what its worktree holds attached when it was looked for. */
 export type PlannedBranch = Omit<BranchAnalysis, 'worktree'> & {
-	readonly worktree: (BranchWorktree & { readonly ignoredFiles?: IgnoredFiles | null }) | null;
+	readonly worktree: (BranchWorktree & { readonly ignoredFiles?: IgnoredFiles | null; readonly submodules?: boolean | null }) | null;
 };
 
 /** What happened to a branch when the plan was applied. */
@@ -204,6 +206,13 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 			hint: `${cmd('git', '-C', worktree.path, 'stash', '--include-untracked')} && ${cmd('gsp', 'clean', branch.name, '--yes')}`,
 		};
 	}
+	if (worktree?.submodules) {
+		// `--force` would delete whatever the submodules hold: let the user check them first.
+		return {
+			reason: 'submodules',
+			hint: `check the submodules of ${quoteShellArg(worktree.path)} (${cmd('git', '-C', worktree.path, 'submodule', 'foreach', '--recursive', 'git', 'status', '--short')}), then: ${cmd('git', 'worktree', 'remove', '--force', worktree.path)} && ${cmd('gsp', 'clean', branch.name, '--yes')}`,
+		};
+	}
 	if (worktree?.ignoredFiles && worktree.ignoredFiles.count > 0 && !options.force) {
 		// Removing the worktree deletes them for good: save what matters first.
 		return {
@@ -239,7 +248,7 @@ export function decideActions(branches: readonly PlannedBranch[], options: Decid
 			unpushedCommits: branch.unpushedCommits,
 			upstream: branch.upstream,
 			upstreamState: branch.upstreamState,
-			worktree: branch.worktree && { ...branch.worktree, ignoredFiles: branch.worktree.ignoredFiles ?? null },
+			worktree: branch.worktree && { ...branch.worktree, ignoredFiles: branch.worktree.ignoredFiles ?? null, submodules: branch.worktree.submodules ?? null },
 			needsForce,
 			hint,
 		});
@@ -449,6 +458,8 @@ function describeSkip(branch: CleanBranch): string {
 			return `worktree ${worktree} is locked`;
 		case 'dirty-worktree':
 			return `worktree ${worktree} has uncommitted changes`;
+		case 'submodules':
+			return `worktree ${worktree} holds submodules, which git worktree remove refuses to delete`;
 		case 'ignored-files':
 			return `removing worktree ${worktree} would delete ${branch.worktree?.ignoredFiles ? describeIgnored(branch.worktree.ignoredFiles) : 'ignored files'}, needs --force`;
 		case 'needs-force':
