@@ -140,16 +140,19 @@ function describeProtection(branch: Pick<CleanBranch, 'verdictReason' | 'protect
 
 const remoteVerdict = (branch: CleanRemoteBranch) => describeVerdict({ ...branch, unpushedCommits: 0, upstream: null });
 
-/** A local branch only a forced delete removes: picked in force mode only. */
-export const isForceable = (branch: CleanBranch): boolean => branch.reason === 'needs-force' || branch.reason === 'ignored-files';
+/**
+ * A local branch only a forced delete removes: picked in force mode only.
+ * A worktree holding ignored files is not: forcing lifts the merge proof,
+ * never what a worktree would lose (`--discard-changes`).
+ */
+export const isForceable = (branch: CleanBranch): boolean => branch.reason === 'needs-force';
 
 function localEntry(branch: CleanBranch, kind: 'delete' | 'force' | 'skip' | 'keep'): CleanEntry {
 	const worktree = branch.worktree && !branch.worktree.isMain && !branch.worktree.prunable ? branch.worktree : undefined;
 	const removes = worktree && (kind === 'delete' || kind === 'force') ? `Removes the worktree ${displayPath(worktree.path)}` : undefined;
 	const details: Record<typeof kind, string | undefined> = {
 		delete: removes,
-		// The section already says it needs a forced delete: say what it would cost.
-		force: branch.reason === 'ignored-files' ? describeLocalSkip(branch) : removes,
+		force: removes,
 		skip: describeLocalSkip(branch),
 		keep: undefined,
 	};
@@ -223,15 +226,10 @@ export function confirmLocal(entries: readonly CleanEntry[]): { readonly message
 	const worktrees = entries.filter((entry) => entry.worktree);
 	const forced = entries.filter((entry) => entry.forced);
 	const unproven = entries.filter((entry) => entry.unproven);
-	const ignored = worktrees.filter((entry) => entry.forced && entry.worktree?.ignoredFiles?.count);
 	const lines = [
 		// One branch is named in the title already.
 		...(entries.length > 1 ? [names] : []),
 		...(worktrees.length > 0 ? [`This also removes ${plural(worktrees.length, 'worktree')}.`] : []),
-		...ignored.map(
-			(entry) =>
-				`Removing ${displayPath(entry.worktree!.path)} deletes ${plural(entry.worktree!.ignoredFiles!.count, 'ignored file')} for good: ${describeIgnoredFiles(entry.worktree!.ignoredFiles!)}.`
-		),
 		...(unproven.length === 0
 			? []
 			: [

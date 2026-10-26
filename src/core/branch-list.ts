@@ -118,13 +118,3 @@ export async function chooseBranch(
 	}
 	return picked;
 }
-
-/**
- * The local branch in another worktree that `item` resolves to, if any: the
- * item itself, or for a remote ref ("origin/main") the local branch of the
- * same name. Such a branch cannot be checked out here.
- */
-export function findOtherWorktreeBranch(items: readonly BranchItem[], item: BranchItem): BranchItem | undefined {
-	const local = localBranchName(item);
-	return items.find((candidate) => !candidate.isRemote && candidate.inOtherWorktree && candidate.ref === local);
-}

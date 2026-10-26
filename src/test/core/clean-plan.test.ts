@@ -40,7 +40,7 @@ function branch(name: string, overrides: Partial<PlannedBranch> = {}): PlannedBr
 	};
 }
 
-const OPTIONS: DecideOptions = { force: false, named: new Set(), defaultBranch: 'main' };
+const OPTIONS: DecideOptions = { force: false, discardChanges: false, named: new Set(), defaultBranch: 'main' };
 
 function decide(branches: PlannedBranch[], options: Partial<DecideOptions> = {}) {
 	return decideActions(branches, { ...OPTIONS, ...options });
@@ -115,43 +115,58 @@ suite('clean plan', () => {
 		assert.deepStrictEqual(actions(decided), { 'feature/wip': ['skip', 'current-branch', 'git switch main'] });
 	});
 
-	test('a branch being rebased or bisected is never deleted, not even with --force', () => {
+	test('a branch being rebased or bisected is never deleted, not even with --force or --discard-changes', () => {
 		const branches = [
 			branch('feature/rebase', { worktree: worktree({ path: '/wt/r', inProgress: 'rebase' }) }),
 			branch('feature/bisect', { worktree: worktree({ path: '/repo', isMain: true, inProgress: 'bisect' }) }),
 		];
 		for (const force of [false, true]) {
-			assert.deepStrictEqual(actions(decide(branches, { force, named: new Set(['feature/rebase']) })), {
-				'feature/rebase': ['skip', 'rebase-in-progress', 'git -C /wt/r rebase --continue'],
+			assert.deepStrictEqual(actions(decide(branches, { force, discardChanges: force, named: new Set(['feature/rebase']) })), {
+				'feature/rebase': ['skip', 'rebase-in-progress', 'git -C /wt/r rebase --continue, or, to drop the rebase with the worktree: gsp worktree remove /wt/r --discard-changes && gsp clean feature/rebase --yes'],
 				'feature/bisect': ['skip', 'bisect-in-progress', 'git -C /repo bisect reset'],
 			});
 		}
 		assert.deepStrictEqual(formatBranchLines(report(decide(branches), 'plan')), [
-			'skip    feature/rebase  a rebase is in progress in /wt/r: continue or abort it first (squash-merged into origin/main) → git -C /wt/r rebase --continue',
+			'skip    feature/rebase  a rebase is in progress in /wt/r: continue or abort it first (squash-merged into origin/main) → git -C /wt/r rebase --continue, or, to drop the rebase with the worktree: gsp worktree remove /wt/r --discard-changes && gsp clean feature/rebase --yes',
 			'skip    feature/bisect  a bisect is in progress in /repo: reset it first (squash-merged into origin/main) → git -C /repo bisect reset',
 		]);
 		assert.strictEqual(hasPendingDeletions(decide(branches)), false, 'the user acts elsewhere: no exit 5');
 	});
 
-	test('a worktree holding ignored files is kept, and the plan lists them; --force lifts it', () => {
+	test('a worktree holding ignored files is kept, and the plan lists them; --discard-changes lifts it, --force does not', () => {
 		const ignoredFiles = { count: 4, sample: ['.env', 'notes.md', 'secrets/', 'x.db'] };
 		const held = branch('feature/env', { worktree: { ...worktree({ path: '/wt/env' }), ignoredFiles } });
 		const unforced = decide([held]);
-		assert.deepStrictEqual(actions(unforced), { 'feature/env': ['skip', 'ignored-files', 'move what you need out of /wt/env, then: gsp clean feature/env --yes --force'] });
+		assert.deepStrictEqual(actions(unforced), { 'feature/env': ['skip', 'ignored-files', 'move what you need out of /wt/env, then: gsp clean feature/env --yes --discard-changes'] });
 		assert.deepStrictEqual(formatBranchLines(report(unforced, 'plan')), [
-			'skip    feature/env  removing worktree /wt/env would delete 4 ignored files (.env, notes.md, secrets/, …), needs --force (squash-merged into origin/main) → move what you need out of /wt/env, then: gsp clean feature/env --yes --force',
+			'skip    feature/env  removing worktree /wt/env would delete 4 ignored files (.env, notes.md, secrets/, …), needs --discard-changes (squash-merged into origin/main) → move what you need out of /wt/env, then: gsp clean feature/env --yes --discard-changes',
 		]);
-		assert.strictEqual(hasPendingDeletions(unforced), true, '--force would delete it: exit 5');
-		assert.strictEqual(summarize(unforced, 'plan').needsForce, 1);
+		assert.strictEqual(hasPendingDeletions(unforced), true, '--discard-changes would delete it: exit 5');
+		assert.deepStrictEqual([summarize(unforced, 'plan').needsForce, summarize(unforced, 'plan').needsDiscardChanges], [0, 1]);
+		assert.strictEqual(decide([held], { force: true })[0].reason, 'ignored-files');
+		const unpushed = branch('feature/env', { unpushedCommits: 1, worktree: { ...worktree({ path: '/wt/env' }), ignoredFiles } });
+		assert.strictEqual(decide([unpushed])[0].hint, 'move what you need out of /wt/env, then: gsp clean feature/env --yes --force --discard-changes');
 
-		const forced = decide([held], { force: true });
-		assert.deepStrictEqual(actions(forced), { 'feature/env': ['delete', 'squash-merged', 'gsp clean feature/env --yes'] });
+		const forced = decide([held], { discardChanges: true });
+		assert.deepStrictEqual(actions(forced), { 'feature/env': ['delete', 'squash-merged', 'gsp clean feature/env --yes --discard-changes'] });
 		assert.deepStrictEqual(forced[0].worktree?.ignoredFiles, ignoredFiles);
 		assert.deepStrictEqual(formatBranchLines(report(forced, 'plan')), [
 			'delete  feature/env  squash-merged into origin/main, removes worktree /wt/env and its 4 ignored files (.env, notes.md, secrets/, …)',
 		]);
 		const none = decide([branch('feature/clean', { worktree: { ...worktree(), ignoredFiles: { count: 0, sample: [] } } })]);
 		assert.strictEqual(none[0].action, 'delete');
+	});
+
+	test('a worktree with submodules names its ignored files too, since removing it deletes them', () => {
+		const sub = (ignoredFiles: { count: number; sample: string[] }) =>
+			branch('feature/sub', { worktree: { ...worktree({ path: '/wt/sub' }), ignoredFiles, submodules: true } });
+		const status = 'git -C /wt/sub submodule foreach --recursive git status --short';
+		assert.deepStrictEqual(actions(decide([sub({ count: 1, sample: ['notes.md'] })])), {
+			'feature/sub': ['skip', 'submodules', `check the submodules of /wt/sub (${status}) and move what you need out of its 1 ignored file (notes.md), then: gsp worktree remove /wt/sub --discard-changes && gsp clean feature/sub --yes`],
+		});
+		assert.deepStrictEqual(actions(decide([sub({ count: 0, sample: [] })])), {
+			'feature/sub': ['skip', 'submodules', `check the submodules of /wt/sub (${status}), then: gsp worktree remove /wt/sub --discard-changes && gsp clean feature/sub --yes`],
+		});
 	});
 
 	test('the needs-force reason says whether the work is unpushed or not merged', () => {
@@ -241,7 +256,11 @@ suite('clean plan', () => {
 			branch('feature/gone-dir', { worktree: worktree({ path: '/wt/gone', prunable: true, dirty: true }) }),
 		]);
 		assert.deepStrictEqual(actions(decided), {
-			'feature/dirty': ['skip', 'dirty-worktree', 'git -C /wt/dirty stash --include-untracked && gsp clean feature/dirty --yes'],
+			'feature/dirty': [
+				'skip',
+				'dirty-worktree',
+				'git -C /wt/dirty stash --include-untracked && gsp clean feature/dirty --yes, or, to delete them for good: gsp worktree remove /wt/dirty --discard-changes && gsp clean feature/dirty --yes',
+			],
 			'feature/locked': ['skip', 'locked-worktree', 'git worktree unlock /wt/locked'],
 			'feature/clean': ['delete', 'squash-merged', 'gsp clean feature/clean --yes'],
 			'feature/gone-dir': ['delete', 'squash-merged', 'gsp clean feature/gone-dir --yes'],
@@ -389,9 +408,21 @@ suite('clean plan', () => {
 		);
 	});
 
+	test('hints keep -C, --no-github and --no-fetch, as next does', () => {
+		const scope = { cwd: '/my repo', github: false, fetch: false };
+		const hints = decide(
+			[branch('feature/gone', { reason: 'upstream-gone', unpushedCommits: 1 }), branch('feature/dirty', { worktree: worktree({ path: '/wt/d', dirty: true }) })],
+			{ scope }
+		).map((entry) => entry.hint);
+		assert.deepStrictEqual(hints, [
+			"gsp -C '/my repo' clean feature/gone --no-github --no-fetch --yes --force",
+			"git -C /wt/d stash --include-untracked && gsp -C '/my repo' clean feature/dirty --no-github --no-fetch --yes, or, to delete them for good: gsp -C '/my repo' worktree remove /wt/d --discard-changes && gsp -C '/my repo' clean feature/dirty --no-github --no-fetch --yes",
+		]);
+	});
+
 	test('a forced deletion says so, and a half-done one says what is left', () => {
 		const [forced] = decide([branch('feature/gone', { reason: 'upstream-gone', unpushedCommits: 1 })], { force: true });
-		const halfDone: CleanBranch = { ...forced, worktree: { ...worktree({ path: '/wt/g' }), ignoredFiles: null, submodules: null }, result: 'worktree-removed', error: 'boom' };
+		const halfDone: CleanBranch = { ...forced, worktree: { ...worktree({ path: '/wt/g' }), ignoredFiles: null, submodules: null, changedFiles: null }, result: 'worktree-removed', error: 'boom' };
 		assert.deepStrictEqual(formatBranchLines(report([forced], 'plan')), [
 			'delete  feature/gone  upstream origin/feature/gone is gone, 1 commit found nowhere else, forced',
 		]);
@@ -425,7 +456,7 @@ suite('clean plan', () => {
 				unpushedCommits: 0,
 				upstream: 'origin/feature/a',
 				upstreamState: 'gone',
-				worktree: { path: '/wt/a', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: null, submodules: null },
+				worktree: { path: '/wt/a', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: null, submodules: null, changedFiles: null },
 				protected: null,
 				needsForce: false,
 				hint: null,
@@ -448,7 +479,7 @@ suite('clean plan', () => {
 				hint: 'gsp clean feature/gone --yes --force',
 			},
 		]);
-		assert.deepStrictEqual(json.summary, { delete: 1, deleted: 1, failed: 0, skipped: 1, kept: 0, needsForce: 1, reasons: { 'squash-merged': 1 } });
+		assert.deepStrictEqual(json.summary, { delete: 1, deleted: 1, failed: 0, skipped: 1, kept: 0, needsForce: 1, needsDiscardChanges: 0, reasons: { 'squash-merged': 1 } });
 		assert.strictEqual(json.restore, 'gsp restore feature/a');
 		assert.deepStrictEqual(json.checks.remote, { source: 'fetch', remotes: ['origin'] });
 	});

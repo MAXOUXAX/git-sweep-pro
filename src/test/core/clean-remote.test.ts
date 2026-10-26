@@ -14,6 +14,7 @@ const APPLY: CleanOptions = {
 	dryRun: false,
 	yes: true,
 	force: false,
+	discardChanges: false,
 	fetch: true,
 	github: false,
 	protectedPatterns: [],

@@ -4,6 +4,56 @@ Delete the local branches whose work is already merged or pushed, and the worktr
 
 It is a command line for you and your coding agents, and a VS Code extension.
 
+## For coding agents
+
+Use `gsp`, not raw Git: it checks that no work would be lost before deleting anything, and `gsp restore` can recreate the branches it deletes. Don't use `git branch -D`, `git worktree remove` or `git push --delete`.
+
+| Task | Command |
+| --- | --- |
+| After merging a pull request | `gsp post-pr --yes`, from the branch's worktree, or `gsp post-pr <branch> --yes` from anywhere else. Continue in `nextCwd` when it removed the worktree you were in |
+| Clean the repository | `gsp clean --json` to read the plan, then `gsp clean --yes`. Exit code 5: something was kept or needs approval, read `next` |
+| Delete one branch | `gsp clean <branch> --yes`. Add `--force` only when the person agreed; `gsp restore` can bring the branch back |
+| Remove a worktree you created | `gsp worktree remove <path>`. If it is kept, read why. Add `--discard-changes` only when everything listed is yours to throw away: it is deleted for good |
+| List worktrees | `gsp worktree list --json` |
+| Delete merged branches on the remote | `gsp clean --remote` shows the plan; add `--yes` to apply it |
+| Undo a branch deletion | `gsp restore <branch>`, or `gsp restore origin/<branch>` for a remote one |
+
+`gsp agents` writes these instructions into a repository's `AGENTS.md` or `CLAUDE.md`, and `gsp agents --check` finds advice there that contradicts gsp (see [With coding agents](#with-coding-agents)).
+
+<details>
+<summary>The note <code>gsp agents</code> writes, to copy into an instruction file outside a repository</summary>
+
+````markdown
+<!-- BEGIN:git-sweep-pro -->
+## Git cleanup
+
+Use `gsp` (git-sweep-pro) for Git cleanup, not `git branch -D`, `git worktree remove` or `git push --delete`: gsp checks that no work would be lost, and `gsp restore` can recreate the branches it deletes.
+
+- After merging a pull request: `gsp post-pr --yes` from the branch's worktree, or `gsp post-pr <branch> --yes` from anywhere else. If it removed the worktree you were in, continue in `nextCwd` (with `--json`) or the directory it prints.
+- Clean the repository: `gsp clean --json` to read the plan, then `gsp clean --yes`.
+- Delete one branch: `gsp clean <branch> --yes`. Add `--force` only when the person agreed; `gsp restore` can bring the branch back.
+- Remove a worktree you created (review, scratch): `gsp worktree remove <path>`. If it is kept, read why. Add `--discard-changes` only when everything listed is yours to throw away: uncommitted changes and ignored files are deleted for good.
+- List worktrees: `gsp worktree list --json`.
+- Remote branches: `gsp clean --remote` shows the plan; add `--yes` to apply it.
+- Undo a branch deletion: `gsp restore <branch>` (`gsp restore origin/<branch>` for a remote one).
+
+Without a terminal, gsp changes nothing unless `--yes` is passed; in a pseudo-terminal, add `--non-interactive`. `--yes` never forces. With `--json`, stdout is one document: whatever gsp kept has a `reason` and a `hint`, and `next` is the command to run next. Run `gsp sync` (rebase, then force-push with a lease) only when asked.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Done, or nothing to do |
+| 1 | Something failed: read the output |
+| 2 | Invalid arguments, or no such branch, remote or worktree |
+| 3 | `gsp sync` paused on conflicts: resolve and stage them, then `gsp resume` |
+| 4 | Cancelled at a prompt |
+| 5 | Something was kept or needs approval: read `next` or the `hint`, and ask before adding `--force` or `--discard-changes` |
+
+Run `gsp help` for every command.
+<!-- END:git-sweep-pro -->
+````
+
+</details>
+
 ## Install
 
 **Terminal** (macOS and Linux, needs Node.js, which Homebrew installs):
@@ -29,7 +79,8 @@ gsp clean --json        # the plan as JSON, for scripts and agents
 gsp clean --remote --yes             # also delete the merged branches on origin
 gsp worktree list       # every worktree, its state, and what clean would do
 gsp worktree prune      # forget worktree registrations whose directory is gone
-gsp worktree remove <path|branch>   # remove one linked worktree
+gsp worktree remove <path|branch>   # remove one linked worktree, if nothing would be lost
+gsp worktree remove <path> --discard-changes   # also delete its uncommitted changes and ignored files
 gsp post-pr --yes       # after a merged PR: delete its branch and worktree, update main, clean
 gsp sync origin/main    # rebase onto origin/main, then force-push with a lease
 gsp resume              # continue a sync after resolving its conflicts
@@ -71,18 +122,20 @@ Whatever the flags, `gsp clean` never deletes:
 - a branch with `branch.<name>.deleteMerged` set to `false`;
 - a branch being rebased or bisected, in any worktree;
 - the current branch, or a branch checked out in the main worktree;
-- a branch checked out in a worktree that is locked, has uncommitted changes or holds checked-out submodules (`git worktree remove` refuses those without `--force`);
+- a branch checked out in a worktree that is locked, has uncommitted changes or holds checked-out submodules. `gsp clean` never deletes what they hold: the hint stashes the changes, or names `gsp worktree remove <path> --discard-changes` to delete them yourself first;
 - a branch that another kept local branch uses as its upstream.
 
-A dead branch checked out in a clean, unlocked linked worktree is deleted with its worktree (`git worktree remove`, never `--force`). Each skipped branch comes with a hint: the exact command that resolves it. A hint never suggests losing work first: for uncommitted changes, it stashes them, and for ignored files, it asks you to move what you need out of the worktree before forcing.
+A dead branch checked out in a clean, unlocked linked worktree is deleted with its worktree (`git worktree remove`). Each skipped branch comes with a hint: what resolves it, usually one command, sometimes after a step you take by hand (for ignored files, moving what you need out of the worktree). A hint never suggests losing work first: for uncommitted changes, it stashes them, then names the command that deletes them; for ignored files, it asks you to move what you need out of the worktree first.
 
-Removing a worktree deletes its ignored files, and `gsp restore` cannot bring them back. A worktree holding ignored files is skipped with `ignored-files`, and the plan lists them, unless they are all regenerable: a build or an install recreates them. Only `--force` removes it anyway, once you have moved what you need out of it. These folders are regenerable, at any depth, when the whole folder is ignored:
+`--force` and `--discard-changes` lift different things. `--force` only lifts the proof that a branch's work exists elsewhere: what it deletes, `gsp restore` brings back. `--discard-changes` lets a worktree go with files that are lost for good, and `--force` alone never does.
 
-`node_modules`, `.pnpm-store`, `vendor/bundle`, `dist`, `build`, `out`, `.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.cache`, `.parcel-cache`, `.vite`, `coverage`, `target`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.venv`, `venv`, `.gradle`, `.dart_tool`, `DerivedData`
+Removing a worktree deletes its ignored files, and `gsp restore` cannot bring them back. A worktree holding ignored files is skipped with `ignored-files`, and the plan lists them, unless they are all regenerable: a build or an install recreates them. Only `--discard-changes` removes it anyway, once you have moved what you need out of it. These folders are regenerable, at any depth, when the whole folder is ignored:
 
-and so are `*.tsbuildinfo` and `.DS_Store` files. An ignored file inside a tracked folder with one of these names (`tools/build/credentials.json`) is not.
+`node_modules`, `.pnpm-store`, `vendor/bundle`, `dist`, `build`, `out`, `.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.cache`, `.parcel-cache`, `.vite`, `coverage`, `target`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.venv`, `venv`, `.gradle`, `.dart_tool`, `DerivedData`, `.vscode-test`, `.expo`, `storybook-static`, `.angular`, `.nx`, `.yarn/cache`, `.terraform`
 
-Secret-like files are never regenerable, wherever they are: `.env`, `.env.*`, `*.pem`, `*.key`, `*credentials*`, `*secret*`, `.npmrc` and `.netrc`. Inside an ignored build or cache folder, `gsp clean` also looks for these names, except compiled code named after a module (`dist/auth/credentials.js`: `.js`, `.mjs`, `.cjs`, `.ts`, `.map`, `.css`, `.html`, `.py`, `.pyc`, `.class` and `.o` files). Dependency folders (`node_modules`, `.pnpm-store`, `vendor/bundle`, `.venv`, `venv`) are not searched: packages ship such files of their own.
+and so are `*.tsbuildinfo`, `.DS_Store` and `.eslintcache` files, and an ignored symbolic link with one of these names, like a linked `node_modules` (removing the worktree only removes the link, not what it points to). Any other ignored link keeps the worktree: where it pointed would be lost. An ignored file inside a tracked folder with one of these names (`tools/build/credentials.json`) is not.
+
+Secret-like files are never regenerable, wherever they are, even as symbolic links: `.env`, `.env.*`, `*.pem`, `*.key`, `*credentials*`, `*secret*`, `.npmrc` and `.netrc`. Inside an ignored build or cache folder, `gsp clean` also looks for these names, except compiled code named after a module (`dist/auth/credentials.js`: `.js`, `.mjs`, `.cjs`, `.ts`, `.map`, `.css`, `.html`, `.py`, `.pyc`, `.class` and `.o` files). Dependency folders (`node_modules`, `.pnpm-store`, `vendor/bundle`, `.venv`, `venv`, `.yarn/cache`, `.terraform`, `.vscode-test`) are not searched: packages ship such files of their own.
 
 Every deletion is recorded: `gsp restore <branch>` recreates any of the last 100 deleted branches, tracking its upstream again if it still exists, until Git garbage-collects its commits (two weeks by default). Like after `git branch -D`, the rest of the branch's configuration (its description, `pushRemote`, `rebase` and other `branch.<name>.*` settings) is not restored.
 
@@ -134,7 +187,7 @@ gsp post-pr feature/x --yes       # from anywhere else
 gsp post-pr --dry-run             # preview, change nothing
 ```
 
-- The branch is deleted only when its work is proven to be in the default branch, with the same rules as `gsp clean`. Otherwise nothing changes on it, gsp says why (for example `1 commit not merged into origin/main`), exits with 5 and hints at what may still prove it: fetching first, `git push` for commits found nowhere else, or `--into <branch>` when another branch holds its work. `--force` deletes it anyway, unless it is protected, and is only suggested when nothing else can prove it. A branch kept because its worktree has uncommitted changes also exits with 5: for `post-pr`, 5 means the branch you asked to finish isn't finished.
+- The branch is deleted only when its work is proven to be in the default branch, with the same rules as `gsp clean`. Otherwise nothing changes on it, gsp says why (for example `1 commit not merged into origin/main`), exits with 5 and hints at what may still prove it: fetching first, `git push` for commits found nowhere else, or `--into <branch>` when another branch holds its work. `--force` deletes it anyway, unless it is protected, and is only suggested when nothing else can prove it. A branch kept because its worktree has uncommitted changes, or ignored files a build does not recreate, also exits with 5: for `post-pr`, 5 means the branch you asked to finish isn't finished. `--discard-changes` removes a worktree holding such ignored files; for uncommitted changes, the hint stashes them, or names `gsp worktree remove <path> --discard-changes`.
 - A branch with no local branch, because `gh pr merge --delete-branch` deleted it for example, is not an error: gsp says `feature/x has no local branch; nothing to delete here.`, then updates the default branch and cleans as usual. That holds when gsp deleted it, a remote branch of that name is still listed, or GitHub shows its pull request merged; any other missing branch is a usage error (exit 2, JSON code `unknown-branch`) that suggests the closest branch names.
 - Run from the branch's own linked worktree, gsp removes that worktree, carries on from the main checkout and ends with `cd <main checkout>`.
 - When the branch is checked out in the main checkout, gsp switches that checkout to the default branch first, and refuses when it has uncommitted changes.
@@ -158,10 +211,10 @@ The worktree you ran gsp in was removed. Continue in the main checkout: cd /work
 | --- | --- |
 | 0 | Done, or nothing to do |
 | 1 | At least one action failed; the output says which |
-| 2 | Invalid arguments, or a branch or remote that does not exist |
+| 2 | Invalid arguments, or a branch, remote or worktree that does not exist |
 | 3 | Sync paused on conflicts. Resolve them, stage the files, then run `gsp resume` |
 | 4 | Cancelled at a prompt |
-| 5 | `clean`, `post-pr`: some planned deletions were not applied; the output says why and what to run next (`next` in the JSON). For `post-pr`, 5 also means the branch you asked to finish isn't finished. `sync`, `agents`, `restore`: a confirmation was needed but nobody could answer; rerun with `--yes` |
+| 5 | `clean`, `post-pr`: some planned deletions were not applied; the output says why and what to run next (`next` in the JSON). For `post-pr`, 5 also means the branch you asked to finish isn't finished. `worktree remove`: the worktree was kept; the output says why. `agents --check`: it found outdated advice. `sync`, `agents`, `restore`: a confirmation was needed but nobody could answer; rerun with `--yes` |
 
 ## With coding agents
 
@@ -171,7 +224,9 @@ Codex, Claude Code, Cursor, GitHub Copilot and OpenCode can clean up the workspa
 gsp agents
 ```
 
-It asks which instruction files to update, `AGENTS.md` (Codex, Cursor, GitHub Copilot, OpenCode) and/or `CLAUDE.md` (Claude Code). Running it again updates its own block and leaves the rest of the file alone. To set up both files without a picker: `gsp agents AGENTS.md CLAUDE.md --non-interactive`.
+It asks which instruction files to update, `AGENTS.md` (Codex, Cursor, GitHub Copilot, OpenCode) and/or `CLAUDE.md` (Claude Code). Running it again updates its own block, or replaces a note an older gsp wrote, found without its markers, when it is word for word what gsp wrote (whitespace aside). Any other "Git cleanup" section is yours: gsp adds its block next to it, leaves it as it is, and tells you to review it. Text in code blocks is never touched. Each line keeps its own line ending. When `CLAUDE.md` is a link to an `AGENTS.md` that does not exist yet, gsp creates `AGENTS.md`. To set up both files without a picker: `gsp agents AGENTS.md CLAUDE.md --non-interactive`.
+
+Older notes and hand-written rules may still tell agents to use raw Git, or describe gsp as it was. `gsp agents --check` reads the repository's `AGENTS.md` and `CLAUDE.md`, or any file you name (`gsp agents --check ~/.claude/CLAUDE.md`), and prints each line that contradicts gsp with what to write instead: `git branch -D`, `git worktree remove`, `git push --delete`, `--merged`, the 1.x `gsp list --json` fields, "gsp has no worktree command", "`--yes` force-deletes", `gsp post-pr main` (the 1.x form), `gsp worktree remove --force` (now `--discard-changes`), an outdated gsp note, and a "Git cleanup" section to review. It changes nothing and exits with 5 when it found something. Raw Git in a clause that names gsp or warns against it (`Don't use git branch -D`) is left alone, and so are code blocks.
 
 Agents read the plan, then apply it when authorized:
 
@@ -180,6 +235,7 @@ gsp clean --json                  # the plan; exit code 5 when there is somethin
 gsp clean --json --yes            # apply it; the result, with a restore command
 gsp clean --json --remote --yes   # also delete the merged branches on origin
 gsp post-pr --json --yes          # after merging a pull request; "nextCwd" says where to cd
+gsp worktree remove /tmp/review --json   # remove a scratch worktree; exit code 5 when kept
 gsp restore --json                # list recoverable deletions
 gsp restore feature/x --non-interactive
 ```
@@ -196,7 +252,7 @@ Only those branches are considered. Each is deleted only if its tip is still tha
 
 ### JSON
 
-`--json` works with `clean` (and `sweep`, `list`), `post-pr`, `worktree list` and `restore` without branch names. It writes one JSON document to stdout; progress and warnings go to stderr. A fatal error is still one document, `{ "schema": 2, "error": { "message": "…", "code": "…" } }`, with `code` one of `usage`, `no-such-directory`, `unknown-branch`, `unknown-remote`, `push-url-differs`, `not-a-repository` or `failed`.
+`--json` works with `clean` (and `sweep`, `list`), `post-pr`, `worktree list`, `worktree remove`, `restore` without branch names, and `agents --check`. It writes one JSON document to stdout; progress and warnings go to stderr. A fatal error is still one document, `{ "schema": 2, "error": { "message": "…", "code": "…" } }`, with `code` one of `usage`, `no-such-directory`, `unknown-branch`, `unknown-remote`, `push-url-differs`, `not-a-repository`, `unknown-worktree`, `ambiguous-worktree` (a path and a branch naming different worktrees), `main-worktree` or `failed`.
 
 `gsp clean --json` writes a versioned document (`schema` is 2):
 
@@ -230,7 +286,7 @@ Only those branches are considered. Each is deleted only if its tip is still tha
   ],
   "worktreesPruned": [],
   "restore": null,
-  "summary": { "delete": 1, "deleted": 0, "failed": 0, "skipped": 0, "kept": 1, "needsForce": 0, "reasons": { "squash-merged": 1 } },
+  "summary": { "delete": 1, "deleted": 0, "failed": 0, "skipped": 0, "kept": 1, "needsForce": 0, "needsDiscardChanges": 0, "reasons": { "squash-merged": 1 } },
   "next": "gsp clean feature/squash --yes"
 }
 ```
@@ -242,22 +298,25 @@ Only those branches are considered. Each is deleted only if its tip is still tha
 | `branches[].action` | `delete`, `keep` (its work exists nowhere else) or `skip` (a rule or a missing flag stops it) |
 | `branches[].reason` | For `skip`: `protected`, `delete-merged-false`, `rebase-in-progress`, `bisect-in-progress`, `current-branch`, `main-worktree`, `locked-worktree`, `dirty-worktree`, `submodules`, `ignored-files`, `needs-force`, `tracked-by-kept-branch`, `not-selected`, and while applying `plan-changed`, `fetch-failed`, `worktree-changed`. With `--expect`, `plan-changed` also marks a branch whose tip is not the expected one, and one that no longer exists (`verdictReason` `analysis-failed`, `tip` the expected commit). Otherwise the same as `verdictReason` |
 | `branches[].verdictReason` | Dead: `empty`, `merged`, `rebase-merged`, `squash-merged`, `pr-merged`, `commits-merged`, `upstream-gone`. Alive: `default-branch`, `open-pr`, `open-pr-base` (remote branches only: an open pull request targets it; `evidence.match` is `base`), `unmerged-commits`, `no-base`, `analysis-failed` (`evidence` is `{ "method": "error", "message" }`) |
-| `branches[].worktree` | `null`, or `path`, `isMain`, `dirty`, `locked`, `prunable`, `inProgress` (`rebase`, `bisect` or `null`) and `ignoredFiles`: `{ count, sample }` for the ignored files removing it would delete (at most 10 in `sample`; a trailing `/` is a whole folder), and `submodules`: whether it holds submodules. Both are `null` when they were not looked for |
+| `branches[].worktree` | `null`, or `path`, `isMain`, `dirty`, `locked`, `prunable`, `inProgress` (`rebase`, `bisect` or `null`) and `ignoredFiles`: `{ count, sample }` for the ignored files removing it would delete (at most 10 in `sample`; a trailing `/` is a whole folder), and `submodules`: whether it holds submodules. Both are `null` when they were not looked for. `changedFiles`: `{ count, sample }` for the uncommitted changes and untracked files of a dirty one, else `null` |
 | `branches[].protected` | Why it is kept whatever its verdict, or `null`: `{ "by": "default-branch" }`, `{ "by": "pattern", "pattern" }`, `{ "by": "branch-config", "key" }` (`deleteMerged` is false) or `{ "by": "default-name" }` (`main`, `master`, `trunk` or `develop`, not named exactly) |
-| `branches[].hint` | The command that resolves a skip or applies a planned deletion; for `ignored-files`, it first says what to do by hand: `move what you need out of <path>, then: <command>`. `null` when there is nothing to do, and for `protected` (except `default-name`: `gsp clean <name>`) and `delete-merged-false` |
+| `branches[].hint` | The command that resolves a skip or applies a planned deletion; for `ignored-files`, it first says what to do by hand: `move what you need out of <path>, then: <command>`. For `dirty-worktree` and `rebase-in-progress`, the way that loses nothing comes first, then `, or, …:` and the command that deletes the changes with `--discard-changes`. `null` when there is nothing to do, and for `protected` (except `default-name`: `gsp clean <name>`) and `delete-merged-false` |
 | `branches[].result` | Apply mode, deleted branches only: `deleted`, `worktree-removed` (the worktree went, the branch did not: see `error`) or `failed` (nothing changed: see `error`) |
 | `remoteBranches` | With `--remote` only: the branches on that remote, each with `remote`, `name`, `tip`, `action`, `reason`, `verdict`, `verdictReason`, `evidence`, `protected`, `trackedBy` (the local branches whose upstream it is), `hint`, and once applied `result` (`deleted` or `failed`, with `error`). `name` is the branch on the remote; the command line names it `<remote>/<name>`. `reason` for `skip`: `protected` (including `{ "by": "branch-config" }` for the upstream of a local branch that keeps it), `tracked-by-kept-branch`, `remote-default-unknown` (every branch, see `checks.cleanedRemote`), `github-unavailable` (each branch that would be deleted), and while applying `plan-changed` (it moved since it was analysed, or a default branch changed) or `fetch-failed` |
 | `checks.cleanedRemote` | With `--remote` only: `{ remote, defaultBranch, github }`. `defaultBranch` is what the server names, or `null` (nothing there is deleted). `github` is `null` for a remote known not to be on GitHub, else `{ "used": true, repo, parent, source, openPullRequests }` (`repo`: as GitHub names it today; `parent`: the repository it is a fork of, or `null`; `source`: the root of its fork network when it is not the parent, or `null`) or `{ "used": false, reason, detail? }` with `reason` one of `disabled` (`--no-github`), `unknown-host` (`detail` is the host: gsp can't tell whether it is GitHub), `gh-missing`, `gh-unauthenticated`, `offline`, `timeout`, `gh-failed` or `too-many-open-prs` |
 | `summary.remote` | With `--remote` only: `{ remote, delete, deleted, failed, skipped, kept }` for its branches |
 | `worktreesPruned` | Registrations whose directory is gone: pruned (apply) or to prune (plan) |
 | `restore` | `gsp restore <names>` for the branches deleted by this run (`<remote>/<name>` for a remote one), or `null` |
-| `next` | The command to run next, the one the terminal output prints: it applies the planned deletions not carried out, or, when some changed while applying, plans again within the same branches and options (`--dry-run`) so you can review them. `null` when nothing is left, or when what is left needs `--force` or your action: each branch's `hint` says what to do |
+| `summary` | Counts: `delete`, `deleted`, `failed`, `skipped`, `kept`, `needsForce` (skipped as `needs-force`; before 2.0 it also counted `ignored-files`), `needsDiscardChanges` (skipped as `ignored-files`) and `reasons` (per verdict reason, of what was deleted or planned) |
+| `next` | The command to run next, the one the terminal output prints: it applies the planned deletions not carried out, or, when some changed while applying, plans again within the same branches and options (`--dry-run`) so you can review them. `null` when nothing is left, or when what is left needs `--force`, `--discard-changes` or your action: each branch's `hint` says what to do |
 
 Other JSON outputs:
 
 | Command | JSON value |
 | --- | --- |
-| `gsp worktree list --json` | `{ "schema": 2, "command": "worktree list", "worktrees": [...] }`, main worktree first. Each has `path`, `branch` (during a rebase or a bisect, the branch being worked on; `null` when detached), `head`, `isMain`, `locked`, `prunable`, `dirty`, `inProgress` (`rebase`, `bisect` or `null`), `ignoredFiles` (`{ count, sample }`, as in `gsp clean`; `null` for the main worktree and a prunable one), and what `gsp clean` would do with its branch: `verdict`, `verdictReason`, `action`, `reason` and `hint`, as in `gsp clean --json`. A detached linked worktree has `action: "keep"` and `reason: "detached"`; without a branch otherwise, all are `null`. Read-only, like a plan |
+| `gsp worktree list --json` | `{ "schema": 2, "command": "worktree list", "worktrees": [...] }`, main worktree first. Each has `path`, `branch` (during a rebase or a bisect, the branch being worked on; `null` when detached), `head`, `isMain`, `locked`, `prunable`, `dirty`, `inProgress` (`rebase`, `bisect` or `null`), `ignoredFiles` (`{ count, sample }`, as in `gsp clean`; `null` for the main worktree and a prunable one), `submodules` (whether it holds submodules; `null` for the main worktree, a prunable one, or one that could not be read), and what `gsp clean` would do with its branch: `verdict`, `verdictReason`, `action`, `reason` and `hint`, as in `gsp clean --json`. A detached linked worktree has `action: "keep"` and `reason: "detached"`; without a branch otherwise, all are `null`. Read-only, like a plan |
+| `gsp worktree remove --json` | `{ "schema": 2, "command": "worktree remove", "worktree": { "path", "branch" }, "removed", "reason", "ignoredFiles", "changedFiles", "hint", "next", "nextCwd" }`. `removed` is `false` when the worktree was kept, with `reason` one of `locked-worktree`, `rebase-in-progress`, `bisect-in-progress`, `dirty-worktree` (then `changedFiles` is `{ count, sample }`), `submodules` or `ignored-files` (with either, `ignoredFiles` is `{ count, sample }`: the ignored files `--discard-changes` would delete too), and a `hint` that names `--discard-changes` after the way that loses nothing. `next` is the command that resolves it without losing anything, or `null` when you have to act first (move files, check submodules). `--discard-changes` lifts every reason but `locked-worktree`: a lock stays until you run `git worktree unlock`. `nextCwd` is the main worktree when the command ran inside the worktree it removed, else `null`. The branch is never deleted |
+| `gsp agents --check --json` | `{ "schema": 2, "command": "agents --check", "files": [...], "findings": [...] }`. Each finding has `file`, `line`, `text`, `rule` (`outdated-note`, `raw-branch-delete`, `raw-worktree-remove`, `raw-push-delete`, `no-worktree-command`, `old-list-json`, `merged-flag`, `yes-forces`, `post-pr-default` or `worktree-remove-force`) and `suggestion` |
 | `gsp restore --json` | Array of recoverable deletion records, including `branch`, `sha`, `deletedAt`, `source`, and `remote` for a branch deleted on a remote |
 
 `gsp post-pr --json` writes the same `schema` 2, with `"command": "post-pr"`:
@@ -270,7 +329,7 @@ Other JSON outputs:
 | `clean` | The clean step that follows, as the `gsp clean --json` document, without the merged branch |
 | `nextCwd` | The main checkout, when the worktree gsp ran in was removed (another worktree when the main repository is bare, or `null` when there is none); otherwise `null` |
 | `restore` | `gsp restore <names>` for every branch this run deleted, or `null` |
-| `next` | The command to run next, the one the terminal output prints: in a plan, the one that applies it; once applied, when deletions were held back because things changed meanwhile, the one that plans again (`--dry-run`). `null` when nothing is left, or when only the merged branch's own `hint` can finish it. In a plan, exit code 5 whenever `next` is set |
+| `next` | The command to run next, the one the terminal output prints: in a plan, the one that applies it; once applied, when deletions were held back because things changed meanwhile, the one that plans again (`--dry-run`). When the merged branch is kept, the part of its `hint` that loses nothing and needs no approval (stash the changes, fetch, push, continue the rebase). `null` when nothing is left, or when the merged branch needs `--force`, `--discard-changes` or your action. In a plan, exit code 5 whenever `next` is set |
 
 `sync` rebases and force-pushes with a lease. Agents should run it only when authorized.
 
@@ -284,7 +343,7 @@ Every command runs the same CLI: the extension reads its `--json` plan, shows it
 | Preview Stale Branches (Dry Run) | The same plan, read-only |
 | Finish Merged Pull Request | Previews `gsp post-pr`, then finishes it. When it removes the worktree this window has open, offers to open the main checkout |
 | Show Worktrees | Every worktree with its state, and what Sweep Stale Branches would do with it; open, remove or prune one |
-| Remove Worktree / Prune Worktrees | `gsp worktree remove` / `gsp worktree prune`. A worktree with uncommitted changes or ignored files a build doesn't recreate is only removed after two confirmations |
+| Remove Worktree / Prune Worktrees | `gsp worktree remove` / `gsp worktree prune`. A worktree with uncommitted changes, submodules or ignored files a build doesn't recreate is only removed after two confirmations (`--discard-changes`). If it changed since the list was read, says why gsp kept it |
 | Sync Branch With Upstream / Resume Sync With Upstream | `gsp sync` / `gsp resume` |
 | Restore Deleted Branches | `gsp restore` |
 | Add Instructions for Coding Agents | `gsp agents` |

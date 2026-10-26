@@ -1,5 +1,6 @@
 import {
 	CLEAN_SCHEMA,
+	approvalFlags,
 	decideActions,
 	formatBranchLines,
 	formatSummary,
@@ -136,6 +137,8 @@ export function withPlannedOthers(scope: PostPrScope, others: readonly CleanBran
 export type DecideTargetOptions = {
 	/** `--force`: a branch that is not merged, or holds unpushed commits, is deleted too. */
 	readonly force: boolean;
+	/** `--discard-changes`: its worktree goes even with ignored files a build does not recreate. */
+	readonly discardChanges: boolean;
 	/** The branch the pull request was merged into. */
 	readonly into: string;
 	/** For a branch checked out in the main checkout: whether that checkout has uncommitted changes to tracked files. */
@@ -163,16 +166,20 @@ export function decideTarget(branch: PlannedBranch, options: DecideTargetOptions
 	const inMain = worktree?.isMain === true;
 	const [decided] = decideActions(
 		[{ ...branch, current: false, worktree: worktree && inMain ? { ...worktree, isMain: false, dirty: options.mainCheckoutDirty } : branch.worktree }],
-		{ force: options.force, named: new Set([branch.name]), defaultBranch: options.into }
+		{ force: options.force, discardChanges: options.discardChanges, named: new Set([branch.name]), defaultBranch: options.into }
 	);
 	const again = (...flags: string[]) => postPrCommand(options.scope, branch.name, '--yes', ...flags);
 	// The main checkout is switched, never removed.
 	const shown = inMain ? (decided.action === 'delete' || !decided.worktree ? null : { ...decided.worktree, isMain: true }) : decided.worktree;
 	if (decided.action === 'delete') {
-		return { ...decided, worktree: shown, hint: again(...(decided.needsForce ? ['--force'] : [])) };
+		return { ...decided, worktree: shown, hint: again(...approvalFlags([decided])) };
 	}
 	if (decided.reason === 'needs-force') {
 		return { ...decided, worktree: shown, hint: proveFirst(branch, options) ?? again('--force') };
+	}
+	if (inMain && decided.reason === 'dirty-worktree' && worktree) {
+		// The main checkout is only switched: its changes are put aside, never removed with it.
+		return { ...decided, worktree: shown, hint: `${cmd('git', '-C', worktree.path, 'stash', '--include-untracked')} && ${again()}` };
 	}
 	// Hints that rerun gsp clean on this branch rerun post-pr instead.
 	return { ...decided, worktree: shown, hint: decided.hint?.split(cmd('gsp', 'clean', branch.name, '--yes')).join(again()) ?? null };
@@ -290,17 +297,41 @@ export type PostPrDocument = PostPrReport & { readonly next: string | null };
  * The command to run next, or null when nothing is left that gsp can do on
  * its own: in a plan, the one that applies it, when applying would change
  * something; once applied, when some deletions were held back because
- * things changed meanwhile, the one that plans again to review them. A
- * merged branch that only `--force` deletes is left to its own hint.
+ * things changed meanwhile, the one that plans again to review them.
+ * Otherwise, for a merged branch that is kept, the step of its hint that
+ * loses nothing; one that only `--force` or `--discard-changes` deletes is
+ * left to its own hint.
  */
 export function postPrNextCommand(report: PostPrReport, scope: PostPrScope): string | null {
 	const target = hasNoLocalBranch(report.branch) ? null : report.branch;
-	if (report.mode === 'plan') {
-		return wouldChange(report)
-			? postPrCommand(withPlannedOthers(scope, report.clean.branches), report.branch?.name, '--yes', ...(target?.action === 'delete' && target.needsForce ? ['--force'] : []))
-			: null;
+	if (report.mode === 'plan' && wouldChange(report)) {
+		return postPrCommand(withPlannedOthers(scope, report.clean.branches), report.branch?.name, '--yes', ...(target?.action === 'delete' ? approvalFlags([target]) : []));
 	}
-	return heldBack(report) > 0 ? postPrCommand(scope, report.branch?.name, '--dry-run') : null;
+	if (report.mode === 'apply' && heldBack(report) > 0) {
+		return postPrCommand(scope, report.branch?.name, '--dry-run');
+	}
+	return target?.action === 'skip' ? safeStep(target) : null;
+}
+
+/**
+ * The part of a kept branch's hint that loses nothing and needs no approval
+ * (stash the changes, push, fetch, continue the rebase), or null when the
+ * hint needs `--force`, `--discard-changes` or a person's hand first.
+ */
+function safeStep(branch: CleanBranch): string | null {
+	const first = branch.hint?.split(', or, ')[0];
+	if (!first || /(^| )--(force|discard-changes)( |$)/.test(first)) {
+		return null;
+	}
+	switch (branch.reason) {
+		case 'dirty-worktree':
+		case 'rebase-in-progress':
+		case 'bisect-in-progress':
+		case 'needs-force':
+			return first;
+		default:
+			return null;
+	}
 }
 
 /** How many deletions were held back while applying, as things changed meanwhile. */
@@ -318,7 +349,7 @@ export function formatNextSteps(report: PostPrReport, next: string | null): stri
 	if (report.nextCwd) {
 		steps.push(`The worktree you ran gsp in was removed. Continue in the main checkout: cd ${quoteShellArg(report.nextCwd)}`);
 	}
-	if (next && report.mode === 'plan') {
+	if (next && report.mode === 'plan' && wouldChange(report)) {
 		steps.push(withCommand('Nothing was changed. To apply this plan, run', next));
 	}
 	const held = heldBack(report);
