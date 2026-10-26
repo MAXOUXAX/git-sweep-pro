@@ -26,6 +26,7 @@ gsp clean --yes         # delete every branch proven merged
 gsp clean feature/x --yes            # delete one branch, if proven merged
 gsp clean feature/x --yes --force    # delete a branch with unpushed work
 gsp clean --json        # the plan as JSON, for scripts and agents
+gsp clean --remote --yes             # also delete the merged branches on origin
 gsp worktree list       # every worktree, its state, and what clean would do
 gsp worktree prune      # forget worktree registrations whose directory is gone
 gsp worktree remove <path|branch>   # remove one linked worktree
