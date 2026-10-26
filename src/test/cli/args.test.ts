@@ -96,6 +96,16 @@ suite('cli args', () => {
 		assert.throws(() => parseArgs(['post-pr', 'a', 'b']), /Unexpected argument: b/);
 	});
 
+	test('--clean and --no-clean limit the other branches post-pr cleans, and nothing else takes them', () => {
+		assert.deepStrictEqual(parseArgs(['post-pr', '--clean', 'a', '--clean', 'b']).others, ['a', 'b']);
+		assert.deepStrictEqual(parseArgs(['post-pr', '--no-clean']).others, []);
+		assert.strictEqual(parseArgs(['post-pr']).others, undefined);
+		assert.throws(() => parseArgs(['post-pr', '--clean', 'a', '--no-clean']), /--clean cannot be combined with --no-clean/);
+		assert.throws(() => parseArgs(['post-pr', '--clean=-x']), /Invalid branch name: "-x"/);
+		assert.throws(() => parseArgs(['clean', '--clean', 'a']), /--clean can only be used with post-pr/);
+		assert.throws(() => parseArgs(['clean', '--no-clean']), /--no-clean can only be used with post-pr/);
+	});
+
 	test('sync --continue is an alias of resume', () => {
 		assert.strictEqual(parseArgs(['sync', '--continue']).command, 'resume');
 		assert.strictEqual(parseArgs(['resume']).command, 'resume');

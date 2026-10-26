@@ -4,7 +4,7 @@ import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
-import { CLEAN_SCHEMA, formatBranchLines, formatSummary, nextCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
+import { CLEAN_SCHEMA, formatBranchLines, formatSummary, nextCommand, withCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
 import { runCleanWorkflow, UnknownBranchError, type CleanOutcome } from '../core/clean-workflow';
 import { createGhRunner } from '../core/github-signal';
 import { formatNextSteps, formatPostPrLines, postPrNextCommand, type PostPrDocument, type PostPrReport } from '../core/post-pull-request-plan';
@@ -274,17 +274,13 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 	}
 }
 
-/** Longer than this, the command to apply a plan is printed on its own line. */
-const COMMAND_INLINE_WIDTH = 80;
-
 /** What to do next when the plan was not applied, or `undefined` when there is nothing to say. */
 function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | null): string | undefined {
 	if (outcome !== 'not-applied') {
 		return undefined;
 	}
 	if (next && report.summary.delete > 0 && !report.branches.some((branch) => branch.result !== undefined)) {
-		// It names every planned branch, so a long one goes on its own line, whole.
-		return next.length > COMMAND_INLINE_WIDTH ? `Nothing was changed. To apply this plan, run:\n${next}` : `Nothing was changed. To apply this plan, run: ${next}`;
+		return withCommand('Nothing was changed. To apply this plan, run', next);
 	}
 	const count = (test: (branch: CleanReport['branches'][number]) => boolean) => report.branches.filter(test).length;
 	const unpushed = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'dead');
@@ -366,6 +362,7 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 				branch: options.positionals[0],
 				into: options.into,
 				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+				...(options.others === undefined ? {} : { others: options.others }),
 				dryRun: options.mode === 'dryRun',
 				yes: options.yes,
 				force: options.mode === 'forceDelete',
@@ -404,6 +401,7 @@ function printPostPrReport(report: PostPrReport, outcome: CleanOutcome, options:
 					protectedPatterns: options.protect,
 					github: options.github,
 					fetch: options.fetch,
+					...(options.others === undefined ? {} : { others: options.others }),
 				});
 	if (options.json) {
 		const document: PostPrDocument = { ...report, next };

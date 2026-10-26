@@ -203,16 +203,16 @@ suite('post-pr plan', () => {
 
 		const planned = report({ mode: 'plan', branch: decideTarget(branch(), OPTIONS) });
 		assert.ok(hasPendingChanges(planned));
-		assert.deepStrictEqual(steps(planned), ['Nothing was changed. To apply this plan, run: gsp post-pr feature/x --yes']);
+		assert.deepStrictEqual(steps(planned), ['Nothing was changed. To apply this plan, run: gsp post-pr feature/x --no-clean --yes']);
 		assert.deepStrictEqual(steps(report({ mode: 'plan', defaultBranch: update({ updated: false, reason: 'not-applied' }) })), [
-			'Nothing was changed. To apply this plan, run: gsp post-pr --yes',
+			'Nothing was changed. To apply this plan, run: gsp post-pr --no-clean --yes',
 		]);
 		assert.ok(!hasPendingChanges(report({ mode: 'plan' })));
 	});
 
 	test('a plan gives a next command exactly when applying it would change something, and then exits 5', () => {
 		const remoteAhead = report({ mode: 'plan', defaultBranch: update({ updated: false, reason: 'up-to-date', remoteAhead: true }) });
-		assert.strictEqual(postPrNextCommand(remoteAhead, SCOPE), 'gsp post-pr --yes');
+		assert.strictEqual(postPrNextCommand(remoteAhead, SCOPE), 'gsp post-pr --no-clean --yes');
 		assert.ok(hasPendingChanges(remoteAhead));
 		// A kept merged branch is not finished: 5, though only its own hint can lift it.
 		const alive = branch({ verdict: 'alive', reason: 'unmerged-commits', evidence: { method: 'unique-commits', base: BASE, commits: 2 } });
@@ -226,7 +226,7 @@ suite('post-pr plan', () => {
 		const planned = report({ mode: 'plan', branch: decideTarget(branch(), OPTIONS) });
 		assert.strictEqual(
 			postPrNextCommand(planned, scope),
-			"gsp -C '/my repo' post-pr feature/x --into develop --protect 'release/*' --no-github --no-fetch --yes"
+			"gsp -C '/my repo' post-pr feature/x --into develop --protect 'release/*' --no-github --no-fetch --no-clean --yes"
 		);
 		const held = { ...decideTarget(branch(), OPTIONS), action: 'skip' as const, reason: 'plan-changed' as const };
 		const applied = report({ branch: held });
@@ -235,6 +235,21 @@ suite('post-pr plan', () => {
 			'1 not deleted, as things changed while applying. Review them with: gsp post-pr feature/x --dry-run',
 		]);
 		assert.strictEqual(postPrNextCommand(report({ branch: { name: 'feature/x', action: 'no-local-branch' } }), scope), null);
+	});
+
+	test('the command that applies a plan names every other branch it deletes, and goes on its own line when long', () => {
+		const others = [
+			decideTarget(branch({ name: 'feature/merged-first' }), OPTIONS),
+			decideTarget(branch({ name: 'feature/merged-second' }), OPTIONS),
+			{ ...decideTarget(branch({ name: 'feature/open' }), OPTIONS), action: 'keep' as const },
+		];
+		const planned = report({ mode: 'plan', branch: decideTarget(branch(), OPTIONS), clean: { ...clean, mode: 'plan', branches: others } });
+		const next = postPrNextCommand(planned, SCOPE);
+		assert.strictEqual(next, 'gsp post-pr feature/x --clean feature/merged-first --clean feature/merged-second --yes');
+		assert.deepStrictEqual(formatNextSteps(planned, next), [`Nothing was changed. To apply this plan, run:\n${next}`]);
+		// Limited by --clean, the plan of the review keeps the limit.
+		const applied = report({ branch: { ...decideTarget(branch(), OPTIONS), action: 'skip', reason: 'plan-changed' } });
+		assert.strictEqual(postPrNextCommand(applied, { ...SCOPE, others: ['feature/merged-first'] }), 'gsp post-pr feature/x --clean feature/merged-first --dry-run');
 	});
 
 });

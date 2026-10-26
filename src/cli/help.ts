@@ -147,11 +147,15 @@ Works from any worktree:
     worktree is clean, or as a ref when it is checked out nowhere.
 
 Without a terminal, gsp post-pr prints the plan and changes nothing unless
---yes is given.
+--yes is given. The command that applies the plan names every other branch
+it deletes with --clean, or says --no-clean when there is none.
 
 Options:
       --into <branch>  The branch the pull request was merged into (default:
                      the default branch)
+      --clean <branch>
+                     Clean only these other branches (repeatable)
+      --no-clean     Clean no other branch
   -n, --dry-run      Print the plan and change nothing (no fetch, no switch)
   -y, --yes          Apply without asking
   -f, --force        Delete <branch> even when it is not proven merged

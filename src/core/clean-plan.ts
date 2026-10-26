@@ -339,6 +339,17 @@ export type CleanScope = {
 	readonly fetch: boolean;
 };
 
+/** Longer than this, a suggested command is printed on its own line. */
+const COMMAND_INLINE_WIDTH = 80;
+
+/**
+ * `text`, then `command`: on the same line when short, otherwise on its own
+ * line, whole, since it names every planned branch.
+ */
+export function withCommand(text: string, command: string): string {
+	return command.length > COMMAND_INLINE_WIDTH ? `${text}:\n${command}` : `${text}: ${command}`;
+}
+
 /**
  * The command that applies a plan without ever going beyond it: every planned
  * branch by name, however many, then every option that narrows it. Never the

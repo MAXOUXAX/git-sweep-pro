@@ -113,6 +113,7 @@ gsp post-pr --dry-run             # preview, change nothing
 - When the branch is checked out in the main checkout, gsp switches that checkout to the default branch first, and refuses when it has uncommitted changes.
 - The default branch is fast-forwarded with `git merge --ff-only` where it is checked out, when that worktree is clean, or moved as a ref when it is checked out nowhere. A dirty checkout is reported, never an error.
 - `--into <branch>` names the branch the pull request was merged into, when it is not the default branch.
+- `--clean <branch>` (repeatable) limits the other branches it cleans to those named; `--no-clean` cleans none. The command that applies a plan uses them to name every other branch the plan deletes, or `--no-clean` when there is none, so it never deletes a branch that became deletable since.
 
 ```text
 deleted feature/x  squash-merged into origin/main, removed worktree /work/wt-x
