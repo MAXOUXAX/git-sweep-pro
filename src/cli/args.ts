@@ -48,6 +48,8 @@ export type CliOptions = {
 	/** `--remote[=<name>]`: also clean the branches of that remote; empty for the default (origin). */
 	readonly remote: string | undefined;
 	readonly json: boolean;
+	/** `agents --check`: report advice in instruction files that contradicts gsp, change nothing. */
+	readonly check: boolean;
 	readonly verbose: boolean;
 	/** Internal: drive the UI over NDJSON on stdio (used by the VS Code extension). */
 	readonly rpc: boolean;
@@ -82,6 +84,7 @@ const OPTIONS = {
 	'no-confirm': { type: 'boolean', default: false },
 	'no-github': { type: 'boolean', default: false },
 	json: { type: 'boolean', default: false },
+	check: { type: 'boolean', default: false },
 	cwd: { type: 'string', short: 'C' },
 	into: { type: 'string' },
 	verbose: { type: 'boolean', short: 'v', default: false },
@@ -191,9 +194,14 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 	const worktree = command === 'worktree' ? parseWorktreeArgs(args) : undefined;
 	const jsonAllowed =
 		command === 'clean' ||
-		command === 'post-pr' || (worktree !== undefined && worktree.subcommand !== 'prune') || (command === 'restore' && args.length === 0);
+		command === 'post-pr' || (worktree !== undefined && worktree.subcommand !== 'prune') ||
+		(command === 'restore' && args.length === 0) ||
+		(command === 'agents' && values.check);
 	if (values.json && !jsonAllowed) {
-		throw new UsageError('--json requires clean, post-pr, worktree list or remove, or restore without branch arguments.');
+		throw new UsageError('--json requires clean, post-pr, worktree list or remove, restore without branch arguments, or agents --check.');
+	}
+	if (values.check && command !== 'agents') {
+		throw new UsageError('--check can only be used with agents.');
 	}
 	if (values.into !== undefined && command !== 'post-pr') {
 		throw new UsageError('--into can only be used with post-pr.');
@@ -225,7 +233,8 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 	if (invalidBranch !== undefined) {
 		throw new UsageError(`Invalid branch name: "${invalidBranch}".`);
 	}
-	const unknownFile = command === 'agents' ? args.find((file) => !isAgentFile(file)) : undefined;
+	// --check reads any file; writing is limited to the instruction files gsp knows.
+	const unknownFile = command === 'agents' && !values.check ? args.find((file) => !isAgentFile(file)) : undefined;
 	if (unknownFile !== undefined) {
 		throw new UsageError(`Unknown instruction file: ${unknownFile}. Use ${AGENT_FILE_NAMES.join(' or ')}.`);
 	}
@@ -247,6 +256,7 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 		protect: values.protect,
 		remote: values.remote,
 		json: values.json,
+		check: values.check,
 		verbose: values.verbose,
 		rpc: values.rpc,
 	};
@@ -271,6 +281,7 @@ function helpOptions(topic: CommandName | undefined): CliOptions {
 		protect: [],
 		remote: undefined,
 		json: false,
+		check: false,
 		verbose: false,
 		rpc: false,
 	};

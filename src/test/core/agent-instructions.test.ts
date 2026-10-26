@@ -2,10 +2,52 @@ import * as assert from 'assert';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { AGENT_BLOCK, runAgentsWorkflow, upsertAgentBlock } from '../../core/agent-instructions';
+import { AGENT_BLOCK, checkAgentAdvice, runAgentsWorkflow, upsertAgentBlock } from '../../core/agent-instructions';
 import { createFakeContext } from '../fake-context';
 
+/** The note `gsp agents` writes. Any change to it is a change to what every agent reads: review it here. */
+const NOTE = `<!-- BEGIN:git-sweep-pro -->
+## Git cleanup
+
+Use \`gsp\` (git-sweep-pro) for Git cleanup. Don't use \`git branch -D\`, \`git worktree remove\` or \`git push --delete\`: gsp checks the work is safe and records deletions for \`gsp restore\`.
+
+- After merging a pull request: \`gsp post-pr --yes\` from the branch's worktree, or \`gsp post-pr <branch> --yes\` from the main checkout. If it removed the worktree you were in, continue in \`nextCwd\` (with \`--json\`) or the directory it prints.
+- Clean the repository: \`gsp clean --json\` to read the plan, then \`gsp clean --yes\` to apply it.
+- Delete one branch: \`gsp clean <branch> --yes\`. Add \`--force\` only when the person agreed to lose its unpushed work.
+- Remove a scratch or review worktree: \`gsp worktree remove <path>\`. Add \`--force\` when it holds uncommitted work you can throw away.
+- List worktrees: \`gsp worktree list --json\`.
+- Remote branches: \`gsp clean --remote\` shows the plan; add \`--yes\` to apply it.
+- Undo a deletion: \`gsp restore <branch>\`.
+
+Without a terminal, gsp changes nothing unless \`--yes\` is passed; in a pseudo-terminal, add \`--non-interactive\`. \`--yes\` never forces: it deletes only branches whose work exists elsewhere. With \`--json\`, stdout is one document: each skipped branch has a \`reason\` and a \`hint\`, and \`next\` is the command to run next. Run \`gsp sync\` (rebase, then force-push with a lease) only when asked.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Done, or nothing to do |
+| 1 | Something failed: read the output |
+| 2 | Invalid arguments, or no such branch, remote or worktree |
+| 3 | \`gsp sync\` paused on conflicts: resolve and stage them, then \`gsp resume\` |
+| 4 | Cancelled at a prompt |
+| 5 | Not everything was done: more needs approval (\`--yes\`, \`--force\`), or post-pr or worktree remove kept something. Read \`next\` or the hint |
+
+Run \`gsp help\` for every command, and \`gsp agents --check\` to find outdated advice in these files.
+<!-- END:git-sweep-pro -->`;
+
+/** The note gsp 1.x wrote, and that people copied without its markers. */
+const OLD_NOTE = [
+	'## Git cleanup',
+	'',
+	'Use the `gsp` CLI to clean up the Git workspace. Run `gsp help` to see its commands.',
+	'',
+	'Run `gsp list --json` to inspect candidates before deleting. It returns `stale`, `protected`, `checkedOut`, `merged` and `worktrees`.',
+].join('\n');
+
 suite('agent instructions', () => {
+	test('the note matches its snapshot and stays short', () => {
+		assert.strictEqual(AGENT_BLOCK, NOTE);
+		assert.ok(AGENT_BLOCK.split('\n').length <= 40);
+	});
+
 	suite('upsertAgentBlock', () => {
 		test('fills an empty file with the block', () => {
 			assert.strictEqual(upsertAgentBlock(''), `${AGENT_BLOCK}\n`);
@@ -19,6 +61,22 @@ suite('agent instructions', () => {
 		test('replaces an outdated block in place and leaves the rest alone', () => {
 			const outdated = '# Rules\n\n<!-- BEGIN:git-sweep-pro -->\nold\n<!-- END:git-sweep-pro -->\n\n## More\n';
 			assert.strictEqual(upsertAgentBlock(outdated), `# Rules\n\n${AGENT_BLOCK}\n\n## More\n`);
+		});
+
+		test('replaces an older note without markers in place, and keeps the text after it', () => {
+			const content = `# Rules\n\n${OLD_NOTE}\n\nMy own paragraph about cleanup.\n\n## More\n`;
+			const once = upsertAgentBlock(content);
+			assert.strictEqual(once, `# Rules\n\n${AGENT_BLOCK}\n\nMy own paragraph about cleanup.\n\n## More\n`);
+			assert.strictEqual(upsertAgentBlock(once), once);
+		});
+
+		test('replaces an older note at the end of a file', () => {
+			assert.strictEqual(upsertAgentBlock(`# Rules\n\n${OLD_NOTE}\n`), `# Rules\n\n${AGENT_BLOCK}\n`);
+		});
+
+		test('leaves a "Git cleanup" section that does not mention gsp alone', () => {
+			const content = '## Git cleanup\n\nDelete branches by hand.\n';
+			assert.strictEqual(upsertAgentBlock(content), `${content}\n${AGENT_BLOCK}\n`);
 		});
 
 		test('refuses unbalanced markers instead of guessing which span to replace', () => {
@@ -110,6 +168,16 @@ suite('agent instructions', () => {
 			assert.deepStrictEqual(fake.infoMessages, ['No files selected.']);
 		});
 
+		test('reports an older note it replaced', async () => {
+			fs.writeFileSync(path.join(root, 'CLAUDE.md'), `${OLD_NOTE}\n`);
+			const fake = createFakeContext({ root });
+
+			assert.strictEqual(await runAgentsWorkflow(fake.context, ['CLAUDE.md']), 'ok');
+
+			assert.strictEqual(read('CLAUDE.md'), `${AGENT_BLOCK}\n`);
+			assert.deepStrictEqual(fake.infoMessages, ['Replaced the older gsp note in CLAUDE.md with the current instructions.']);
+		});
+
 		test('follows a symbolic link within the repository', async () => {
 			fs.writeFileSync(path.join(root, 'AGENTS.md'), '# Rules\n');
 			fs.symlinkSync('AGENTS.md', path.join(root, 'CLAUDE.md'));
@@ -168,6 +236,67 @@ suite('agent instructions', () => {
 
 			assert.strictEqual(fake.errorMessages.length, 1);
 			assert.match(fake.errorMessages[0], /^Unable to write AGENTS\.md: /);
+		});
+	});
+
+	suite('checkAgentAdvice', () => {
+		const rules = (content: string, writable = true) => checkAgentAdvice('AGENTS.md', content, writable).map((finding) => [finding.line, finding.rule]);
+
+		test('finds nothing in the current note', () => {
+			assert.deepStrictEqual(rules(`# Rules\n\n${AGENT_BLOCK}\n`), []);
+		});
+
+		test('reports an outdated note once, by its heading, and suggests what can rewrite it', () => {
+			const marked = `<!-- BEGIN:git-sweep-pro -->\n${OLD_NOTE}\n<!-- END:git-sweep-pro -->\n`;
+			assert.deepStrictEqual(rules(marked), [[2, 'outdated-note']]);
+			assert.deepStrictEqual(rules(`# Rules\n\n${OLD_NOTE}\n`), [[3, 'outdated-note']]);
+			assert.match(checkAgentAdvice('AGENTS.md', OLD_NOTE, true)[0].suggestion, /gsp agents AGENTS\.md/);
+			assert.match(checkAgentAdvice('/home/me/AGENTS.md', OLD_NOTE, false)[0].suggestion, /README/);
+		});
+
+		test('reports raw Git that gsp replaces, with the gsp command to use', () => {
+			const content = [
+				'Once merged, run `git branch -D feature/x`.',
+				'Remove review worktrees with `git worktree remove --force /tmp/review`.',
+				'Then `git push origin --delete feature/x`.',
+				'Or `git push origin :feature/x`.',
+				'List merged branches with `git branch --merged`.',
+			].join('\n');
+			assert.deepStrictEqual(rules(content), [
+				[1, 'raw-branch-delete'],
+				[2, 'raw-worktree-remove'],
+				[3, 'raw-push-delete'],
+				[4, 'raw-push-delete'],
+				[5, 'merged-flag'],
+			]);
+			assert.match(checkAgentAdvice('AGENTS.md', content, true)[1].suggestion, /gsp worktree remove <path>/);
+		});
+
+		test('reports stale beliefs about gsp', () => {
+			const content = [
+				'gsp has no worktree command, so use git.',
+				'`gsp list --json` returns `stale` and `checkedOut`.',
+				'`gsp sweep --yes` force-deletes unmerged branches.',
+			].join('\n');
+			assert.deepStrictEqual(rules(content), [
+				[1, 'no-worktree-command'],
+				[2, 'old-list-json'],
+				[3, 'yes-forces'],
+			]);
+		});
+
+		test('leaves alone lines that warn against raw Git or describe what gsp does', () => {
+			const content = [
+				"Don't use `git branch -D`: use gsp.",
+				'Never run `git worktree remove` on a dirty worktree.',
+				'gsp falls back to `git branch -D` once the tip is checked.',
+				'`gsp restore` cannot bring back ignored files. A worktree with them is kept.',
+			].join('\n');
+			assert.deepStrictEqual(rules(content), []);
+		});
+
+		test('reads Windows line endings', () => {
+			assert.deepStrictEqual(rules(`${AGENT_BLOCK}\r\ngit worktree remove x\r\n`.replace(/(?<!\r)\n/g, '\r\n')), [[27, 'raw-worktree-remove']]);
 		});
 	});
 });

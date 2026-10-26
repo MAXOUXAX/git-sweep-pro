@@ -25,24 +25,71 @@ const END_MARKER = '<!-- END:git-sweep-pro -->';
 export const AGENT_BLOCK = `${START_MARKER}
 ## Git cleanup
 
-Use the \`gsp\` CLI to clean up the Git workspace. Run \`gsp help\` to see its commands.
+Use \`gsp\` (git-sweep-pro) for Git cleanup. Don't use \`git branch -D\`, \`git worktree remove\` or \`git push --delete\`: gsp checks the work is safe and records deletions for \`gsp restore\`.
 
-Run \`gsp list --json\` to inspect candidates before deleting. It returns \`stale\`, \`protected\`, \`checkedOut\`, \`merged\` and \`worktrees\`; only stale branches outside worktrees are pre-selected. Add \`--no-fetch\` to inspect local refs without fetching.
+- After merging a pull request: \`gsp post-pr --yes\` from the branch's worktree, or \`gsp post-pr <branch> --yes\` from the main checkout. If it removed the worktree you were in, continue in \`nextCwd\` (with \`--json\`) or the directory it prints.
+- Clean the repository: \`gsp clean --json\` to read the plan, then \`gsp clean --yes\` to apply it.
+- Delete one branch: \`gsp clean <branch> --yes\`. Add \`--force\` only when the person agreed to lose its unpushed work.
+- Remove a scratch or review worktree: \`gsp worktree remove <path>\`. Add \`--force\` when it holds uncommitted work you can throw away.
+- List worktrees: \`gsp worktree list --json\`.
+- Remote branches: \`gsp clean --remote\` shows the plan; add \`--yes\` to apply it.
+- Undo a deletion: \`gsp restore <branch>\`.
 
-Use \`--non-interactive\` for agent commands, including in a pseudo-terminal. Confirmations are refused unless \`--yes\` is passed. Only use \`gsp sweep --non-interactive --yes\` when deletion is authorized. \`--yes\` accepts every confirmation, including force-deleting branches Git considers unmerged.
+Without a terminal, gsp changes nothing unless \`--yes\` is passed; in a pseudo-terminal, add \`--non-interactive\`. \`--yes\` never forces: it deletes only branches whose work exists elsewhere. With \`--json\`, stdout is one document: each skipped branch has a \`reason\` and a \`hint\`, and \`next\` is the command to run next. Run \`gsp sync\` (rebase, then force-push with a lease) only when asked.
 
-Use \`gsp worktree list --json\` to inspect the worktrees and their states; \`gsp worktree remove <path|branch> --non-interactive\` removes one linked worktree (unlock a locked one first), and \`gsp worktree prune\` forgets registrations whose directory is gone. Use \`gsp restore --json\` to list recoverable deletions and \`gsp restore <branch> --non-interactive\` to restore one. \`--json\` is supported only for listing candidates, worktrees, or recoverable deletions. Parse stdout as JSON only on exit 0; diagnostics go to stderr.
+| Exit | Meaning |
+| --- | --- |
+| 0 | Done, or nothing to do |
+| 1 | Something failed: read the output |
+| 2 | Invalid arguments, or no such branch, remote or worktree |
+| 3 | \`gsp sync\` paused on conflicts: resolve and stage them, then \`gsp resume\` |
+| 4 | Cancelled at a prompt |
+| 5 | Not everything was done: more needs approval (\`--yes\`, \`--force\`), or post-pr or worktree remove kept something. Read \`next\` or the hint |
 
-Exit codes: 0 completed or nothing to do, 1 failed, 2 invalid arguments, 3 sync paused on conflicts, 4 cancelled with \`--non-interactive\`. On exit 3, resolve the conflicts, stage the resolved files, then run \`gsp resume --non-interactive\`. \`sync\` rebases and force-pushes with a lease; \`post-pr\` deletes a merged branch and its worktree, updates the default branch and cleans. Run these only when authorized.
+Run \`gsp help\` for every command, and \`gsp agents --check\` to find outdated advice in these files.
 ${END_MARKER}`;
 
-/** What adding the block did to a file. */
-export type AgentFileChange = 'created' | 'added' | 'updated' | 'unchanged';
+/** What adding the block did to a file: `replaced` swaps an older, unmarked gsp note for it. */
+export type AgentFileChange = 'created' | 'added' | 'updated' | 'replaced' | 'unchanged';
+
+const GSP_MENTION = /\bgsp\b|git-sweep-pro/;
+
+/**
+ * The lines `[start, end)` of an older gsp note without markers: a
+ * "Git cleanup" heading followed by paragraphs that all mention gsp, as
+ * every note before 2.0 was, whether gsp wrote it or someone copied it. Stops
+ * at the first paragraph that doesn't, so a person's own text stays.
+ */
+function findUnmarkedNote(lines: readonly string[]): [number, number] | undefined {
+	const start = lines.findIndex((line) => /^#{1,6}\s+Git cleanup\s*$/i.test(line));
+	if (start < 0) {
+		return undefined;
+	}
+	let end = start + 1;
+	let cursor = start + 1;
+	while (cursor < lines.length) {
+		while (cursor < lines.length && lines[cursor].trim() === '') {
+			cursor++;
+		}
+		let paragraphEnd = cursor;
+		while (paragraphEnd < lines.length && lines[paragraphEnd].trim() !== '' && !/^#{1,6}\s/.test(lines[paragraphEnd])) {
+			paragraphEnd++;
+		}
+		const paragraph = lines.slice(cursor, paragraphEnd);
+		if (paragraph.length === 0 || !paragraph.every((line) => GSP_MENTION.test(line))) {
+			break;
+		}
+		end = paragraphEnd;
+		cursor = paragraphEnd;
+	}
+	return end > start + 1 ? [start, end] : undefined;
+}
 
 /**
  * `content` with the gsp block: replaced in place when the file already has
- * one, appended after a blank line otherwise. Keeps the file's line endings,
- * and throws rather than guess when the markers are unbalanced.
+ * one, or an older note without markers; appended after a blank line
+ * otherwise. Keeps the file's line endings, and throws rather than guess
+ * when the markers are unbalanced.
  */
 export function upsertAgentBlock(content: string): string {
 	const eol = content.includes('\r\n') ? '\r\n' : '\n';
@@ -50,6 +97,11 @@ export function upsertAgentBlock(content: string): string {
 	const starts = content.split(START_MARKER).length - 1;
 	const ends = content.split(END_MARKER).length - 1;
 	if (starts === 0 && ends === 0) {
+		const lines = content.split(eol);
+		const unmarked = findUnmarkedNote(lines);
+		if (unmarked) {
+			return [...lines.slice(0, unmarked[0]), ...block.split(eol), ...lines.slice(unmarked[1])].join(eol);
+		}
 		const separator = content.length === 0 ? '' : content.endsWith(eol) ? eol : eol + eol;
 		return content + separator + block + eol;
 	}
@@ -61,6 +113,118 @@ export function upsertAgentBlock(content: string): string {
 		throw new Error('its gsp markers are unbalanced. Remove them, then run gsp agents again.');
 	}
 	return content.slice(0, start) + block + content.slice(end + END_MARKER.length);
+}
+
+/** Advice that contradicts gsp, found by {@link checkAgentAdvice}. */
+export type AdviceRule = 'outdated-note' | 'raw-branch-delete' | 'raw-worktree-remove' | 'raw-push-delete' | 'no-worktree-command' | 'old-list-json' | 'merged-flag' | 'yes-forces';
+
+export type AdviceFinding = {
+	/** As given on the command line, or the instruction file's name. */
+	readonly file: string;
+	/** 1-based. */
+	readonly line: number;
+	readonly text: string;
+	readonly rule: AdviceRule;
+	readonly suggestion: string;
+};
+
+/** A line that warns against a command rather than recommending it. */
+const PROHIBITION = /\b(don't|do not|never|avoid|instead of|rather than)\b/i;
+
+const ADVICE_RULES: readonly { readonly rule: AdviceRule; readonly pattern: RegExp; /** Recommends a raw Git command: only flagged on a line that neither names gsp nor warns against it. */
+	readonly rawGit?: boolean; readonly suggestion: string }[] = [
+	{
+		rule: 'raw-branch-delete',
+		pattern: /\bgit branch\b[^\n`]*\s(-D|-d|--delete)\b/,
+		rawGit: true,
+		suggestion: '`gsp clean <branch> --yes`; add `--force` only when the person agreed to lose unpushed work.',
+	},
+	{
+		rule: 'raw-worktree-remove',
+		pattern: /\bgit worktree remove\b/,
+		rawGit: true,
+		suggestion: '`gsp worktree remove <path>`; add `--force` when it holds uncommitted work you can throw away.',
+	},
+	{
+		rule: 'raw-push-delete',
+		pattern: /\bgit push\b[^\n`]*(--delete\b|\s-d\s|\s:[\w./-]+)/,
+		rawGit: true,
+		suggestion: '`gsp clean --remote` to read the plan, then `gsp clean --remote --yes`.',
+	},
+	{
+		rule: 'no-worktree-command',
+		pattern: /\bgsp\b[^.\n]{0,30}\b(has no|doesn't have|does not have|lacks|cannot|can't|can not|doesn't support|does not support)\b[^.\n]{0,30}\bworktrees?\b/i,
+		suggestion: 'gsp has worktree commands: `gsp worktree list --json`, `gsp worktree remove <path>`, `gsp worktree prune`.',
+	},
+	{
+		rule: 'old-list-json',
+		// The fields of the 1.x listing.
+		pattern: /`(checkedOut|stale)`/,
+		suggestion: '`gsp clean --json`: each branch has an `action`, a `reason` and a `hint`, and `next` is the command to run next.',
+	},
+	{
+		rule: 'merged-flag',
+		pattern: /--merged\b/,
+		suggestion: '`gsp clean --json`: gsp also finds squash- and rebase-merged branches, which `--merged` misses.',
+	},
+	{
+		rule: 'yes-forces',
+		pattern: /--yes\b[^\n]*force[- ]delet|force[- ]delet[^\n]*--yes\b/i,
+		suggestion: '`--yes` never forces: it deletes only branches whose work exists elsewhere. Branches with unpushed work need `--force`.',
+	},
+];
+
+/**
+ * Lines of `content` that tell an agent to do what gsp does with raw Git,
+ * or describe gsp as it no longer is. The current gsp block is skipped; an
+ * outdated one, marked or not, is reported once, as `gsp agents` replaces it.
+ * `writable` tells whether `gsp agents` can rewrite `file` (an instruction
+ * file at the repository's root), to suggest it. Read-only and heuristic.
+ */
+export function checkAgentAdvice(file: string, content: string, writable: boolean): AdviceFinding[] {
+	const lines = content.split(/\r?\n/);
+	const findings: AdviceFinding[] = [];
+	const skipped = new Set<number>();
+	const outdated = (from: number, to: number) => {
+		// Shown by its heading rather than its marker.
+		const shown = lines[from] === START_MARKER && from + 1 < to ? from + 1 : from;
+		findings.push({ file, line: shown + 1, text: lines[shown], rule: 'outdated-note', suggestion: writable
+				? `Run \`gsp agents ${path.basename(file)}\` to replace this gsp note with the current one.`
+				: 'Replace this gsp note with the current one, from the "For coding agents" section of the gsp README.',
+		});
+		for (let index = from; index < to; index++) {
+			skipped.add(index);
+		}
+	};
+	const start = lines.indexOf(START_MARKER);
+	const end = lines.indexOf(END_MARKER);
+	if (start >= 0 && end > start) {
+		const current = lines.slice(start, end + 1).join('\n') === AGENT_BLOCK;
+		if (current) {
+			for (let index = start; index <= end; index++) {
+				skipped.add(index);
+			}
+		} else {
+			outdated(start, end + 1);
+		}
+	} else {
+		const unmarked = findUnmarkedNote(lines);
+		if (unmarked) {
+			outdated(...unmarked);
+		}
+	}
+	lines.forEach((text, index) => {
+		if (skipped.has(index)) {
+			return;
+		}
+		// A line that names gsp describes it, or warns against raw Git: not the advice this looks for.
+		const rawAdvice = !PROHIBITION.test(text) && !GSP_MENTION.test(text);
+		const rule = ADVICE_RULES.find((candidate) => candidate.pattern.test(text) && (!candidate.rawGit || rawAdvice));
+		if (rule) {
+			findings.push({ file, line: index + 1, text, rule: rule.rule, suggestion: rule.suggestion });
+		}
+	});
+	return findings.sort((a, b) => a.line - b.line);
 }
 
 /**
@@ -93,13 +257,20 @@ export function writeAgentBlock(root: string, file: AgentFile): AgentFileChange 
 		return 'unchanged';
 	}
 	fs.writeFileSync(target ?? path.join(root, file), updated);
-	return content === undefined ? 'created' : content.includes(START_MARKER) ? 'updated' : 'added';
+	if (content === undefined) {
+		return 'created';
+	}
+	if (content.includes(START_MARKER)) {
+		return 'updated';
+	}
+	return findUnmarkedNote(content.split(/\r?\n/)) ? 'replaced' : 'added';
 }
 
 const CHANGE_MESSAGES: Record<AgentFileChange, (file: AgentFile) => string> = {
 	created: (file) => `Created ${file} with the gsp instructions.`,
 	added: (file) => `Added the gsp instructions to ${file}.`,
 	updated: (file) => `Updated the gsp instructions in ${file}.`,
+	replaced: (file) => `Replaced the older gsp note in ${file} with the current instructions.`,
 	unchanged: (file) => `${file} already has the gsp instructions.`,
 };
 

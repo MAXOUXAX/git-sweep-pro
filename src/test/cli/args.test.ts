@@ -95,7 +95,7 @@ suite('cli args', () => {
 			['restore', 'feature/x'],
 			['agents'],
 		]) {
-			assert.throws(() => parseArgs([...args, '--json']), /--json requires clean, post-pr, worktree list or remove, or restore without branch arguments/);
+			assert.throws(() => parseArgs([...args, '--json']), /--json requires clean, post-pr, worktree list or remove, restore without branch arguments, or agents --check/);
 		}
 	});
 
@@ -141,6 +141,9 @@ suite('cli args', () => {
 		assert.deepStrictEqual(parseArgs(['agents']).positionals, []);
 		assert.deepStrictEqual(parseArgs(['agents', 'AGENTS.md', 'CLAUDE.md']).positionals, ['AGENTS.md', 'CLAUDE.md']);
 		assert.throws(() => parseArgs(['agents', 'README.md']), /Unknown instruction file: README\.md\. Use AGENTS\.md or CLAUDE\.md\./);
+		assert.deepStrictEqual(parseArgs(['agents', '--check', 'docs/README.md']).positionals, ['docs/README.md'], '--check reads any file');
+		assert.strictEqual(parseArgs(['agents', '--check', '--json']).json, true);
+		assert.throws(() => parseArgs(['clean', '--check']), /--check can only be used with agents\./);
 	});
 
 	test('restore takes any number of branches', () => {

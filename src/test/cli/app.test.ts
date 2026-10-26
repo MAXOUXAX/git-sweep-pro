@@ -319,8 +319,46 @@ suite('cli app (real git)', function () {
 		fs.mkdirSync(path.join(fx.repo, 'src'));
 		const io = createFakeIo(path.join(fx.repo, 'src'));
 		assert.strictEqual(await runCli(['agents', 'CLAUDE.md'], io), EXIT.ok);
-		assert.ok(fs.readFileSync(path.join(fx.repo, 'CLAUDE.md'), 'utf8').includes('Run `gsp help` to see its commands.'));
+		assert.ok(fs.readFileSync(path.join(fx.repo, 'CLAUDE.md'), 'utf8').includes('Run `gsp help` for every command'));
 		assert.deepStrictEqual(io.out, ['Created CLAUDE.md with the gsp instructions.\n']);
+	});
+
+	test('agents --check reports advice that contradicts gsp, changes nothing, and exits with 5', async () => {
+		const content = '# Rules\n\nClean up with `git worktree remove --force <path>`.\n';
+		fs.writeFileSync(path.join(fx.repo, 'AGENTS.md'), content);
+		fs.mkdirSync(path.join(fx.repo, 'src'));
+
+		const io = createFakeIo(path.join(fx.repo, 'src'));
+		assert.strictEqual(await runCli(['agents', '--check'], io), EXIT.notApplied);
+		assert.strictEqual(io.out.join(''), 'AGENTS.md:3: Clean up with `git worktree remove --force <path>`.\n  → `gsp worktree remove <path>`; add `--force` when it holds uncommitted work you can throw away.\n');
+		assert.strictEqual(fs.readFileSync(path.join(fx.repo, 'AGENTS.md'), 'utf8'), content);
+
+		const json = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['agents', '--check', '--json'], json), EXIT.notApplied);
+		const document = JSON.parse(json.out.join(''));
+		assert.deepStrictEqual([document.command, document.files, document.findings.map((finding: { rule: string }) => finding.rule)], [
+			'agents --check',
+			['AGENTS.md'],
+			['raw-worktree-remove'],
+		]);
+
+		assert.strictEqual(await runCli(['agents', 'AGENTS.md'], createFakeIo(fx.repo)), EXIT.ok);
+		fs.writeFileSync(path.join(fx.repo, 'AGENTS.md'), fs.readFileSync(path.join(fx.repo, 'AGENTS.md'), 'utf8').replace('Clean up with `git worktree remove --force <path>`.\n', ''));
+		const clean = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['agents', '--check'], clean), EXIT.ok);
+		assert.strictEqual(clean.err.join(''), 'No outdated gsp advice in AGENTS.md.\n');
+	});
+
+	test('agents --check reads any file named, relative to where it runs, and refuses a missing one', async () => {
+		const notes = path.join(fx.dir, 'notes.md');
+		fs.writeFileSync(notes, 'gsp has no worktree command.\n');
+		const io = createFakeIo(fx.dir);
+		assert.strictEqual(await runCli(['agents', '--check', 'notes.md'], io), EXIT.notApplied);
+		assert.ok(io.out.join('').startsWith('notes.md:1: gsp has no worktree command.'));
+
+		const missing = createFakeIo(fx.dir);
+		assert.strictEqual(await runCli(['agents', '--check', 'nope.md'], missing), EXIT.usage);
+		assert.ok(missing.err.join('').includes('No such file: nope.md'));
 	});
 
 	test('--rpc emits NDJSON events', async () => {

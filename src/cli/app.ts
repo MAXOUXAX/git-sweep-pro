@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
+import { AGENT_FILE_NAMES, checkAgentAdvice, isAgentFile, runAgentsWorkflow, type AdviceFinding } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion, describeDeletionTarget } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
@@ -167,6 +167,9 @@ async function runCommand(options: CliOptions, dir: string, frontend: Frontend, 
 	}
 	if (options.command === 'post-pr') {
 		return runPostPr(options, dir, frontend, io);
+	}
+	if (options.command === 'agents' && options.check) {
+		return runAgentsCheck(options, dir, frontend, io);
 	}
 	const outcome = await runWorkflow(options, dir, frontend, io);
 	return typeof outcome === 'string' ? { kind: 'workflow', outcome } : outcome;
@@ -544,6 +547,56 @@ const KEPT_WORKTREE_MESSAGES: Record<WorktreeKeptReason, (ignoredFiles: readonly
 		return `removing it would delete ignored files a build does not recreate:\n${sample.map((file) => `  ${file}`).join('\n')}${more}\nMove what you need, then add --force.`;
 	},
 };
+
+/** The `--json` document of `gsp agents --check`. */
+type AgentsCheckDocument = {
+	readonly schema: typeof CLEAN_SCHEMA;
+	readonly command: 'agents --check';
+	readonly files: readonly string[];
+	readonly findings: readonly AdviceFinding[];
+};
+
+/**
+ * `agents --check`: reads the files named, or the AGENTS.md and CLAUDE.md
+ * of the repository (of `dir` outside one), and prints each line whose
+ * advice contradicts gsp with what to write instead. Changes nothing; exits
+ * with 5 when it found something.
+ */
+async function runAgentsCheck(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<CommandOutcome> {
+	const root = await openRepository(dir, frontend.trace).then(
+		(repository) => repository.root,
+		() => dir
+	);
+	const named = options.positionals.length > 0;
+	const files = named ? options.positionals : AGENT_FILE_NAMES.filter((file) => fs.existsSync(path.join(root, file)));
+	const absolute = (file: string) => path.resolve(named ? dir : root, file);
+	const missing = files.find((file) => !fs.statSync(absolute(file), { throwIfNoEntry: false })?.isFile());
+	if (missing !== undefined) {
+		const message = `No such file: ${missing}`;
+		if (options.json) {
+			printJsonError(io, options.rpc, message, 'usage');
+		}
+		io.stderr(`error: ${message}\n`);
+		return EXIT.usage;
+	}
+	// gsp agents only writes the instruction files at the repository's root.
+	const writable = (file: string) => isAgentFile(path.basename(file)) && absolute(file) === path.join(root, path.basename(file));
+	const findings = files.flatMap((file) => checkAgentAdvice(file, fs.readFileSync(absolute(file), 'utf8'), writable(file)));
+	if (options.json) {
+		printJson(io, options.rpc, { schema: CLEAN_SCHEMA, command: 'agents --check', files, findings } satisfies AgentsCheckDocument);
+	} else {
+		findings.forEach((finding) => io.stdout(`${finding.file}:${finding.line}: ${finding.text.trim()}\n  → ${finding.suggestion}\n`));
+	}
+	if (files.length === 0) {
+		io.stderr(`No ${AGENT_FILE_NAMES.join(' or ')} in ${root}. Name the files to check: gsp agents --check <file>...\n`);
+	} else if (findings.length === 0) {
+		io.stderr(`No outdated gsp advice in ${files.join(', ')}.\n`);
+	} else {
+		io.stderr(`${findings.length} ${findings.length === 1 ? 'line contradicts' : 'lines contradict'} gsp. Update ${findings.length === 1 ? 'it' : 'them'} as suggested.\n`);
+	}
+	// Like a plan that was not applied: something is left for the person to do.
+	return findings.length > 0 ? { kind: 'clean', outcome: 'not-applied' } : { kind: 'workflow', outcome: 'ok' };
+}
 
 /**
  * `restore`: restores the branches named, or the ones picked. Without names
