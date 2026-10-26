@@ -260,6 +260,18 @@ suite('agent instructions', () => {
 			assert.match(fake.errorMessages[0], /which does not exist and is outside the repository\. Replace the link with a file\.$/);
 		});
 
+		test('never creates a file through a dangling link to another link that leaves the repository', async () => {
+			const outside = path.join(os.tmpdir(), `gsp-chained-${process.pid}.md`);
+			fs.symlinkSync(outside, path.join(root, 'notes.md'));
+			fs.symlinkSync('notes.md', path.join(root, 'CLAUDE.md'));
+			const fake = createFakeContext({ root });
+
+			assert.strictEqual(await runAgentsWorkflow(fake.context, ['CLAUDE.md']), 'failed');
+
+			assert.ok(!fs.existsSync(outside));
+			assert.match(fake.errorMessages[0], /another link to a file that does not exist\. Replace the link with a file\.$/);
+		});
+
 		test('creates the file a dangling symbolic link points to, within the repository', async () => {
 			fs.symlinkSync('AGENTS.md', path.join(root, 'CLAUDE.md'));
 			const fake = createFakeContext({ root });

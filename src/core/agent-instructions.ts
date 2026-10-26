@@ -444,6 +444,10 @@ function resolveAgentFile(root: string, file: AgentFile): { readonly path: strin
 		if (!isWithin(realRoot, target)) {
 			throw new Error(`it links to ${linked}, which does not exist and is outside the repository. Replace the link with a file.`);
 		}
+		// Writing would follow that link too, wherever it points.
+		if (fs.lstatSync(target, { throwIfNoEntry: false })) {
+			throw new Error(`it links to ${linked}, another link to a file that does not exist. Replace the link with a file.`);
+		}
 		return { path: target, exists: false };
 	}
 	const target = fs.realpathSync(filePath);
@@ -465,7 +469,8 @@ export function writeAgentBlock(root: string, file: AgentFile): AgentFileWrite {
 	const content = target.exists ? fs.readFileSync(target.path, 'utf8') : '';
 	const plan = planAgentBlock(content);
 	if (plan.change !== 'unchanged') {
-		fs.writeFileSync(target.path, plan.content);
+		// A new file is created only where nothing is, not even a link put there since.
+		fs.writeFileSync(target.path, plan.content, { flag: target.exists ? 'w' : 'wx' });
 	}
 	return { change: target.exists ? plan.change : 'created', review: plan.review };
 }
