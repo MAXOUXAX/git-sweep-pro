@@ -31,9 +31,10 @@ export type DeadReason = 'empty' | 'merged' | 'rebase-merged' | 'squash-merged' 
  * - `default-branch`: it is the branch everything is compared with;
  * - `open-pr`: its tip is the head of an open pull request;
  * - `unmerged-commits`: some of its work is found nowhere else;
- * - `no-base`: no default branch was found to compare it with.
+ * - `no-base`: no default branch was found to compare it with;
+ * - `analysis-failed`: a Git command failed while looking for a proof (see the evidence).
  */
-export type AliveReason = 'default-branch' | 'open-pr' | 'unmerged-commits' | 'no-base';
+export type AliveReason = 'default-branch' | 'open-pr' | 'unmerged-commits' | 'no-base' | 'analysis-failed';
 
 /** How one commit of an integration branch was proven merged. */
 export type CommitProof = {
@@ -70,7 +71,9 @@ export type Evidence =
 	  }
 	| { readonly method: 'commits'; readonly base: string; readonly commits: number; readonly proofs: readonly CommitProof[] }
 	| { readonly method: 'upstream-gone'; readonly upstream: string }
-	| { readonly method: 'unique-commits'; readonly base: string; readonly commits: number };
+	| { readonly method: 'unique-commits'; readonly base: string; readonly commits: number }
+	/** The analysis of this branch failed: `message` is the first line Git printed. */
+	| { readonly method: 'error'; readonly message: string };
 
 /** Why a branch must be kept whatever its verdict. */
 export type Protection =
@@ -105,6 +108,7 @@ export type BranchAnalysis = {
 	 * Commits reachable from the tip but from no remote-tracking ref and not
 	 * from the base, that no proof covers: 0 for every proven branch. A dead
 	 * `upstream-gone` branch with unpushed commits holds work found nowhere else.
+	 * Also 0 when counting failed, which makes the branch `analysis-failed`.
 	 */
 	readonly unpushedCommits: number;
 	readonly protected: Protection | null;
@@ -855,6 +859,13 @@ async function classify(prover: Prover | undefined, ref: Ref, name: string, ance
 	return verdict.verdict === 'alive' && gone ? gone : verdict;
 }
 
+/** A branch whose analysis failed stays alive: no proof was found. */
+function failedVerdict(error: unknown): Verdict {
+	const failure = error as Error & { stderr?: string };
+	const message = [failure.stderr, failure.message].flatMap((text) => text?.split('\n') ?? []).find((line) => line.trim()) ?? String(error);
+	return { verdict: 'alive', reason: 'analysis-failed', evidence: { method: 'error', message: message.trim() } };
+}
+
 function shortRef(ref: string): string {
 	return ref.replace(/^refs\/(heads|remotes)\//, '');
 }
@@ -918,14 +929,21 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 		loadGitHub(context, options, config, base),
 	]);
 	const prover = base && new Prover(git, base, github.signal);
-	const verdicts = await mapWithLimit(selected, CONCURRENCY, (ref) => classify(prover, ref, nameOf(ref), ancestors));
+	// One branch failing does not fail the others.
+	const verdicts = await mapWithLimit(selected, CONCURRENCY, (ref) => classify(prover, ref, nameOf(ref), ancestors).catch(failedVerdict));
 
 	const proven = (verdict: Verdict) => verdict.verdict === 'dead' && verdict.reason !== 'upstream-gone';
-	const unpushed = await mapWithLimit(selected, CONCURRENCY, async (ref, index) =>
-		proven(verdicts[index])
-			? 0
-			: Number((await git(['rev-list', '--count', ref.oid, '--not', '--remotes', ...(base ? [base.ref] : [])])).stdout.trim())
-	);
+	const unpushed = await mapWithLimit(selected, CONCURRENCY, async (ref, index) => {
+		if (proven(verdicts[index])) {
+			return 0;
+		}
+		try {
+			return Number((await git(['rev-list', '--count', ref.oid, '--not', '--remotes', ...(base ? [base.ref] : [])])).stdout.trim());
+		} catch (error) {
+			verdicts[index] = failedVerdict(error);
+			return 0;
+		}
+	});
 
 	const worktrees = parseWorktrees(worktreesOutput);
 	const worktreeOf = new Map(worktrees.filter((worktree) => worktree.branch).map((worktree) => [worktree.branch as string, worktree]));

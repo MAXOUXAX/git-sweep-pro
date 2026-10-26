@@ -562,6 +562,25 @@ suite('branch analysis (real git)', function () {
 		});
 	});
 
+	test('a branch whose analysis fails stays alive without failing the others', async () => {
+		makeBranch('feature/rebased', [['r.txt', 'r\n']]);
+		makeBranch('feature/broken', [['b.txt', 'b\n']]);
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		git(['cherry-pick', 'feature/rebased', 'feature/broken'], fx.repo);
+		pushMain();
+		const broken = rev('feature/broken');
+		const failing = (args: readonly string[]) =>
+			args.includes('cherry') && args.includes(broken)
+				? Promise.reject(Object.assign(new Error('Command failed: git cherry'), { code: 128, stderr: 'fatal: bad object\n' }))
+				: runGit(args);
+
+		const branches = byName(await analyzeBranches({ git: failing }, { github: false }));
+		assert.strictEqual(`${branches['feature/broken'].verdict} ${branches['feature/broken'].reason}`, 'alive analysis-failed');
+		assert.deepStrictEqual(branches['feature/broken'].evidence, { method: 'error', message: 'fatal: bad object' });
+		assert.strictEqual(branches['feature/broken'].unpushedCommits, 1);
+		assert.strictEqual(branches['feature/rebased'].reason, 'rebase-merged');
+	});
+
 	test('a branch with plain unmerged work costs a handful of git calls', async () => {
 		const count = 8;
 		for (let index = 0; index < count; index++) {
