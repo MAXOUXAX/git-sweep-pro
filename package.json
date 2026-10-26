@@ -70,8 +70,8 @@
       {
         "command": "git-sweep-pro.postPullRequest",
         "category": "Git Sweep Pro",
-        "title": "Post Pull Request Cleanup",
-        "shortTitle": "Post-PR Cleanup"
+        "title": "Finish Merged Pull Request",
+        "shortTitle": "Finish PR"
       },
       {
         "command": "git-sweep-pro.syncWithUpstream",

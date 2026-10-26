@@ -326,4 +326,26 @@ suite('E2E: sweep against a real git repository', () => {
 		assert.deepStrictEqual(errorMessages, [], 'no error messages expected');
 	});
 
+	test('finishes a merged pull request checked out in this window: previews, deletes it, switches to main', async function () {
+		this.timeout(120000);
+
+		git(['checkout', '-b', 'feature/done'], repoDir);
+		fs.writeFileSync(path.join(repoDir, 'done.txt'), 'done\n');
+		git(['add', 'done.txt'], repoDir);
+		git(['-c', 'commit.gpgsign=false', 'commit', '-m', 'done'], repoDir);
+		git(['push', '-u', 'origin', 'feature/done'], repoDir);
+		// The pull request is merged on the remote, and its branch deleted there.
+		git(['push', 'origin', 'feature/done:main'], repoDir);
+		git(['push', 'origin', '--delete', 'feature/done'], repoDir);
+		warnings.length = 0;
+
+		await vscode.commands.executeCommand('git-sweep-pro.postPullRequest');
+
+		assert.deepStrictEqual(warnings, ['Finish feature/done?']);
+		assert.ok(!branchExists(repoDir, 'feature/done'), 'the merged branch is deleted');
+		assert.strictEqual(git(['branch', '--show-current'], repoDir).trim(), 'main');
+		assert.strictEqual(git(['rev-parse', 'main'], repoDir), git(['rev-parse', 'origin/main'], repoDir), 'main is updated');
+		assert.deepStrictEqual(infoMessages, ['Git Sweep Pro: Finished feature/done: deleted it. Updated main.']);
+		assert.deepStrictEqual(errorMessages, []);
+	});
 });
