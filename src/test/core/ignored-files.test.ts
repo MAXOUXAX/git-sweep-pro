@@ -38,12 +38,13 @@ suite('ignored files', () => {
 		fs.writeFileSync(path.join(dir, 'secret'), '');
 		fs.symlinkSync(path.join(dir, 'secret'), path.join(repo, '.env'));
 
-		assert.deepStrictEqual(await listIgnoredFiles(gitIn(repo), repo), ['.env', 'notes.md']);
+		assert.deepStrictEqual(await listIgnoredFiles(gitIn(repo), repo), ['.env', 'linked-notes', 'notes.md']);
 	});
 
-	test('a symlink is regenerable unless its name looks like a secret', () => {
+	test('a symlink is regenerable only with the name of a regenerable folder or file', () => {
 		assert.strictEqual(isRegenerable('node_modules', true), true);
-		assert.strictEqual(isRegenerable('data', true), true);
+		assert.strictEqual(isRegenerable('.eslintcache', true), true);
+		assert.strictEqual(isRegenerable('data', true), false);
 		assert.strictEqual(isRegenerable('.env.local', true), false);
 		assert.strictEqual(isRegenerable('node_modules'), false);
 		for (const regenerable of ['.vscode-test/', '.expo/', 'storybook-static/', '.angular/', '.nx/', '.yarn/cache/', '.terraform/', '.eslintcache']) {

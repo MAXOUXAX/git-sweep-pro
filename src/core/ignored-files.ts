@@ -104,10 +104,10 @@ const isSecretLike = (name: string) => SECRET_FILES.some((pattern) => matchesFil
 
 /**
  * True when `relativePath`, an entry of `git status --ignored=matching`, is
- * regenerable: a regenerable file, a wholly ignored regenerable folder
- * (ending with `/`), or a symbolic link, which removing the worktree only
- * unlinks (Git reports a linked `node_modules` without the `/`). A
- * secret-like name never is.
+ * regenerable: a regenerable file, or a wholly ignored regenerable folder
+ * (ending with `/`) or a symbolic link with the name of one (Git reports a
+ * linked `node_modules` without the `/`). Any other link is not: where it
+ * pointed would be lost with it. A secret-like name never is.
  */
 export function isRegenerable(relativePath: string, symlink = false): boolean {
 	const segments = relativePath.split('/').filter(Boolean);
@@ -115,7 +115,7 @@ export function isRegenerable(relativePath: string, symlink = false): boolean {
 	if (isSecretLike(name)) {
 		return false;
 	}
-	if (symlink) {
+	if (symlink && regenerableFolderOf(segments) !== undefined) {
 		return true;
 	}
 	if (!relativePath.endsWith('/')) {

@@ -133,7 +133,7 @@ Removing a worktree deletes its ignored files, and `gsp restore` cannot bring th
 
 `node_modules`, `.pnpm-store`, `vendor/bundle`, `dist`, `build`, `out`, `.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.cache`, `.parcel-cache`, `.vite`, `coverage`, `target`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.venv`, `venv`, `.gradle`, `.dart_tool`, `DerivedData`, `.vscode-test`, `.expo`, `storybook-static`, `.angular`, `.nx`, `.yarn/cache`, `.terraform`
 
-and so are `*.tsbuildinfo`, `.DS_Store` and `.eslintcache` files, and any ignored symbolic link (removing the worktree only removes the link, not what it points to). An ignored file inside a tracked folder with one of these names (`tools/build/credentials.json`) is not.
+and so are `*.tsbuildinfo`, `.DS_Store` and `.eslintcache` files, and an ignored symbolic link with one of these names, like a linked `node_modules` (removing the worktree only removes the link, not what it points to). Any other ignored link keeps the worktree: where it pointed would be lost. An ignored file inside a tracked folder with one of these names (`tools/build/credentials.json`) is not.
 
 Secret-like files are never regenerable, wherever they are, even as symbolic links: `.env`, `.env.*`, `*.pem`, `*.key`, `*credentials*`, `*secret*`, `.npmrc` and `.netrc`. Inside an ignored build or cache folder, `gsp clean` also looks for these names, except compiled code named after a module (`dist/auth/credentials.js`: `.js`, `.mjs`, `.cjs`, `.ts`, `.map`, `.css`, `.html`, `.py`, `.pyc`, `.class` and `.o` files). Dependency folders (`node_modules`, `.pnpm-store`, `vendor/bundle`, `.venv`, `venv`, `.yarn/cache`, `.terraform`, `.vscode-test`) are not searched: packages ship such files of their own.
 
