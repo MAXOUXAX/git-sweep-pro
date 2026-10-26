@@ -87,6 +87,8 @@ Options:
                      Also delete the branches on <name> (origin by default)
                      whose work is merged into its own default branch; never
                      forced, and only with --yes. Name them <name>/<branch>
+                     On a host gsp can't tell is GitHub, set
+                     "git config git-sweep-pro.forge none" (or "github")
   -p, --protect <glob>
                      Never delete branches matching <glob> (repeatable; also
                      read from "git config --get-all git-sweep-pro.protected")

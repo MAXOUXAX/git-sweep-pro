@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import * as path from 'node:path';
 import { formatRemoteLines, formatSummary, type CleanRemoteBranch } from '../../core/clean-plan';
 import { holdRemoteToFetch, runCleanWorkflow, UnknownRemoteError, type CleanOptions } from '../../core/clean-workflow';
+import type { RunSsh } from '../../core/forge';
 import type { RunGh } from '../../core/github-signal';
 import { runRestoreWorkflow } from '../../core/restore-workflow';
 import { commitFile, createRepoFixture, git, type RepoFixture } from '../cli/git-fixture';
@@ -48,17 +49,33 @@ type FakePullRequest = {
 	repo?: string;
 };
 
+type FakeRepo = {
+	/** What GitHub names the repository today; acme/widgets by default. */
+	canonical?: string;
+	/** The repository it is a fork of. */
+	parent?: string;
+	/** The root of its fork network; the parent by default. */
+	source?: string;
+	/** Hosts `gh auth status` reports as logged in. */
+	loggedIn?: string[];
+};
+
 /**
  * A `gh` stub for acme/widgets (a fork of `parent`, when given) listing
  * `pullRequests` (base main) on the repository asked; every other call
  * fails, as for an unknown commit.
  */
-function fakeGh(pullRequests: FakePullRequest[], { parent }: { parent?: string } = {}): RunGh {
+function fakeGh(pullRequests: FakePullRequest[], { canonical = 'acme/widgets', parent, source = parent, loggedIn = [] }: FakeRepo = {}): RunGh {
+	const named = (repo: string | undefined) => (repo ? { owner: repo.split('/')[0], name: repo.split('/')[1] } : null);
 	return async (args) => {
-		const repo = args[args.indexOf('--repo') + 1];
-		if (args[0] === 'repo' && args[1] === 'view') {
-			const [owner, name] = (parent ?? '/').split('/');
-			return { stdout: JSON.stringify({ isFork: parent !== undefined, parent: parent ? { name, owner: { login: owner } } : null }), stderr: '' };
+		// "host/owner/name" on a GitHub Enterprise server.
+		const repo = args[args.indexOf('--repo') + 1]?.split('/').slice(-2).join('/');
+		if (args[0] === 'api' && /^repos\/[^/]+\/[^/]+$/.test(args[3])) {
+			return { stdout: JSON.stringify({ ...named(canonical), parent: named(parent), source: named(source) }), stderr: '' };
+		}
+		if (args[0] === 'auth') {
+			const host = args[args.indexOf('--hostname') + 1];
+			return { stdout: JSON.stringify({ hosts: loggedIn.includes(host) ? { [host]: [{ state: 'success', host }] } : {} }), stderr: '' };
 		}
 		if (args[0] === 'pr') {
 			const open = args[args.indexOf('--state') + 1] === 'open';
@@ -513,7 +530,7 @@ suite('clean --remote (real git)', function () {
 		);
 
 		const { report } = await runCleanWorkflow({ ...contextFor().context, gh }, { ...APPLY, github: true });
-		assert.deepStrictEqual(report.checks.cleanedRemote?.github, { used: true, repo: 'acme/widgets', parent: 'octo/widgets', openPullRequests: 3 });
+		assert.deepStrictEqual(report.checks.cleanedRemote?.github, { used: true, repo: 'acme/widgets', parent: 'octo/widgets', source: null, openPullRequests: 4 });
 		assert.deepStrictEqual(actions(report.remoteBranches), {
 			'feature/base': ['keep', 'open-pr-base', null],
 			'feature/named': ['keep', 'open-pr', null],
@@ -536,6 +553,133 @@ suite('clean --remote (real git)', function () {
 		const failed = await runCleanWorkflow({ ...contextFor().context, gh: failing }, { ...APPLY, github: true });
 		assert.deepStrictEqual(actions(failed.report.remoteBranches)['feature/later'], ['skip', 'github-unavailable', 'gsp clean --remote --dry-run']);
 		assert.ok(remoteHas('feature/later'));
+	});
+
+	/** Makes origin look like `url`, while Git still pushes to the fixture's bare repository. */
+	const pretendRemote = (url: string) => {
+		git(['remote', 'set-url', 'origin', url], fx.repo);
+		git(['config', `url.${fx.remote}.insteadOf`, url], fx.repo);
+	};
+
+	/** Records the `gh` calls, as space-joined arguments. */
+	const recording = (gh: RunGh) => {
+		const asked: string[] = [];
+		const run: RunGh = (args, options) => {
+			asked.push(args.join(' '));
+			return gh(args, options);
+		};
+		return { run, asked };
+	};
+
+	test('a GitHub remote behind an SSH alias keeps its open pull requests, and gh is asked about the real host', async () => {
+		pretendRemote('git@work:acme/widgets.git');
+		pushBranch('feature/pr', 'p.txt', ['p\n']);
+		pushBranch('feature/sq', 's.txt', ['s\n']);
+		squashIntoMain('feature/pr');
+		squashIntoMain('feature/sq');
+		const gh = recording(fakeGh([{ number: 7, state: 'OPEN', headRefOid: git(['rev-parse', 'origin/feature/pr'], fx.repo).trim() }]));
+		const ssh: RunSsh = async (args) => ({ stdout: `user git\nhostname ${args[1] === 'work' ? 'github.com' : args[1]}\nport 22\n`, stderr: '' });
+
+		const { report } = await runCleanWorkflow({ ...contextFor().context, gh: gh.run, ssh }, { ...APPLY, github: true });
+		assert.deepStrictEqual(report.checks.cleanedRemote?.github, { used: true, repo: 'acme/widgets', parent: null, source: null, openPullRequests: 1 });
+		assert.deepStrictEqual(actions(report.remoteBranches), {
+			'feature/pr': ['keep', 'open-pr', null],
+			'feature/sq': ['delete', 'rebase-merged', null],
+			main: ['keep', 'default-branch', null],
+		});
+		assert.ok(gh.asked.some((command) => command.startsWith('api --hostname github.com repos/acme/widgets ')), gh.asked.join('\n'));
+		assert.ok(remoteHas('feature/pr') && !remoteHas('feature/sq'));
+	});
+
+	test('on a host nothing identifies, nothing is deleted until gh or git-sweep-pro.forge tells what it is', async () => {
+		pretendRemote('git@git.example.com:acme/widgets.git');
+		pushBranch('feature/sq', 's.txt', ['s\n']);
+		squashIntoMain('feature/sq');
+		const tip = git(['rev-parse', 'origin/feature/sq'], fx.repo).trim();
+
+		const fake = contextFor();
+		const { report } = await runCleanWorkflow({ ...fake.context, gh: fakeGh([]) }, { ...APPLY, github: true });
+		assert.deepStrictEqual(report.checks.cleanedRemote?.github, { used: false, reason: 'unknown-host', detail: 'git.example.com' });
+		assert.deepStrictEqual(actions(report.remoteBranches)['feature/sq'], ['skip', 'github-unavailable', 'gh auth login --hostname git.example.com']);
+		assert.ok(
+			fake.appendedLines.includes(
+				"Can't tell whether origin is on GitHub (git.example.com), so no branch on origin is deleted: it may be the head or base of an open pull request. " +
+					'If it is on GitHub, run gh auth login --hostname git.example.com. If not, run git config git-sweep-pro.forge none.'
+			),
+			fake.appendedLines.join('\n')
+		);
+		const withoutGitHub = await runCleanWorkflow(contextFor().context, { ...APPLY, github: false });
+		assert.deepStrictEqual(actions(withoutGitHub.report.remoteBranches)['feature/sq'], ['skip', 'github-unavailable', 'gh auth login --hostname git.example.com']);
+		assert.ok(remoteHas('feature/sq'));
+
+		// gh is logged in to it: a GitHub server, whose open pull request keeps the branch.
+		const open = [{ number: 5, state: 'OPEN' as const, headRefOid: tip }];
+		const loggedIn = await runCleanWorkflow({ ...contextFor().context, gh: fakeGh(open, { loggedIn: ['git.example.com'] }) }, { ...APPLY, github: true });
+		assert.deepStrictEqual(actions(loggedIn.report.remoteBranches)['feature/sq'], ['keep', 'open-pr', null]);
+
+		// git-sweep-pro.forge github says so without gh's login.
+		git(['config', 'git-sweep-pro.forge', 'github'], fx.repo);
+		const gh = recording(fakeGh(open));
+		const forced = await runCleanWorkflow({ ...contextFor().context, gh: gh.run }, { ...APPLY, github: true });
+		assert.deepStrictEqual(actions(forced.report.remoteBranches)['feature/sq'], ['keep', 'open-pr', null]);
+		assert.ok(gh.asked.some((command) => command.startsWith('pr list --repo git.example.com/acme/widgets --state open ')), gh.asked.join('\n'));
+		assert.ok(remoteHas('feature/sq'));
+
+		// git-sweep-pro.forge none: not GitHub, the proofs alone decide.
+		git(['config', 'git-sweep-pro.forge', 'none'], fx.repo);
+		const none = await runCleanWorkflow(contextFor().context, { ...APPLY, github: false });
+		assert.strictEqual(none.report.checks.cleanedRemote?.github, null);
+		assert.ok(!remoteHas('feature/sq'));
+	});
+
+	test('gitlab.com and bitbucket.org are not GitHub', async () => {
+		pretendRemote('git@gitlab.com:acme/widgets.git');
+		pushBranch('feature/sq', 's.txt', ['s\n']);
+		squashIntoMain('feature/sq');
+		const { report } = await runCleanWorkflow(contextFor().context, { ...APPLY, github: false });
+		assert.strictEqual(report.checks.cleanedRemote?.github, null);
+		assert.deepStrictEqual(actions(report.remoteBranches)['feature/sq'], ['delete', 'rebase-merged', null]);
+		assert.ok(!remoteHas('feature/sq'));
+	});
+
+	test("a fork's open pull requests are found under the owner GitHub uses today, whatever owner the URL still names", async () => {
+		pretendRemote(GITHUB_URL);
+		for (const name of ['feature/named', 'feature/sha', 'feature/sq']) {
+			pushBranch(name, `${name.replace('/', '-')}.txt`, [`${name}\n`]);
+			squashIntoMain(name);
+		}
+		const tip = (name: string) => git(['rev-parse', `origin/${name}`], fx.repo).trim();
+		const gh = fakeGh(
+			[
+				// From the fork, under its new owner: its head moved since the last fetch, matched by name.
+				{ number: 1, state: 'OPEN', headRefOid: 'd'.repeat(40), headRefName: 'feature/named', headOwner: 'acme-corp', repo: 'octo/widgets' },
+				// From whatever fork, the same SHA.
+				{ number: 2, state: 'OPEN', headRefOid: tip('feature/sha'), headRefName: 'other', headOwner: 'someone', repo: 'octo/widgets' },
+			],
+			{ canonical: 'acme-corp/widgets', parent: 'octo/widgets' }
+		);
+		const { report } = await runCleanWorkflow({ ...contextFor().context, gh }, { ...APPLY, github: true });
+		assert.deepStrictEqual(report.checks.cleanedRemote?.github, { used: true, repo: 'acme-corp/widgets', parent: 'octo/widgets', source: null, openPullRequests: 2 });
+		assert.deepStrictEqual(actions(report.remoteBranches), {
+			'feature/named': ['keep', 'open-pr', null],
+			'feature/sha': ['keep', 'open-pr', null],
+			'feature/sq': ['delete', 'rebase-merged', null],
+			main: ['keep', 'default-branch', null],
+		});
+	});
+
+	test('in a fork of a fork, the open pull requests on the root of the network count too', async () => {
+		pretendRemote(GITHUB_URL);
+		pushBranch('feature/deep', 'd.txt', ['d\n']);
+		squashIntoMain('feature/deep');
+		const gh = fakeGh(
+			[{ number: 3, state: 'OPEN', headRefOid: git(['rev-parse', 'origin/feature/deep'], fx.repo).trim(), headRefName: 'feature/deep', repo: 'root/widgets' }],
+			{ parent: 'mid/widgets', source: 'root/widgets' }
+		);
+		const { report } = await runCleanWorkflow({ ...contextFor().context, gh }, { ...APPLY, github: true });
+		assert.deepStrictEqual(report.checks.cleanedRemote?.github, { used: true, repo: 'acme/widgets', parent: 'mid/widgets', source: 'root/widgets', openPullRequests: 1 });
+		assert.deepStrictEqual(actions(report.remoteBranches)['feature/deep'], ['keep', 'open-pr', null]);
+		assert.ok(remoteHas('feature/deep'));
 	});
 
 	test('more open pull requests than gsp lists: nothing is deleted', async () => {

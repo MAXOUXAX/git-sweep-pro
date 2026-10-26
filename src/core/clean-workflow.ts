@@ -32,6 +32,7 @@ import {
 import { canRecordDeletions, createDeletionRecorder, type DeletionRecorder } from './deletion-log';
 import { gitFailureReason, toErrorMessage } from './errors';
 import type { RunGit } from './git-command';
+import type { RunSsh } from './forge';
 import type { GitHubSkipReason, RunGh } from './github-signal';
 import { listIgnoredFiles, summarizeIgnored } from './ignored-files';
 import { isNotFullyMergedError } from './sweep-logic';
@@ -68,6 +69,8 @@ export type CleanOptions = {
 export type CleanContext = WorkflowContext & {
 	/** Runs `gh`; without it, the GitHub signal is skipped. */
 	readonly gh?: RunGh;
+	/** Runs `ssh`, to resolve the host aliases of SSH remotes. */
+	readonly ssh?: RunSsh;
 };
 
 /** How `gsp clean` ended: the CLI maps it to its exit code. */
@@ -604,9 +607,11 @@ const GITHUB_SKIPS: Record<GitHubSkipReason, string> = {
 	disabled: '--no-github was passed',
 	'no-remote': 'no remote',
 	'not-github': 'not a GitHub remote',
+	'unknown-host': 'unknown host',
 	'gh-missing': 'gh is not installed',
 	'gh-unauthenticated': 'gh is not logged in',
 	offline: 'GitHub could not be reached',
+	timeout: 'GitHub took too long',
 	'gh-failed': 'gh failed',
 	'too-many-open-prs': 'too many open pull requests to list',
 };
@@ -623,8 +628,15 @@ function remoteBlocker(check: CleanedRemoteCheck, scope: CleanScope): RemoteBloc
 		return { reason: 'remote-default-unknown', hint: scope.fetch ? null : scopedCommand({ ...scope, fetch: true }, scope.patterns, []) };
 	}
 	if (check.github && !check.github.used) {
-		const { reason } = check.github;
-		const hint = reason === 'disabled' ? review({ github: true }) : reason === 'gh-unauthenticated' || reason === 'gh-missing' ? 'gh auth login' : review({});
+		const { reason, detail } = check.github;
+		const hint =
+			reason === 'unknown-host'
+				? `gh auth login --hostname ${detail}`
+				: reason === 'disabled'
+					? review({ github: true })
+					: reason === 'gh-unauthenticated' || reason === 'gh-missing'
+						? 'gh auth login'
+						: review({});
 		return { reason: 'github-unavailable', hint };
 	}
 	return undefined;
@@ -637,6 +649,13 @@ function describeRemoteBlocker(check: CleanedRemoteCheck, blocker: RemoteBlocker
 		return `The default branch of ${check.remote} could not be read from the server, ${then}`;
 	}
 	const github = check.github && !check.github.used ? check.github : undefined;
+	if (github?.reason === 'unknown-host') {
+		return (
+			`Can't tell whether ${check.remote} is on GitHub (${github.detail}), so no branch on ${check.remote} is deleted: ` +
+			`it may be the head or base of an open pull request. If it is on GitHub, run gh auth login --hostname ${github.detail}. ` +
+			`If not, run git config git-sweep-pro.forge none.`
+		);
+	}
 	const why = github ? `${GITHUB_SKIPS[github.reason]}${github.detail ? `: ${github.detail}` : ''}` : 'unknown error';
 	return `The open pull requests on ${check.remote} could not be checked (${why}), ${then}`;
 }
@@ -695,7 +714,7 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	const analyse = (fetched: boolean, remoteHeads: ReadonlyMap<string, string> | undefined, defaultBranch: string | null) =>
 		ui.withProgress({ title: 'Analysing branches' }, () =>
 			analyzeBranches(
-				{ git, ...(context.gh ? { gh: context.gh } : {}) },
+				{ git, ...(context.gh ? { gh: context.gh } : {}), ...(context.ssh ? { ssh: context.ssh } : {}) },
 				{
 					...(options.patterns.length > 0 ? { branches: options.patterns } : {}),
 					protectedPatterns: options.protectedPatterns,

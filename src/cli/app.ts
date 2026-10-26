@@ -6,6 +6,7 @@ import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
 import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, nextCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
 import { runCleanWorkflow, UnknownBranchError, UnknownRemoteError, type CleanOutcome } from '../core/clean-workflow';
+import { createSshRunner } from '../core/forge';
 import { createGhRunner } from '../core/github-signal';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import { inspectDeletions, runRestoreWorkflow } from '../core/restore-workflow';
@@ -236,7 +237,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 	const context = createContext(repository, options, frontend);
 	try {
 		const { report, outcome } = await runCleanWorkflow(
-			{ ...context, ...(options.github ? { gh: createGhRunner(repository.root) } : {}) },
+			{ ...context, ssh: createSshRunner(), ...(options.github ? { gh: createGhRunner(repository.root) } : {}) },
 			{
 				patterns: options.positionals,
 				dryRun: options.mode === 'dryRun',
@@ -354,7 +355,7 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 		switch (worktree.subcommand) {
 			case 'list': {
 				const { document, branches } = await listWorktreeStates(
-					{ ...context, ...(options.github ? { gh: createGhRunner(context.root) } : {}) },
+					{ ...context, ssh: createSshRunner(), ...(options.github ? { gh: createGhRunner(context.root) } : {}) },
 					{ fetch: options.fetch, github: options.github, protectedPatterns: options.protect }
 				);
 				if (options.json) {

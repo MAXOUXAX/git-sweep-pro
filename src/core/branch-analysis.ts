@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { identifyForge, type ForgeSetting, type RunSsh } from './forge';
 import type { RunGit } from './git-command';
 import {
 	loadGitHubSignal,
 	loadOpenPullRequests,
-	parseGitHubRemote,
 	type GitHubRepo,
 	type GitHubSignal,
 	type GitHubSkipReason,
@@ -167,8 +167,12 @@ export type GitHubCheck =
 
 /** What GitHub said about the open pull requests of the cleaned remote's repository. */
 export type RemoteGitHubCheck =
-	/** `parent`: the repository it is a fork of, whose open pull requests from it were read too. */
-	| { readonly used: true; readonly repo: string; readonly parent: string | null; readonly openPullRequests: number }
+	/**
+	 * `repo`: as GitHub names it today. `parent`: the repository it is a fork
+	 * of, and `source`: the root of its fork network when that is another one;
+	 * their open pull requests were read too.
+	 */
+	| { readonly used: true; readonly repo: string; readonly parent: string | null; readonly source: string | null; readonly openPullRequests: number }
 	| { readonly used: false; readonly reason: GitHubSkipReason; readonly detail?: string };
 
 /** What the branches of the cleaned remote were compared with. */
@@ -223,6 +227,8 @@ export type AnalyzeContext = {
 	readonly git: RunGit;
 	/** Runs `gh`; without it, the GitHub signal is skipped as `gh-missing`. */
 	readonly gh?: RunGh;
+	/** Runs `ssh`, to resolve the host aliases of SSH remotes; without it, an alias is taken as the host name. */
+	readonly ssh?: RunSsh;
 };
 
 export type AnalyzeOptions = {
@@ -313,6 +319,8 @@ type GitConfig = {
 	readonly protectedPatterns: readonly string[];
 	/** Branch names with `branch.<name>.deleteMerged` set to false. */
 	readonly keepMerged: ReadonlySet<string>;
+	/** `git-sweep-pro.forge`: whether the remotes are on GitHub, when Git's URLs can't tell. */
+	readonly forge: ForgeSetting | undefined;
 };
 
 const FALSE_VALUE = /^(false|no|off|0)$/i;
@@ -323,6 +331,7 @@ function parseConfig(output: string): GitConfig {
 	const protectedPatterns: string[] = [];
 	const keepMerged = new Set<string>();
 	let defaultBranch: string | undefined;
+	let forge: ForgeSetting | undefined;
 	for (const entry of output.split('\0')) {
 		const newline = entry.indexOf('\n');
 		const key = newline < 0 ? entry : entry.slice(0, newline);
@@ -334,6 +343,9 @@ function parseConfig(output: string): GitConfig {
 			remotes.set(subsection, value);
 		} else if (key === 'init.defaultbranch') {
 			defaultBranch = value;
+		} else if (key === 'git-sweep-pro.forge') {
+			const setting = value.toLowerCase();
+			forge = setting === 'github' || setting === 'none' ? setting : undefined;
 		} else if (key === 'git-sweep-pro.protected') {
 			protectedPatterns.push(value);
 		} else if (section === 'branch' && variable === 'deletemerged' && subsection) {
@@ -344,7 +356,7 @@ function parseConfig(output: string): GitConfig {
 			}
 		}
 	}
-	return { remotes, defaultBranch, protectedPatterns, keepMerged };
+	return { remotes, defaultBranch, protectedPatterns, keepMerged, forge };
 }
 
 /**
@@ -997,10 +1009,11 @@ async function loadGitHub(
 	if (url === undefined) {
 		return { check: { used: false, reason: 'no-remote' } };
 	}
-	const repo = parseGitHubRemote(url);
-	if (!repo) {
-		return { check: { used: false, reason: 'not-github', detail: url } };
+	const forge = await identifyForge(context, remote!, url, config.forge);
+	if (forge.kind !== 'github') {
+		return { check: forge.kind === 'unknown' ? { used: false, reason: 'unknown-host', detail: forge.host } : { used: false, reason: 'not-github', detail: url } };
 	}
+	const { repo } = forge;
 	if (!context.gh) {
 		return { check: { used: false, reason: 'gh-missing' } };
 	}
@@ -1178,18 +1191,25 @@ const sameRepo = (a: GitHubRepo, b: GitHubRepo) =>
 /**
  * The GitHub signal for the cleaned remote's own repository (the local one
  * when it is the same), with every open pull request that may use one of its
- * branches. `check` is null when the remote is not on GitHub.
+ * branches. `check` is null when the remote is known not to be on GitHub;
+ * when that can't be told, it says so (`unknown-host`), as for a GitHub
+ * remote whose pull requests could not be read.
  */
 async function loadRemoteGitHub(
 	context: AnalyzeContext,
 	options: AnalyzeOptions,
-	url: string | undefined,
+	config: GitConfig,
+	remote: string,
 	local: GitHubSignal | undefined
 ): Promise<{ check: RemoteGitHubCheck | null; signal?: GitHubSignal; open?: readonly OpenPullRequest[]; repo?: GitHubRepo }> {
-	const repo = url === undefined ? undefined : parseGitHubRemote(url);
-	if (!repo) {
+	const forge = await identifyForge(context, remote, config.remotes.get(remote), config.forge);
+	if (forge.kind === 'other') {
 		return { check: null };
 	}
+	if (forge.kind === 'unknown') {
+		return { check: { used: false, reason: 'unknown-host', detail: forge.host } };
+	}
+	const { repo } = forge;
 	if (options.github === false) {
 		return { check: { used: false, reason: 'disabled' }, repo };
 	}
@@ -1210,12 +1230,12 @@ async function loadRemoteGitHub(
 	if (!open.ok) {
 		return unused(open);
 	}
-	const parent = open.parent && `${open.parent.owner}/${open.parent.name}`;
+	const named = (other: GitHubRepo | null) => other && `${other.owner}/${other.name}`;
 	return {
-		check: { used: true, repo: `${repo.owner}/${repo.name}`, parent, openPullRequests: open.pullRequests.length },
+		check: { used: true, repo: named(open.repo)!, parent: named(open.parent), source: named(open.source), openPullRequests: open.pullRequests.length },
 		signal: loaded.signal,
 		open: open.pullRequests,
-		repo,
+		repo: open.repo,
 	};
 }
 
@@ -1244,7 +1264,7 @@ async function classifyRemote(
 			name !== 'HEAD' &&
 			(!options.branches || options.branches.some((pattern) => branchMatchesPattern(name, pattern) || branchMatchesPattern(`${remote}/${name}`, pattern)))
 	);
-	const github = await loadRemoteGitHub(context, options, config.remotes.get(remote), local.github.signal);
+	const github = await loadRemoteGitHub(context, options, config, remote, local.github.signal);
 	const check: CleanedRemoteCheck = { remote, defaultBranch, github: github.check };
 
 	const baseRef = defaultBranch === null ? undefined : `refs/remotes/${remote}/${defaultBranch}`;
@@ -1261,11 +1281,10 @@ async function classifyRemote(
 			.map((ref) => [ref.upstreamRemoteRef.slice('refs/heads/'.length), ref.name.slice('refs/heads/'.length)] as const)
 			.filter(([, local]) => config.keepMerged.has(local))
 	);
+	// By SHA from any fork; by name only from this repository, as GitHub names its owner today.
 	const owner = github.repo?.owner.toLowerCase();
 	const openHead = (name: string, tip: string) =>
-		github.open?.find(
-			(pr) => pr.headSha === tip || (pr.headRef === name && (pr.on === 'parent' || (owner !== undefined && pr.headOwner?.toLowerCase() === owner)))
-		);
+		github.open?.find((pr) => pr.headSha === tip || (pr.headRef === name && owner !== undefined && pr.headOwner?.toLowerCase() === owner));
 	const openBase = (name: string) => github.open?.find((pr) => pr.on === 'repo' && pr.baseRef === name);
 
 	const tips = [...new Set(selected.map(([, tip]) => tip))];
