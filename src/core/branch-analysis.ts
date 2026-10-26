@@ -1065,7 +1065,7 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 		CONCURRENCY,
 		async (worktree) => {
 			const operation = await worktreeOperation(git, worktree.path);
-			return operation && names.has(operation.branch) ? [{ ...worktree, branch: operation.branch, inProgress: operation.kind }] : [];
+			return operation?.branch !== undefined && names.has(operation.branch) ? [{ ...worktree, branch: operation.branch, inProgress: operation.kind }] : [];
 		}
 	);
 	const worktreeOf = new Map(

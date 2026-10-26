@@ -158,8 +158,8 @@ export async function hasSubmodules(git: RunGit, worktreePath: string): Promise<
  */
 export const WORKTREE_REMOVE: readonly string[] = ['-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove'];
 
-/** A rebase or a bisect in progress in a worktree, and the branch it works on. */
-export type WorktreeOperation = { readonly kind: 'rebase' | 'bisect'; readonly branch: string };
+/** A rebase or a bisect in progress in a worktree, and the branch it works on: none for a rebase started on a detached HEAD. */
+export type WorktreeOperation = { readonly kind: 'rebase' | 'bisect'; readonly branch: string | undefined };
 
 /** The rebase or bisect in progress in the worktree at `worktreePath`, read from its git dir. */
 export async function worktreeOperation(git: RunGit, worktreePath: string): Promise<WorktreeOperation | undefined> {
@@ -175,10 +175,11 @@ export async function worktreeOperation(git: RunGit, worktreePath: string): Prom
 			(text) => text.trim(),
 			() => ''
 		);
-	for (const file of ['rebase-merge/head-name', 'rebase-apply/head-name']) {
-		const head = await read(file);
-		if (head.startsWith('refs/heads/')) {
-			return { kind: 'rebase', branch: head.slice('refs/heads/'.length) };
+	for (const folder of ['rebase-merge', 'rebase-apply']) {
+		if (fs.existsSync(path.join(gitDir, folder))) {
+			// A rebase started on a detached HEAD records `detached HEAD` instead of a branch.
+			const head = await read(`${folder}/head-name`);
+			return { kind: 'rebase', branch: head.startsWith('refs/heads/') ? head.slice('refs/heads/'.length) : undefined };
 		}
 	}
 	// The branch, or a commit when the bisect started on a detached HEAD.

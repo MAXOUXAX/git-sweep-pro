@@ -1074,6 +1074,19 @@ suite('cli app (real git)', function () {
 			assert.ok(fs.existsSync(wt));
 		});
 
+		test('worktree remove keeps a worktree with a rebase started on a detached HEAD', async () => {
+			const wt = path.join(fx.dir, 'wt-detached');
+			git(['worktree', 'add', '--detach', wt], fx.repo);
+			const gitDir = git(['-C', wt, 'rev-parse', '--absolute-git-dir'], fx.repo).trim();
+			fs.mkdirSync(path.join(gitDir, 'rebase-merge'));
+			fs.writeFileSync(path.join(gitDir, 'rebase-merge', 'head-name'), 'detached HEAD\n');
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', wt], io), EXIT.notApplied);
+			assert.ok(io.err.join('').includes('a rebase is in progress there'));
+			assert.ok(fs.existsSync(wt));
+		});
+
 		test('worktree remove finds a worktree mid-rebase by its branch, and drops the rebase only with --discard-changes', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');
