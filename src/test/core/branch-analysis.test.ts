@@ -581,6 +581,29 @@ suite('branch analysis (real git)', function () {
 		assert.strictEqual(branches['feature/rebased'].reason, 'rebase-merged');
 	});
 
+	test('never fetches the objects a partial clone lacks: the branch stays alive instead', async function () {
+		const [major, minor] = (/(\d+)\.(\d+)/.exec(git(['version'], fx.repo)) ?? []).slice(1).map(Number);
+		if (major < 2 || (major === 2 && minor < 44)) {
+			this.skip();
+		}
+		makeBranch('feature/x', [['x.txt', 'x\n']]);
+		git(['push', '-q', 'origin', 'feature/x'], fx.repo);
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		git(['cherry-pick', 'feature/x'], fx.repo);
+		pushMain();
+		git(['config', 'uploadpack.allowFilter', 'true'], fx.remote);
+		const partial = path.join(fx.dir, 'partial');
+		git(['clone', '-q', '--filter=blob:none', '--no-checkout', `file://${fx.remote}`, partial], fx.dir);
+		git(['branch', '-q', 'feature/x', 'origin/feature/x'], partial);
+		const objects = () => git(['count-objects', '-v'], partial);
+		const before = objects();
+
+		const result = await analyzeBranches({ git: (args) => runGitCommand(args, partial, { appendLine: () => undefined }) }, { github: false });
+		const branch = byName(result)['feature/x'];
+		assert.strictEqual(`${branch.verdict} ${branch.reason}`, 'alive analysis-failed');
+		assert.strictEqual(objects(), before);
+	});
+
 	test('a branch with plain unmerged work costs a handful of git calls', async () => {
 		const count = 8;
 		for (let index = 0; index < count; index++) {

@@ -899,6 +899,21 @@ async function loadGitHub(
 }
 
 /**
+ * Runs `git` so that it never fetches the objects a partial clone lacks:
+ * `--no-lazy-fetch` (Git 2.44+, which also sets GIT_NO_LAZY_FETCH for the
+ * commands Git runs in turn). Reading a missing object then fails, and the
+ * branch stays alive (`analysis-failed`). Older versions have no way to stop it.
+ */
+async function withoutLazyFetch(git: RunGit): Promise<RunGit> {
+	const version = await git(['version']).then(
+		(result) => /(\d+)\.(\d+)/.exec(result.stdout),
+		() => null
+	);
+	const [major, minor] = version ? [Number(version[1]), Number(version[2])] : [0, 0];
+	return major > 2 || (major === 2 && minor >= 44) ? (args) => git(['--no-lazy-fetch', ...args]) : git;
+}
+
+/**
  * Classifies every local branch as dead (its work exists elsewhere, with the
  * proof) or alive, without writing anything to the repository. Fetching is
  * the caller's concern. GitHub is asked automatically when `gh` is available
@@ -906,7 +921,7 @@ async function loadGitHub(
  */
 export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeOptions = {}): Promise<BranchAnalysisResult> {
 	const started = Date.now();
-	const { git } = context;
+	const git = await withoutLazyFetch(context.git);
 	const [refsOutput, configOutput, worktreesOutput] = await Promise.all([
 		git(['for-each-ref', `--format=${REFS_FORMAT}`, 'refs/heads', 'refs/remotes']).then((result) => result.stdout),
 		git(['config', '--list', '-z']).then(
@@ -955,12 +970,12 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 			}),
 			CONCURRENCY,
 			async (path) => {
-				// No optional locks: status must not refresh and rewrite the index.
-				const status = await git(['-C', path, '--no-optional-locks', 'status', '--porcelain']).then(
-					(result) => result.stdout,
-					() => ''
+				// No optional locks: status must not refresh and rewrite the index. Unknown counts as dirty.
+				const dirty = await git(['-C', path, '--no-optional-locks', 'status', '--porcelain']).then(
+					(result) => result.stdout.trim().length > 0,
+					() => true
 				);
-				return [path, status.trim().length > 0] as const;
+				return [path, dirty] as const;
 			}
 		)
 	);
