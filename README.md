@@ -229,6 +229,7 @@ Other JSON outputs:
 | `clean` | The clean step that follows, as the `gsp clean --json` document, without the merged branch |
 | `nextCwd` | The main checkout, when the worktree gsp ran in was removed; otherwise `null` |
 | `restore` | `gsp restore <names>` for every branch this run deleted, or `null` |
+| `next` | The command to run next, the one the terminal output prints: in a plan, the one that applies it; once applied, when deletions were held back because things changed meanwhile, the one that plans again (`--dry-run`). `null` when nothing is left, or when the merged branch needs `--force`: its `hint` says so |
 
 `sync` rebases and force-pushes with a lease. Agents should run it only when authorized.
 

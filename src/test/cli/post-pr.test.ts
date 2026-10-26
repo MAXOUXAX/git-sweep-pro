@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { runCli } from '../../cli/app';
 import { EXIT } from '../../cli/args';
 import type { CleanBranch } from '../../core/clean-plan';
-import type { PostPrReport } from '../../core/post-pull-request-plan';
+import type { PostPrDocument, PostPrReport } from '../../core/post-pull-request-plan';
 import { createFakePrompter } from './fake-prompter';
 import { branchExists, commitFile, createFakeIo, createRepoFixture, git, makeGoneBranch, type RepoFixture } from './git-fixture';
 
@@ -326,6 +326,7 @@ suite('cli post-pr (real git)', function () {
 		const report = json(io.out);
 		assert.deepStrictEqual([report.branch?.action, report.branch?.reason, report.branch?.hint], ['skip', 'plan-changed', 'gsp post-pr feature/x --dry-run']);
 		assert.ok(report.clean.branches.every((branch) => branch.result === undefined));
+		assert.strictEqual((report as PostPrDocument).next, 'gsp post-pr feature/x --dry-run');
 		assert.ok(io.err.join('').includes('The default branch changed from origin/main to origin/trunk during the fetch, so nothing was deleted.'), io.err.join(''));
 		assert.ok(fs.existsSync(wt));
 		assert.ok(branchExists(fx.repo, 'feature/x') && branchExists(fx.repo, 'feature/old'));
@@ -361,14 +362,16 @@ suite('cli post-pr (real git)', function () {
 
 		const plan = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--json'], plan), EXIT.notApplied, plan.err.join(''));
-		const planned = JSON.parse(plan.out.join('')) as PostPrReport;
+		const planned = JSON.parse(plan.out.join('')) as PostPrDocument;
 		assert.deepStrictEqual(planned.branch, { name: 'feature/x', action: 'gone' });
 		assert.strictEqual(planned.defaultBranch.reason, 'not-applied');
+		assert.strictEqual(planned.next, 'gsp post-pr feature/x --yes');
 
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
-		const report = JSON.parse(io.out.join('')) as PostPrReport;
+		const report = JSON.parse(io.out.join('')) as PostPrDocument;
 		assert.deepStrictEqual(report.branch, { name: 'feature/x', action: 'gone' });
+		assert.strictEqual(report.next, null);
 		assert.deepStrictEqual(report.worktree, { path: null, removed: false, switched: false });
 		assert.strictEqual(report.defaultBranch.updated, true);
 		assert.strictEqual(report.restore, null);

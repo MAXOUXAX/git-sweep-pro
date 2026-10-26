@@ -3,6 +3,7 @@ import {
 	decideActions,
 	formatBranchLines,
 	formatSummary,
+	RERUN_LIFTS,
 	type CleanBranch,
 	type CleanMode,
 	type CleanReport,
@@ -202,8 +203,59 @@ export function formatPostPrLines(report: PostPrReport): string[] {
 	return lines;
 }
 
+/** The `--json` document of `gsp post-pr`: the report, and the command to run next (see {@link postPrNextCommand}). */
+export type PostPrDocument = PostPrReport & { readonly next: string | null };
+
+/** The options of the run that the next command keeps. */
+export type PostPrScope = {
+	/** `-C <path>`, as given. */
+	readonly cwd?: string;
+	readonly into?: string;
+	readonly protectedPatterns: readonly string[];
+	readonly github: boolean;
+	readonly fetch: boolean;
+};
+
+/**
+ * The command to run next, or null when nothing is left that gsp can do on
+ * its own: in a plan, the one that applies it, when applying would change
+ * something; once applied, when some deletions were held back because
+ * things changed meanwhile, the one that plans again to review them. A
+ * merged branch that only `--force` deletes is left to its own hint.
+ */
+export function postPrNextCommand(report: PostPrReport, scope: PostPrScope): string | null {
+	const target = isGone(report.branch) ? null : report.branch;
+	const rerun = (...flags: string[]) =>
+		cmd(
+			'gsp',
+			...(scope.cwd === undefined ? [] : ['-C', scope.cwd]),
+			'post-pr',
+			...(report.branch ? [report.branch.name] : []),
+			...(scope.into === undefined ? [] : ['--into', scope.into]),
+			...scope.protectedPatterns.flatMap((pattern) => ['--protect', pattern]),
+			...(scope.github ? [] : ['--no-github']),
+			...(scope.fetch ? [] : ['--no-fetch']),
+			...flags
+		);
+	if (report.mode === 'plan') {
+		const applies =
+			target?.action === 'delete' ||
+			report.defaultBranch.reason === 'not-applied' ||
+			report.defaultBranch.remoteAhead ||
+			report.clean.branches.some((branch) => branch.action === 'delete' && branch.result === undefined);
+		return applies ? rerun('--yes', ...(target?.action === 'delete' && target.needsForce ? ['--force'] : [])) : null;
+	}
+	return heldBack(report) > 0 ? rerun('--dry-run') : null;
+}
+
+/** How many deletions were held back while applying, as things changed meanwhile. */
+function heldBack(report: PostPrReport): number {
+	const branches = [...(report.branch && !isGone(report.branch) ? [report.branch] : []), ...report.clean.branches];
+	return branches.filter((branch) => RERUN_LIFTS.has(branch.reason)).length;
+}
+
 /** What to do next, or undefined when there is nothing to say. */
-export function formatNextSteps(report: PostPrReport): string[] {
+export function formatNextSteps(report: PostPrReport, next: string | null): string[] {
 	const steps: string[] = [];
 	if (report.restore) {
 		steps.push(`Undo with: ${report.restore}`);
@@ -211,9 +263,12 @@ export function formatNextSteps(report: PostPrReport): string[] {
 	if (report.nextCwd) {
 		steps.push(`The worktree you ran gsp in was removed. Continue in the main checkout: cd ${quoteShellArg(report.nextCwd)}`);
 	}
-	if (report.mode === 'plan' && hasPendingChanges(report)) {
-		const apply = report.branch?.action === 'delete' && report.branch.hint ? report.branch.hint : cmd('gsp', 'post-pr', ...(report.branch ? [report.branch.name] : []), '--yes');
-		steps.push(`Nothing was changed. To apply this plan, run: ${apply}`);
+	if (next && report.mode === 'plan') {
+		steps.push(`Nothing was changed. To apply this plan, run: ${next}`);
+	}
+	const held = heldBack(report);
+	if (next && report.mode === 'apply' && held > 0) {
+		steps.push(`${held} not deleted, as things changed while applying. Review them with: ${next}`);
 	}
 	return steps;
 }

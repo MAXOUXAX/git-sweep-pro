@@ -7,7 +7,7 @@ import { runGitCommand } from '../core/git-command';
 import { CLEAN_SCHEMA, formatBranchLines, formatSummary, nextCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
 import { runCleanWorkflow, UnknownBranchError, type CleanOutcome } from '../core/clean-workflow';
 import { createGhRunner } from '../core/github-signal';
-import { formatNextSteps, formatPostPrLines, type PostPrReport } from '../core/post-pull-request-plan';
+import { formatNextSteps, formatPostPrLines, postPrNextCommand, type PostPrDocument, type PostPrReport } from '../core/post-pull-request-plan';
 import { PostPrUsageError, runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import { inspectDeletions, runRestoreWorkflow } from '../core/restore-workflow';
 import { runResumeWorkflow } from '../core/sync-resume-workflow';
@@ -385,12 +385,23 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 }
 
 function printPostPrReport(report: PostPrReport, outcome: CleanOutcome, options: CliOptions, frontend: Frontend, io: CliIo): void {
+	const next =
+		outcome === 'cancelled'
+			? null
+			: postPrNextCommand(report, {
+					...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+					...(options.into === undefined ? {} : { into: options.into }),
+					protectedPatterns: options.protect,
+					github: options.github,
+					fetch: options.fetch,
+				});
 	if (options.json) {
-		io.stdout(`${JSON.stringify(report, null, 2)}\n`);
+		const document: PostPrDocument = { ...report, next };
+		io.stdout(`${JSON.stringify(document, null, 2)}\n`);
 		return;
 	}
 	const lines = formatPostPrLines(report);
-	const steps = outcome === 'cancelled' ? ['Cancelled. Nothing was changed.'] : formatNextSteps(report);
+	const steps = outcome === 'cancelled' ? ['Cancelled. Nothing was changed.'] : formatNextSteps(report, next);
 	if (options.rpc || frontend.canPrompt) {
 		lines.forEach((line) => frontend.output.appendLine(line));
 		const message = [lines[0], ...steps].join('\n');

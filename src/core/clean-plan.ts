@@ -297,7 +297,7 @@ export function decideActions(branches: readonly PlannedBranch[], options: Decid
 const FORCE_LIFTS: ReadonlySet<CleanBranch['reason']> = new Set(['needs-force', 'ignored-files']);
 
 /** Skips of planned deletions that running `gsp clean` again may carry out. */
-const RERUN_LIFTS: ReadonlySet<CleanBranch['reason']> = new Set(['plan-changed', 'fetch-failed', 'worktree-changed']);
+export const RERUN_LIFTS: ReadonlySet<CleanBranch['reason']> = new Set(['plan-changed', 'fetch-failed', 'worktree-changed']);
 
 /**
  * True when more could be cleaned with the user's approval: planned deletions

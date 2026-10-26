@@ -5,11 +5,13 @@ import {
 	decideTarget,
 	formatDefaultBranch,
 	formatNextSteps,
+	postPrNextCommand,
 	formatPostPrLines,
 	hasPendingChanges,
 	type DecideTargetOptions,
 	type DefaultBranchUpdate,
 	type PostPrReport,
+	type PostPrScope,
 } from '../../core/post-pull-request-plan';
 
 const BASE = 'refs/remotes/origin/main';
@@ -158,18 +160,37 @@ suite('post-pr plan', () => {
 	});
 
 	test('next steps: undo, where to continue, and how to apply a plan', () => {
+		const scope: PostPrScope = { protectedPatterns: [], github: true, fetch: true };
+		const steps = (report: PostPrReport) => formatNextSteps(report, postPrNextCommand(report, scope));
 		const deleted = { ...decideTarget(branch(), OPTIONS), result: 'deleted' as const };
-		assert.deepStrictEqual(formatNextSteps(report({ branch: deleted, restore: 'gsp restore feature/x', nextCwd: '/my repo' })), [
+		assert.deepStrictEqual(steps(report({ branch: deleted, restore: 'gsp restore feature/x', nextCwd: '/my repo' })), [
 			'Undo with: gsp restore feature/x',
 			"The worktree you ran gsp in was removed. Continue in the main checkout: cd '/my repo'",
 		]);
 
 		const planned = report({ mode: 'plan', branch: decideTarget(branch(), OPTIONS) });
 		assert.ok(hasPendingChanges(planned));
-		assert.deepStrictEqual(formatNextSteps(planned), ['Nothing was changed. To apply this plan, run: gsp post-pr feature/x --yes']);
-		assert.deepStrictEqual(formatNextSteps(report({ mode: 'plan', defaultBranch: update({ updated: false, reason: 'not-applied' }) })), [
+		assert.deepStrictEqual(steps(planned), ['Nothing was changed. To apply this plan, run: gsp post-pr feature/x --yes']);
+		assert.deepStrictEqual(steps(report({ mode: 'plan', defaultBranch: update({ updated: false, reason: 'not-applied' }) })), [
 			'Nothing was changed. To apply this plan, run: gsp post-pr --yes',
 		]);
 		assert.ok(!hasPendingChanges(report({ mode: 'plan' })));
 	});
+
+	test('the next command keeps the options of the run, and plans again what changed while applying', () => {
+		const scope: PostPrScope = { cwd: '/my repo', into: 'develop', protectedPatterns: ['release/*'], github: false, fetch: false };
+		const planned = report({ mode: 'plan', branch: decideTarget(branch(), OPTIONS) });
+		assert.strictEqual(
+			postPrNextCommand(planned, scope),
+			"gsp -C '/my repo' post-pr feature/x --into develop --protect 'release/*' --no-github --no-fetch --yes"
+		);
+		const held = { ...decideTarget(branch(), OPTIONS), action: 'skip' as const, reason: 'plan-changed' as const };
+		const applied = report({ branch: held });
+		assert.strictEqual(postPrNextCommand(applied, { protectedPatterns: [], github: true, fetch: true }), 'gsp post-pr feature/x --dry-run');
+		assert.deepStrictEqual(formatNextSteps(applied, 'gsp post-pr feature/x --dry-run'), [
+			'1 not deleted, as things changed while applying. Review them with: gsp post-pr feature/x --dry-run',
+		]);
+		assert.strictEqual(postPrNextCommand(report({ branch: { name: 'feature/x', action: 'gone' } }), scope), null);
+	});
+
 });
