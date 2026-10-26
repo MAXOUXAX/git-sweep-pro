@@ -293,6 +293,29 @@ suite('cli post-pr (real git)', function () {
 		assert.ok(branchExists(fx.repo, 'main'));
 	});
 
+	test('when the fetch moves the default branch, nothing is deleted (Git 2.48+)', async function () {
+		const [major, minor] = (/(\d+)\.(\d+)/.exec(git(['version'], fx.repo)) ?? []).slice(1).map(Number);
+		if (major < 2 || (major === 2 && minor < 48)) {
+			this.skip();
+		}
+		const wt = addFeatureWorktree('feature/x');
+		makeGoneBranch(fx.repo, 'feature/old');
+		squashMergeOnRemote('feature/x');
+		// The merge is in both: only the change of default branch holds the deletions back.
+		git(['push', '-q', 'origin', 'main:trunk'], path.join(fx.dir, 'merger'));
+		git(['symbolic-ref', 'HEAD', 'refs/heads/trunk'], fx.remote);
+		git(['config', 'remote.origin.followRemoteHEAD', 'always'], fx.repo);
+
+		const io = createFakeIo(wt);
+		assert.strictEqual(await runCli(['post-pr', '--yes', '--json'], io), EXIT.notApplied, io.err.join(''));
+		const report = json(io.out);
+		assert.deepStrictEqual([report.branch?.action, report.branch?.reason, report.branch?.hint], ['skip', 'plan-changed', 'gsp post-pr feature/x --dry-run']);
+		assert.ok(report.clean.branches.every((branch) => branch.result === undefined));
+		assert.ok(io.err.join('').includes('The default branch changed from origin/main to origin/trunk during the fetch, so nothing was deleted.'), io.err.join(''));
+		assert.ok(fs.existsSync(wt));
+		assert.ok(branchExists(fx.repo, 'feature/x') && branchExists(fx.repo, 'feature/old'));
+	});
+
 	test('an unknown branch is a usage error', async () => {
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['post-pr', 'feature/nope', '--yes'], io), EXIT.usage);

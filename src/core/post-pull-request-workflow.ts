@@ -4,6 +4,7 @@ import {
 	appliedOutcome,
 	applyDeletions,
 	buildReport,
+	holdToBase,
 	holdToPlan,
 	planBranches,
 	inspectWorktrees,
@@ -341,6 +342,13 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	const shown = { branches: others, ignored: [plannedIgnored, fetchedIgnored] };
 	target = fresh && holdToPlan([fresh], [fresh], remote)[0];
 	others = holdToPlan(others, decideOthers(refreshed.planned), remote, !options.yes);
+	// Every proof compares with the default branch: when the fetch changed it, nothing is deleted.
+	const review = ['gsp', 'post-pr', ...(targetName ? [targetName] : []), '--dry-run'].map(quoteShellArg).join(' ');
+	const held = holdToBase([...(target ? [target] : []), ...others], base, analysis.checks.base, review);
+	[target, others] = target ? [held.branches[0], held.branches.slice(1)] : [null, held.branches];
+	if (held.message) {
+		output.appendLine(held.message);
+	}
 	const gitAfter = leaving() ? context.gitAt(mainCheckout) : git;
 
 	const worktree = targetWorktree();
