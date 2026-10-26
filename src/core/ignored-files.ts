@@ -112,7 +112,7 @@ const globLiteral = (path: string) => path.replace(/[*?[\]\\]/g, '\\$&');
  * dependencies are searched for secret-like names with `git ls-files`, which
  * writes nothing either.
  */
-export async function findIgnoredFiles(git: RunGit, worktreePath: string): Promise<IgnoredFiles> {
+export async function listIgnoredFiles(git: RunGit, worktreePath: string): Promise<string[]> {
 	const { stdout } = await git(['-C', worktreePath, '--no-optional-locks', 'status', '--porcelain', '--untracked-files=normal', '--ignored=matching', '-z']);
 	const entries = stdout
 		.split('\0')
@@ -140,6 +140,15 @@ export async function findIgnoredFiles(git: RunGit, worktreePath: string): Promi
 				).stdout
 					.split('\0')
 					.filter(Boolean);
-	const ignored = [...entries.filter((entry) => !isRegenerable(entry)), ...secrets].sort();
-	return { count: ignored.length, sample: ignored.slice(0, IGNORED_SAMPLE_SIZE) };
+	return [...entries.filter((entry) => !isRegenerable(entry)), ...secrets].sort();
+}
+
+/** What a plan shows of `paths`: how many, and the first few. */
+export function summarizeIgnored(paths: readonly string[]): IgnoredFiles {
+	return { count: paths.length, sample: paths.slice(0, IGNORED_SAMPLE_SIZE) };
+}
+
+/** {@link listIgnoredFiles}, as a plan shows them. */
+export async function findIgnoredFiles(git: RunGit, worktreePath: string): Promise<IgnoredFiles> {
+	return summarizeIgnored(await listIgnoredFiles(git, worktreePath));
 }

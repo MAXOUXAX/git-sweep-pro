@@ -70,6 +70,29 @@ suite('clean workflow (real git)', function () {
 		assert.ok(branchExists(fx.repo, 'feature/wt'));
 	});
 
+	test('an ignored file that replaces one the plan showed counts as a change, even with --force', async () => {
+		makeGoneBranch(fx.repo, 'feature/wt');
+		const wt = path.join(fx.dir, 'wt');
+		git(['worktree', 'add', '-q', wt, 'feature/wt'], fx.repo);
+		fs.appendFileSync(path.join(fx.repo, '.git', 'info', 'exclude'), '*.local\n');
+		fs.writeFileSync(path.join(wt, 'shown.local'), 'seen in the plan\n');
+
+		// Same count after the fetch, but not the file the plan showed.
+		const { context } = contextFor({
+			onGit: (command) => {
+				if (command.startsWith('fetch --prune')) {
+					fs.renameSync(path.join(wt, 'shown.local'), path.join(wt, 'other.local'));
+				}
+			},
+		});
+		const { report, outcome } = await runCleanWorkflow(context, { ...APPLY, force: true, patterns: ['feature/wt'] });
+		const [branch] = report.branches;
+		assert.deepStrictEqual([branch.action, branch.reason, branch.worktree?.ignoredFiles], ['skip', 'worktree-changed', { count: 1, sample: ['other.local'] }]);
+		assert.strictEqual(outcome, 'not-applied');
+		assert.ok(fs.existsSync(path.join(wt, 'other.local')));
+		assert.ok(branchExists(fx.repo, 'feature/wt'));
+	});
+
 	test('the picker comes before any write: a cancel leaves no fetch and no prune behind', async () => {
 		makeGoneBranch(fx.repo, 'feature/a');
 		const fake = contextFor({ pickMany: () => undefined });
