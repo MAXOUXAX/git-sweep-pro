@@ -33,4 +33,7 @@ Settled by Maxence on 2026-10-26.
 
 ## Release workflow for 2.0
 
+Agents may squash-merge a pull request into `release/2.0.0` once GrandClasheur approved it and its CI is green (settled by Maxence on 2026-10-26). Only Maxence merges into `main`.
+
+
 Work lands as a stack of pull requests into `release/2.0.0` (squash merge each), then `release/2.0.0` is rebase-merged into `main` so semantic-release publishes a single 2.0.0.
