@@ -8,7 +8,7 @@ import * as vscode from 'vscode';
  * A genuine end-to-end test: it drives the *real* extension commands inside a
  * *real* VS Code extension host, operating on a *real* git repository via the
  * *real* git CLI. Nothing about git is mocked. The only things stubbed are the
- * VS Code UI prompts (mode picker and branch quick-pick), because a headless
+ * VS Code UI prompts (branch quick-pick and confirmations), because a headless
  * run cannot click them — exactly like a QA engineer confirming the dialogs.
  */
 
@@ -74,19 +74,21 @@ function makeFakeQuickPick(getAction: () => QuickPickAction) {
 		onDidTriggerItemButton: () => noopDisposable,
 		onDidChangeValue: () => noopDisposable,
 		show() {
-			// Defer so the extension finishes registering its listeners first.
-			setTimeout(() => {
+			// Wait for the plan: the picker is busy until it arrives.
+			const act = (): unknown => (quickPick.busy ? setTimeout(act, 20) : run());
+			setTimeout(act, 0);
+			const run = () => {
 				const action = getAction();
 				if (action === 'dismiss') {
 					hideListeners.forEach((cb) => cb());
 					return;
 				}
 				if (action === 'clearThenAccept') {
-					// buttons[1] is the "Clear all" title-bar action.
-					buttonListeners.forEach((cb) => cb(quickPick.buttons[1]));
+					const clearAll = (quickPick.buttons as { tooltip?: string }[]).find((button) => button.tooltip === 'Clear all');
+					buttonListeners.forEach((cb) => cb(clearAll));
 				}
 				acceptListeners.forEach((cb) => cb());
-			}, 0);
+			};
 		},
 		hide() {
 			hideListeners.forEach((cb) => cb());
@@ -139,7 +141,9 @@ suite('E2E: sweep against a real git repository', () => {
 	let remoteDir: string;
 	const infoMessages: string[] = [];
 	const errorMessages: string[] = [];
+	const warnings: string[] = [];
 	let quickPickAction: QuickPickAction = 'acceptAll';
+	let lastQuickPick: ReturnType<typeof makeFakeQuickPick> | undefined;
 
 	let originalShowInformationMessage: typeof vscode.window.showInformationMessage;
 	let originalShowErrorMessage: typeof vscode.window.showErrorMessage;
@@ -209,17 +213,9 @@ suite('E2E: sweep against a real git repository', () => {
 		infoMessages.length = 0;
 		errorMessages.length = 0;
 		quickPickAction = 'acceptAll';
+		lastQuickPick = undefined;
 
-		// Auto-confirm the modal mode picker with the safe-delete option, record
-		// every other informational message, and auto-select all quick-pick items.
-		(vscode.window as { showInformationMessage: unknown }).showInformationMessage = (
-			message: string,
-			...rest: unknown[]
-		) => {
-			const items = rest.filter((r): r is string => typeof r === 'string');
-			if (items.includes('Delete Proven Branches')) {
-				return Promise.resolve('Delete Proven Branches');
-			}
+		(vscode.window as { showInformationMessage: unknown }).showInformationMessage = (message: string) => {
 			infoMessages.push(message);
 			return Promise.resolve(undefined);
 		};
@@ -227,55 +223,45 @@ suite('E2E: sweep against a real git repository', () => {
 			errorMessages.push(message);
 			return Promise.resolve(undefined);
 		};
-		// Auto-confirm the delete confirmation modal by returning its confirm button.
-		(vscode.window as { showWarningMessage: unknown }).showWarningMessage = (
-			_message: string,
-			...rest: unknown[]
-		) => {
+		// Auto-confirm every modal by returning its confirm button.
+		(vscode.window as { showWarningMessage: unknown }).showWarningMessage = (message: string, ...rest: unknown[]) => {
 			const items = rest.filter((r): r is string => typeof r === 'string');
+			warnings.push(message);
 			return Promise.resolve(items[0]);
 		};
-		(vscode.window as { showQuickPick: unknown }).showQuickPick = (items: unknown) =>
-			Promise.resolve(items);
-		// The branch multi-select now uses createQuickPick with quick-action
-		// buttons; drive a fake so the real accept/button wiring runs headless.
-		(vscode.window as { createQuickPick: unknown }).createQuickPick = () =>
-			makeFakeQuickPick(() => quickPickAction);
+		(vscode.window as { showQuickPick: unknown }).showQuickPick = (items: unknown) => Promise.resolve(items);
+		// The clean picker uses createQuickPick with title-bar actions; drive a
+		// fake so the real accept/button wiring runs headless.
+		(vscode.window as { createQuickPick: unknown }).createQuickPick = () => {
+			lastQuickPick = makeFakeQuickPick(() => quickPickAction);
+			return lastQuickPick;
+		};
 	});
 
-	test('detects and safe-deletes a branch whose upstream is gone', async function () {
+	test('plans, then deletes a branch whose upstream is gone, through the CLI', async function () {
 		this.timeout(120000);
 
 		assert.ok(branchExists(repoDir, 'feature/stale'), 'feature/stale should exist before the sweep');
 
 		await vscode.commands.executeCommand('git-sweep-pro.run');
 
-		assert.ok(
-			!branchExists(repoDir, 'feature/stale'),
-			'feature/stale should be deleted from the real repo after the sweep'
-		);
-		assert.ok(
-			infoMessages.some((m) => m.startsWith('Git Sweep Pro: 1 deleted (1 empty)')),
-			`expected a deletion confirmation; got ${JSON.stringify(infoMessages)}`
-		);
+		assert.ok(!branchExists(repoDir, 'feature/stale'), 'feature/stale should be deleted from the real repo after the sweep');
+		assert.deepStrictEqual(warnings.splice(0), ['Delete feature/stale?']);
+		assert.deepStrictEqual(infoMessages, ['Git Sweep Pro: Deleted feature/stale.']);
 		assert.deepStrictEqual(errorMessages, [], 'no error messages expected');
 	});
 
-	test('dry run reports the gone branch without deleting it', async function () {
+	test('the preview lists the gone branch without deleting it', async function () {
 		this.timeout(120000);
 
 		makeGoneBranch(repoDir, 'feature/stale2');
 
 		await vscode.commands.executeCommand('git-sweep-pro.dryRun');
 
-		assert.ok(
-			branchExists(repoDir, 'feature/stale2'),
-			'dry run must not delete the branch'
-		);
-		assert.ok(
-			infoMessages.some((m) => m.startsWith('Git Sweep Pro (dry run): 1 to delete (1 empty)')),
-			`expected a dry-run summary; got ${JSON.stringify(infoMessages)}`
-		);
+		assert.ok(branchExists(repoDir, 'feature/stale2'), 'a preview must not delete the branch');
+		assert.strictEqual(lastQuickPick?.title, 'Git Sweep Pro: Preview stale branches');
+		assert.strictEqual(lastQuickPick?.placeholder, '1 branch to delete. Nothing changes until you run Sweep Stale Branches.');
+		assert.deepStrictEqual([infoMessages, errorMessages], [[], []]);
 
 		git(['branch', '-D', 'feature/stale2'], repoDir);
 	});
@@ -288,36 +274,25 @@ suite('E2E: sweep against a real git repository', () => {
 
 		await vscode.commands.executeCommand('git-sweep-pro.run');
 
-		assert.ok(
-			branchExists(repoDir, 'feature/keep-me'),
-			'clearing the selection must leave the branch in place'
-		);
-		assert.ok(
-			infoMessages.some((m) => m.includes('Cancelled. Nothing was deleted.')),
-			`expected a no-selection message; got ${JSON.stringify(infoMessages)}`
-		);
+		assert.ok(branchExists(repoDir, 'feature/keep-me'), 'clearing the selection must leave the branch in place');
+		assert.deepStrictEqual(infoMessages, ['Git Sweep Pro: No branch selected. Nothing was deleted.']);
 		assert.deepStrictEqual(errorMessages, []);
 
 		git(['branch', '-D', 'feature/keep-me'], repoDir);
 	});
 
-	test('reports no stale branches when the repo is clean', async function () {
+	test('says there is nothing to clean when the repo is clean', async function () {
 		this.timeout(120000);
 
-		// Only main remains, and its upstream is healthy.
 		assert.ok(!branchExists(repoDir, 'feature/stale'));
-		assert.ok(!branchExists(repoDir, 'feature/stale2'));
 
-		await vscode.commands.executeCommand('git-sweep-pro.dryRun');
+		await vscode.commands.executeCommand('git-sweep-pro.run');
 
-		assert.ok(
-			infoMessages.some((m) => m.includes('Nothing to clean.')),
-			`expected a no-stale-branches message; got ${JSON.stringify(infoMessages)}`
-		);
+		assert.deepStrictEqual(infoMessages, ['Git Sweep Pro: Nothing to clean.']);
 		assert.deepStrictEqual(errorMessages, []);
 	});
 
-	test('never deletes a branch protected by gitSweepPro.protectedBranches', async function () {
+	test('never deletes a branch protected by gitSweepPro.protectedBranches, and says why', async function () {
 		this.timeout(120000);
 
 		makeGoneBranch(repoDir, 'release/1.0');
@@ -327,14 +302,10 @@ suite('E2E: sweep against a real git repository', () => {
 		try {
 			await vscode.commands.executeCommand('git-sweep-pro.run');
 
-			assert.ok(
-				branchExists(repoDir, 'release/1.0'),
-				'a protected branch must never be deleted'
-			);
-			assert.ok(
-				infoMessages.some((m) => m.includes('Nothing to clean · 1 skipped.')),
-				`expected a protected-branch notice; got ${JSON.stringify(infoMessages)}`
-			);
+			assert.ok(branchExists(repoDir, 'release/1.0'), 'a protected branch must never be deleted');
+			assert.strictEqual(lastQuickPick?.placeholder, 'Nothing to delete. 1 branch is skipped: see why below.');
+			const item = (lastQuickPick?.items as vscode.QuickPickItem[]).find((candidate) => candidate.label.endsWith('release/1.0'));
+			assert.strictEqual(item?.detail, 'Protected by "release/*"');
 			assert.deepStrictEqual(errorMessages, []);
 		} finally {
 			await config.update('protectedBranches', undefined, vscode.ConfigurationTarget.Workspace);
@@ -342,7 +313,7 @@ suite('E2E: sweep against a real git repository', () => {
 		}
 	});
 
-	test('deletes a squash- or rebase-merged branch that git branch -d refuses', async function () {
+	test('deletes a squash-merged branch that git branch -d refuses', async function () {
 		this.timeout(120000);
 
 		makeSquashMergedGoneBranch(repoDir, 'feature/squashed', 'squashed.txt');
@@ -350,14 +321,31 @@ suite('E2E: sweep against a real git repository', () => {
 
 		await vscode.commands.executeCommand('git-sweep-pro.run');
 
-		assert.ok(
-			!branchExists(repoDir, 'feature/squashed'),
-			'a squash-merged branch should be deleted after confirmation'
-		);
-		assert.ok(
-			infoMessages.some((m) => m.includes('1 deleted (1 rebase-merged)')),
-			`expected a deletion confirmation; got ${JSON.stringify(infoMessages)}`
-		);
+		assert.ok(!branchExists(repoDir, 'feature/squashed'), 'a squash-merged branch should be deleted after confirmation');
+		assert.deepStrictEqual(infoMessages, ['Git Sweep Pro: Deleted feature/squashed.']);
 		assert.deepStrictEqual(errorMessages, [], 'no error messages expected');
+	});
+
+	test('finishes a merged pull request checked out in this window: previews, deletes it, switches to main', async function () {
+		this.timeout(120000);
+
+		git(['checkout', '-b', 'feature/done'], repoDir);
+		fs.writeFileSync(path.join(repoDir, 'done.txt'), 'done\n');
+		git(['add', 'done.txt'], repoDir);
+		git(['-c', 'commit.gpgsign=false', 'commit', '-m', 'done'], repoDir);
+		git(['push', '-u', 'origin', 'feature/done'], repoDir);
+		// The pull request is merged on the remote, and its branch deleted there.
+		git(['push', 'origin', 'feature/done:main'], repoDir);
+		git(['push', 'origin', '--delete', 'feature/done'], repoDir);
+		warnings.length = 0;
+
+		await vscode.commands.executeCommand('git-sweep-pro.postPullRequest');
+
+		assert.deepStrictEqual(warnings, ['Finish feature/done?']);
+		assert.ok(!branchExists(repoDir, 'feature/done'), 'the merged branch is deleted');
+		assert.strictEqual(git(['branch', '--show-current'], repoDir).trim(), 'main');
+		assert.strictEqual(git(['rev-parse', 'main'], repoDir), git(['rev-parse', 'origin/main'], repoDir), 'main is updated');
+		assert.deepStrictEqual(infoMessages, ['Git Sweep Pro: Finished feature/done: deleted it. Updated main.']);
+		assert.deepStrictEqual(errorMessages, []);
 	});
 });

@@ -19,6 +19,12 @@ import { quoteShellArg } from './git-command';
 /** Version of the `--json` document. Bumped on any incompatible change. */
 export const CLEAN_SCHEMA = 2;
 
+/** Why a command stopped before producing its JSON document. */
+export type JsonErrorCode = 'usage' | 'no-such-directory' | 'unknown-branch' | 'unknown-remote' | 'push-url-differs' | 'not-a-repository' | 'failed';
+
+/** The `--json` document of a command that stopped on a fatal error. */
+export type JsonErrorDocument = { readonly schema: typeof CLEAN_SCHEMA; readonly error: { readonly message: string; readonly code: JsonErrorCode } };
+
 /**
  * - `delete`: its work is proven to exist elsewhere and nothing holds it;
  * - `keep`: its work exists nowhere else (or it is the default branch);

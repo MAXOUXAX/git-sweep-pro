@@ -4,7 +4,8 @@ import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion, describeDeletionTarget } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
-import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, nextCommand, withCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
+import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, nextCommand, withCommand, type CleanDocument, type CleanReport, type JsonErrorCode, type JsonErrorDocument } from '../core/clean-plan';
+import type { CliEvent } from '../core/rpc-protocol';
 import { PushUrlMismatchError, runCleanWorkflow, UnknownBranchError, UnknownRemoteError, type CleanOutcome } from '../core/clean-workflow';
 import { createSshRunner } from '../core/forge';
 import { createGhRunner } from '../core/github-signal';
@@ -90,7 +91,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	} catch (error) {
 		if (error instanceof UsageError) {
 			if (argv.includes('--json')) {
-				printJsonError(io, error.message, 'usage');
+				printJsonError(io, argv.includes('--rpc'), error.message, 'usage');
 			}
 			io.stderr(`error: ${error.message}\n\n${USAGE}\n`);
 			return EXIT.usage;
@@ -110,7 +111,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	const requestedDir = path.resolve(io.cwd, options.cwd ?? '.');
 	if (!fs.existsSync(requestedDir)) {
 		if (options.json) {
-			printJsonError(io, `no such directory: ${requestedDir}`, 'no-such-directory');
+			printJsonError(io, options.rpc, `no such directory: ${requestedDir}`, 'no-such-directory');
 		}
 		io.stderr(`error: no such directory: ${requestedDir}\n`);
 		return EXIT.failed;
@@ -135,22 +136,27 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	return outcome.outcome === 'cancelled' && !frontend.canPrompt ? EXIT.notApplied : EXIT_CODES[outcome.outcome];
 }
 
-/** Why a command stopped before producing its JSON document. */
-type JsonErrorCode = 'usage' | 'no-such-directory' | 'unknown-branch' | 'unknown-remote' | 'push-url-differs' | 'not-a-repository' | 'failed';
+/**
+ * Writes a `--json` document: indented on stdout, or as one `result` event
+ * when the extension drives the CLI over RPC, where stdout carries NDJSON.
+ */
+function printJson(io: CliIo, rpc: boolean, document: unknown): void {
+	io.stdout(rpc ? `${JSON.stringify({ type: 'result', document } satisfies CliEvent)}\n` : `${JSON.stringify(document, null, 2)}\n`);
+}
 
 /**
  * With `--json`, a fatal error is still one JSON document on stdout, so a
  * script parsing it gets the reason, not an empty string. The message also
  * goes to stderr as usual.
  */
-function printJsonError(io: CliIo, message: string, code: JsonErrorCode): void {
-	io.stdout(`${JSON.stringify({ schema: CLEAN_SCHEMA, error: { message, code } }, null, 2)}\n`);
+function printJsonError(io: CliIo, rpc: boolean, message: string, code: JsonErrorCode): void {
+	printJson(io, rpc, { schema: CLEAN_SCHEMA, error: { message, code } } satisfies JsonErrorDocument);
 }
 
 /** {@link printJsonError} for a failed Git command, or any other error. */
-function printJsonGitError(io: CliIo, error: unknown): void {
+function printJsonGitError(io: CliIo, rpc: boolean, error: unknown): void {
 	const message = toErrorMessage(error);
-	printJsonError(io, describeGitFailure(message)[0], message.toLowerCase().includes('not a git repository') ? 'not-a-repository' : 'failed');
+	printJsonError(io, rpc, describeGitFailure(message)[0], message.toLowerCase().includes('not a git repository') ? 'not-a-repository' : 'failed');
 }
 
 /** How a command ended: a workflow outcome, a `clean` outcome, or an exit code decided on the spot. */
@@ -172,7 +178,7 @@ async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend,
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
 		if (options.json) {
-			printJsonGitError(io, error);
+			printJsonGitError(io, options.rpc, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return 'failed';
@@ -237,7 +243,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
 		if (options.json) {
-			printJsonGitError(io, error);
+			printJsonGitError(io, options.rpc, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return EXIT.failed;
@@ -247,7 +253,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		const { report, outcome } = await runCleanWorkflow(
 			{ ...context, ssh: createSshRunner(), ...(options.github ? { gh: createGhRunner(repository.root) } : {}) },
 			{
-				patterns: options.positionals,
+				patterns: cleanPatterns(options),
 				dryRun: options.mode === 'dryRun',
 				yes: options.yes,
 				force: options.mode === 'forceDelete',
@@ -258,6 +264,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 				confirm: options.confirm,
 				...(options.remote === undefined ? {} : { remote: options.remote }),
 				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+				...(options.expect.size > 0 ? { expect: options.expect } : {}),
 			}
 		);
 		printCleanReport(report, outcome, options, frontend, io);
@@ -266,17 +273,22 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		if (error instanceof UnknownBranchError || error instanceof UnknownRemoteError || error instanceof PushUrlMismatchError) {
 			if (options.json) {
 				const code = error instanceof UnknownBranchError ? 'unknown-branch' : error instanceof UnknownRemoteError ? 'unknown-remote' : 'push-url-differs';
-				printJsonError(io, error.message, code);
+				printJsonError(io, options.rpc, error.message, code);
 			}
 			io.stderr(`error: ${error.message}\n`);
 			return EXIT.usage;
 		}
 		if (options.json) {
-			printJsonGitError(io, error);
+			printJsonGitError(io, options.rpc, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return EXIT.failed;
 	}
+}
+
+/** The branches `gsp clean` considers: those named or matched, and those `--expect` names. */
+function cleanPatterns(options: CliOptions): string[] {
+	return [...new Set([...options.positionals, ...options.expect.keys()])];
 }
 
 /** What to do next when the plan was not applied, or `undefined` when there is nothing to say. */
@@ -316,7 +328,7 @@ function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: C
 			? null
 			: nextCommand(report, {
 					...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-					patterns: options.positionals,
+					patterns: cleanPatterns(options),
 					protectedPatterns: options.protect,
 					github: options.github,
 					fetch: options.fetch,
@@ -324,7 +336,7 @@ function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: C
 				});
 	if (options.json) {
 		const document: CleanDocument = { ...report, next: command };
-		io.stdout(`${JSON.stringify(document, null, 2)}\n`);
+		printJson(io, options.rpc, document);
 		return;
 	}
 	const remoteLines = formatRemoteLines(report);
@@ -359,7 +371,7 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
 		if (options.json) {
-			printJsonGitError(io, error);
+			printJsonGitError(io, options.rpc, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return EXIT.failed;
@@ -392,13 +404,13 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 	} catch (error) {
 		if (error instanceof PostPrUsageError) {
 			if (options.json) {
-				printJsonError(io, error.message, error.code);
+				printJsonError(io, options.rpc, error.message, error.code);
 			}
 			io.stderr(`error: ${error.message}\n`);
 			return EXIT.usage;
 		}
 		if (options.json) {
-			printJsonGitError(io, error);
+			printJsonGitError(io, options.rpc, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return EXIT.failed;
@@ -419,7 +431,7 @@ function printPostPrReport(report: PostPrReport, outcome: CleanOutcome, options:
 				});
 	if (options.json) {
 		const document: PostPrDocument = { ...report, next };
-		io.stdout(`${JSON.stringify(document, null, 2)}\n`);
+		printJson(io, options.rpc, document);
 		return;
 	}
 	const lines = formatPostPrLines(report);
@@ -448,6 +460,8 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 	if (!worktree) {
 		return 'failed';
 	}
+	// With --rpc, stdout carries only protocol events: a line goes to the output channel as a log event.
+	const print = (line: string) => (options.rpc ? context.output.appendLine(line) : io.stdout(`${line}\n`));
 	try {
 		switch (worktree.subcommand) {
 			case 'list': {
@@ -456,7 +470,7 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 					{ fetch: options.fetch, github: options.github, protectedPatterns: options.protect }
 				);
 				if (options.json) {
-					io.stdout(`${JSON.stringify(document, null, 2)}\n`);
+					printJson(io, options.rpc, document);
 				} else {
 					formatWorktreeLines(document, branches).forEach((line) => io.stdout(`${line}\n`));
 				}
@@ -468,8 +482,8 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 				if (pruned.length === 0) {
 					io.stderr('No worktree registrations to prune.\n');
 				} else {
-					io.stdout(`${dryRun ? 'Would prune' : 'Pruned'} ${pruned.length} worktree registration(s):\n`);
-					pruned.forEach((path) => io.stdout(`  ${path}\n`));
+					print(`${dryRun ? 'Would prune' : 'Pruned'} ${pruned.length} worktree registration(s):`);
+					pruned.forEach((path) => print(`  ${path}`));
 				}
 				return 'ok';
 			}
@@ -477,7 +491,7 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 				const result = await removeWorktree(context, worktree.target ?? '', options.mode === 'forceDelete', dir);
 				switch (result.kind) {
 					case 'removed':
-						io.stdout(`Removed worktree ${result.worktree.path}.\n`);
+						print(`Removed worktree ${result.worktree.path}.`);
 						return 'ok';
 					case 'main':
 						context.ui.showErrorMessage(`Refusing to remove the main worktree (${result.worktree.path}).`, { failed: true });
@@ -499,7 +513,7 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 		}
 	} catch (error) {
 		if (options.json) {
-			printJsonGitError(io, error);
+			printJsonGitError(io, options.rpc, error);
 		}
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
@@ -519,7 +533,7 @@ async function runRestore(context: WorkflowContext, options: CliOptions, fronten
 	try {
 		const entries = (await inspectDeletions(context)).flatMap(({ entry, blocker }) => (blocker ? [] : [entry]));
 		if (options.json) {
-			io.stdout(`${JSON.stringify(entries, null, 2)}\n`);
+			printJson(io, options.rpc, entries);
 		} else if (entries.length === 0) {
 			io.stderr('No deleted branches to restore.\n');
 		} else {
@@ -531,7 +545,7 @@ async function runRestore(context: WorkflowContext, options: CliOptions, fronten
 		return 'ok';
 	} catch (error) {
 		if (options.json) {
-			printJsonGitError(io, error);
+			printJsonGitError(io, options.rpc, error);
 		}
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';

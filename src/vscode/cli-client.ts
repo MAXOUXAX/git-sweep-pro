@@ -19,6 +19,9 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 	const openProgress = new Map<number, () => void>();
 	let errorShown = false;
 	let disposed = false;
+	// Cancelled: nothing more reaches the user.
+	let muted = false;
+	let document: unknown;
 	let cancelPrompts!: () => void;
 	const cancelled = new Promise<undefined>((resolve) => { cancelPrompts = () => resolve(undefined); });
 
@@ -27,12 +30,18 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 			case 'log':
 				ui.log(event.line);
 				return;
+			case 'result':
+				document = event.document;
+				return;
 			case 'notify':
+				if (muted) {
+					return;
+				}
 				errorShown ||= event.method === 'showErrorMessage';
 				invoke(ui, event);
 				return;
 			case 'progressStart': {
-				if (disposed) {
+				if (disposed || muted) {
 					return;
 				}
 				// The host may invoke its task later, after progressEnd or dispose.
@@ -77,6 +86,15 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 		},
 		/** True once the CLI reported an error to the user. */
 		errorShown: (): boolean => errorShown,
+		/** The `--json` document the CLI sent, or `undefined` without `--json`. */
+		document: (): unknown => document,
+		/** Stops showing anything: the run was cancelled. Pending prompts are dismissed, progress closes. */
+		mute: (): void => {
+			muted = true;
+			cancelPrompts();
+			openProgress.forEach((resolve) => resolve());
+			openProgress.clear();
+		},
 		/** Releases pending prompt handlers and closes progress when the CLI exits. */
 		dispose: (): void => {
 			disposed = true;
@@ -95,6 +113,8 @@ export type CliRunOptions = {
 	readonly cwd: string;
 	readonly ui: HostUi;
 	readonly spawnFn?: (command: string, args: readonly string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
+	/** Cancels the run: the CLI is stopped and nothing more it says is shown. Only for runs that change nothing. */
+	readonly signal?: AbortSignal;
 };
 
 export type CliRunResult = {
@@ -102,6 +122,8 @@ export type CliRunResult = {
 	readonly exitCode: number;
 	/** True when the user already saw an error notification for this run. */
 	readonly errorShown: boolean;
+	/** The `--json` document of the run, when it was given `--json` and got that far. */
+	readonly document?: unknown;
 };
 
 /**
@@ -138,12 +160,27 @@ export function runCliProcess(options: CliRunOptions): Promise<CliRunResult> {
 				// Release pending prompts before waiting for the event queue to drain.
 				handler.dispose();
 				void queue.then(() => {
-					resolve({ exitCode, errorShown: startFailed || handler.errorShown() });
+					const document = handler.document();
+					resolve({ exitCode, errorShown: startFailed || handler.errorShown(), ...(document === undefined ? {} : { document }) });
 				});
 			}
 		};
 
+		const cancel = (): void => {
+			handler.mute();
+			child.kill();
+		};
+		if (options.signal?.aborted) {
+			cancel();
+		} else {
+			options.signal?.addEventListener('abort', cancel, { once: true });
+		}
+
 		child.on('error', (error) => {
+			if (options.signal?.aborted) {
+				finish(-1, true);
+				return;
+			}
 			options.ui.showErrorMessage(`Could not start the gsp CLI: ${error.message}`);
 			finish(-1, true);
 		});
