@@ -145,8 +145,10 @@ function printJsonError(io: CliIo, message: string, code: JsonErrorCode): void {
 	io.stdout(`${JSON.stringify({ schema: CLEAN_SCHEMA, error: { message, code } }, null, 2)}\n`);
 }
 
-function gitErrorCode(message: string): JsonErrorCode {
-	return message.toLowerCase().includes('not a git repository') ? 'not-a-repository' : 'failed';
+/** {@link printJsonError} for a failed Git command, or any other error. */
+function printJsonGitError(io: CliIo, error: unknown): void {
+	const message = toErrorMessage(error);
+	printJsonError(io, describeGitFailure(message)[0], message.toLowerCase().includes('not a git repository') ? 'not-a-repository' : 'failed');
 }
 
 /** How a command ended: a workflow outcome, a `clean` outcome, or an exit code decided on the spot. */
@@ -167,6 +169,9 @@ async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend,
 	try {
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return 'failed';
 	}
@@ -230,7 +235,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
 		if (options.json) {
-			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+			printJsonGitError(io, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return EXIT.failed;
@@ -262,12 +267,15 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 			return EXIT.usage;
 		}
 		if (options.json) {
-			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+			printJsonGitError(io, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return EXIT.failed;
 	}
 }
+
+/** Longer than this, the command to apply a plan is printed on its own line. */
+const COMMAND_INLINE_WIDTH = 80;
 
 /** What to do next when the plan was not applied, or `undefined` when there is nothing to say. */
 function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | null): string | undefined {
@@ -275,7 +283,8 @@ function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | nul
 		return undefined;
 	}
 	if (next && report.summary.delete > 0 && !report.branches.some((branch) => branch.result !== undefined)) {
-		return `Nothing was changed. To apply this plan, run: ${next}`;
+		// It names every planned branch, so a long one goes on its own line, whole.
+		return next.length > COMMAND_INLINE_WIDTH ? `Nothing was changed. To apply this plan, run:\n${next}` : `Nothing was changed. To apply this plan, run: ${next}`;
 	}
 	const count = (test: (branch: CleanReport['branches'][number]) => boolean) => report.branches.filter(test).length;
 	const unpushed = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'dead');
@@ -475,6 +484,9 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 			}
 		}
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	}
@@ -504,6 +516,9 @@ async function runRestore(context: WorkflowContext, options: CliOptions, fronten
 		}
 		return 'ok';
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	}

@@ -11,7 +11,25 @@ Settled by Maxence on 2026-10-26.
 - **GitHub signal is automatic when `gh` is authenticated** (merged PR head SHAs, matched by SHA, never by name); `--no-github` turns it off.
 - **Remote branch cleanup is opt-in** with `--remote`, shows the plan first and requires `--yes`.
 - **Stay independent of `git branch --delete-merged` (Git 2.56)**: it cannot see squash merges. Mirror its safety rules instead: honour `branch.<name>.deleteMerged=false`, never delete a branch another kept local branch tracks, accept its pattern arguments.
+- **Ignored files in a worktree block its removal, unless they are regenerable** (settled 2026-10-26). `git worktree remove` deletes ignored files and `gsp restore` can't bring them back. A worktree with ignored files outside known regenerable folders (dependencies, build output, caches) is skipped with reason `ignored-files` and the list of files.
+- **`--force` and `--discard-changes` are separate** (settled 2026-10-26), in `clean`, `post-pr` and `worktree remove`. `--force` only lifts the merge proof (unpushed or unmerged work on a branch, restorable with `gsp restore`). Losing uncommitted changes or non-regenerable ignored files in a worktree needs `--discard-changes`, and the hint lists what would be lost.
 - **The VS Code extension mirrors the CLI** through the same JSON schema, including worktree commands.
+
+## Implementation decisions (taken during the build, not yet reviewed by Maxence)
+
+- For a proven branch, gsp may fall back to `git branch -D` after checking the tip has not moved, because `-d` cannot see squash merges.
+- A merged pull request only proves a branch dead when it was merged into the default branch.
+- **Hints never suggest losing data first.** A skip caused by uncommitted changes points to committing or stashing them, not to a forced removal.
+- **Exit 5 means "more could be cleaned with your approval"**: deletions planned but not applied, or branches that need `--force`. Skips that need the user to act elsewhere (current branch, dirty worktree) don't change the exit code.
+- `--yes` without a picker applies whatever is proven after the fetch, within the requested scope (patterns, `--protect`) and never beyond the `--force` rules. Only branches a person picked in the picker are held to the plan they saw.
+- A branch needing `--force` is never offered or pre-selected in the picker without `--force`.
+- Local branches named `main`, `master`, `trunk` or `develop` are protected by default, besides the detected default branch, so a moved `origin/HEAD` can't get them deleted; naming one exactly on the command line lifts it.
+- Secret-like files (`.env*`, `*.pem`, `*.key`, `.npmrc`, `.netrc`) are never regenerable, even inside ignored build or cache folders; dependency folders are not searched.
+- `--remote` never force-deletes: it pushes the deletion with a lease on the analysed SHA; a rejected lease is reported as `plan-changed`. Without `origin`, it uses the only remote, else it's a usage error. `branch.<name>.deleteMerged=false` also protects that branch's upstream on the remote.
+- On a GitHub remote, `--remote` deletes nothing when the GitHub signal is unavailable or `--no-github` is passed (open PRs can't be checked). The base branch of an open PR is kept like its head. Naming `develop` lifts its default-name protection locally only; the remote needs the qualified form `origin/develop`.
+- `post-pr` exits 5 whenever the merged branch it was asked to finish is kept (dirty, ignored files, mid-rebase, not proven): for post-pr, 5 means "not finished". Its positional never lifts protection; a protected name there is read as the old `gsp post-pr <default>` form.
+- `--remote` fails closed on hosts it can't classify: unless the remote is known not to be GitHub (local path, `file://`, gitlab.com, bitbucket.org) or `git config git-sweep-pro.forge none` says so, an unresolvable GitHub status skips deletions as `github-unavailable`. URLs are resolved with `insteadOf` and SSH aliases. `--remote` refuses a remote whose push URL points to another repository than its fetch URL (same host and full path, after rewrites and SSH aliases).
+- The extension offers `--remote` and the worktree list in 2.0.
 
 ## Release workflow for 2.0
 

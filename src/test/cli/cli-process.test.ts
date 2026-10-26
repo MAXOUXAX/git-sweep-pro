@@ -153,6 +153,11 @@ suite('cli process client (real git)', function () {
 		const outside = run(['--json'], fx.dir);
 		assert.strictEqual(outside.status, EXIT.failed);
 		assert.deepStrictEqual(JSON.parse(outside.stdout).error, { message: NOT_A_REPOSITORY, code: 'not-a-repository' });
+		for (const command of [['worktree', 'list'], ['restore']]) {
+			const result = run([...command, '--json'], fx.dir);
+			assert.strictEqual(result.status, EXIT.failed, command.join(' '));
+			assert.deepStrictEqual(JSON.parse(result.stdout), { schema: 2, error: { message: NOT_A_REPOSITORY, code: 'not-a-repository' } }, command.join(' '));
+		}
 
 		const usage = run(['--json', '--bogus']);
 		assert.strictEqual(usage.status, EXIT.usage);

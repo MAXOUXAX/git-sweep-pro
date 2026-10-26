@@ -339,19 +339,19 @@ export type CleanScope = {
 	readonly fetch: boolean;
 };
 
-/** Up to this many planned deletions, the command to apply a plan names them. */
-export const MAX_NAMED_BRANCHES = 10;
-
 /**
- * The command that applies a plan without ever going beyond it: the planned
- * branches by name when there are few, otherwise the patterns the plan was
- * made with; then every option that narrows it. `--force` only when a planned
- * deletion needs it.
+ * The command that applies a plan without ever going beyond it: every planned
+ * branch by name, however many, then every option that narrows it. Never the
+ * patterns the plan was made with, which could match a branch that became
+ * deletable since. `--force` only when a planned deletion needs it.
  */
 export function applyCommand(branches: readonly CleanBranch[], scope: CleanScope): string {
 	const deleting = branches.filter((branch) => branch.action === 'delete' && branch.result === undefined);
-	const targets = deleting.length > 0 && deleting.length <= MAX_NAMED_BRANCHES ? deleting.map((branch) => branch.name) : scope.patterns;
-	return scopedCommand(scope, targets, ['--yes', ...(deleting.some((branch) => branch.needsForce) ? ['--force'] : [])]);
+	return scopedCommand(
+		scope,
+		deleting.map((branch) => branch.name),
+		['--yes', ...(deleting.some((branch) => branch.needsForce) ? ['--force'] : [])]
+	);
 }
 
 /** `gsp clean` on `targets`, with every option of `scope` that narrows it, then `flags`. */
