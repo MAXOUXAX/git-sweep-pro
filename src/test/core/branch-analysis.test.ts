@@ -8,15 +8,31 @@ import { commitFile, createRepoFixture, git, makeGoneBranch, type RepoFixture } 
 
 const GITHUB_URL = 'https://github.com/acme/widgets.git';
 
-type FakePullRequest = { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; headRefOid: string };
+/** A pull request as `gh pr list` returns it; `baseRefName` defaults to main. */
+type FakePullRequest = { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; headRefOid: string; baseRefName?: string };
 
-/** A `gh` stub: lists `pullRequests`, answers commit lookups from `commitPulls`, records every call. */
-function fakeGh(pullRequests: FakePullRequest[], commitPulls: Record<string, FakePullRequest[]> = {}): RunGh & { calls: string[][] } {
+/**
+ * A `gh` stub: lists `pullRequests`, answers commit lookups from `commitPulls`
+ * and compare calls from `compares` ("<base>...<head>" → status), records every call.
+ */
+function fakeGh(
+	pullRequests: FakePullRequest[],
+	commitPulls: Record<string, FakePullRequest[]> = {},
+	compares: Record<string, string> = {}
+): RunGh & { calls: string[][] } {
 	const calls: string[][] = [];
 	const run = async (args: readonly string[]) => {
 		calls.push([...args]);
 		if (args[0] === 'pr') {
-			return { stdout: JSON.stringify(pullRequests), stderr: '' };
+			return { stdout: JSON.stringify(pullRequests.map((pr) => ({ baseRefName: 'main', ...pr }))), stderr: '' };
+		}
+		const compared = /compare\/([0-9a-f]+\.\.\.[0-9a-f]+)$/.exec(args.find((arg) => arg.includes('/compare/')) ?? '')?.[1];
+		if (compared) {
+			const status = compares[compared];
+			if (!status) {
+				throw Object.assign(new Error('HTTP 404'), { code: 1, stderr: 'Not Found' });
+			}
+			return { stdout: `${status}\n`, stderr: '' };
 		}
 		const sha = /commits\/([0-9a-f]+)\/pulls$/.exec(args.at(-1) ?? '')?.[1] ?? '';
 		const found = commitPulls[sha];
@@ -28,6 +44,7 @@ function fakeGh(pullRequests: FakePullRequest[], commitPulls: Record<string, Fak
 			state: pr.state === 'OPEN' ? 'open' : 'closed',
 			merged_at: pr.state === 'MERGED' ? '2026-10-01T00:00:00Z' : null,
 			head: { sha: pr.headRefOid },
+			base: { ref: pr.baseRefName ?? 'main' },
 		}));
 		return { stdout: JSON.stringify(api), stderr: '' };
 	};
@@ -384,10 +401,16 @@ suite('branch analysis (real git)', function () {
 		git(['fetch', '-q'], fx.repo);
 
 		const pr = { number: 7, state: 'MERGED' as const, headRefOid: prHead };
-		// The head commit is not here: only the API can tell.
-		const gh = fakeGh([pr], { [localTip]: [pr] });
+		// The head commit is not here: GitHub lists the tip in the PR, but that alone proves nothing.
+		const listedOnly = fakeGh([pr], { [localTip]: [pr] }, { [`${localTip}...${prHead}`]: 'diverged' });
+		assert.strictEqual(byName(await analyze({}, listedOnly))['feature/review'].reason, 'unmerged-commits');
+		const unreachable = fakeGh([pr], { [localTip]: [pr] });
+		assert.strictEqual(byName(await analyze({}, unreachable))['feature/review'].reason, 'unmerged-commits');
+
+		// The compare API confirms the final head contains the tip.
+		const gh = fakeGh([pr], { [localTip]: [pr] }, { [`${localTip}...${prHead}`]: 'ahead' });
 		const result = await analyze({}, gh);
-		assert.deepStrictEqual(result.checks.github, { used: true, repo: 'acme/widgets', pullRequests: 1, apiCalls: 1 });
+		assert.deepStrictEqual(result.checks.github, { used: true, repo: 'acme/widgets', pullRequests: 1, apiCalls: 2 });
 		const branch = byName(result)['feature/review'];
 		assert.strictEqual(`${branch.verdict} ${branch.reason}`, 'dead pr-merged');
 		assert.deepStrictEqual(branch.evidence, { method: 'pull-request', pullRequest: 7, state: 'merged', headSha: prHead, match: 'api' });
@@ -402,6 +425,22 @@ suite('branch analysis (real git)', function () {
 
 		// Matched by SHA, never by name; without GitHub it stays alive.
 		assert.strictEqual(byName(await analyze())['feature/review'].reason, 'unmerged-commits');
+	});
+
+	test('a pull request merged into another branch than the default one proves nothing on its own', async () => {
+		pretendGitHub();
+		makeBranch('feature/into-release', [['r.txt', 'r\n']]);
+		makeBranch('feature/stacked', [['s.txt', 's\n'], ['s.txt', 's\ns\n']]);
+		const tip = rev('feature/into-release');
+		const stacked = { number: 5, state: 'MERGED' as const, headRefOid: rev('feature/stacked'), baseRefName: 'release' };
+		const gh = fakeGh(
+			[{ number: 4, state: 'MERGED', headRefOid: tip, baseRefName: 'release' }, stacked],
+			{ [rev('feature/stacked~1')]: [stacked] },
+			{ [`${rev('feature/stacked~1')}...${stacked.headRefOid}`]: 'ahead' }
+		);
+		const branches = byName(await analyze({}, gh));
+		assert.strictEqual(`${branches['feature/into-release'].verdict} ${branches['feature/into-release'].reason}`, 'alive unmerged-commits');
+		assert.strictEqual(`${branches['feature/stacked'].verdict} ${branches['feature/stacked'].reason}`, 'alive unmerged-commits');
 	});
 
 	test('a tip that is a merged pull request head, and one that is an open pull request head', async () => {

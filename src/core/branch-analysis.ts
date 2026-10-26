@@ -19,7 +19,7 @@ export type UpstreamState = 'tracking' | 'gone' | 'none';
  * - `merged`: its tip is reachable from the base (a merge commit brought it in);
  * - `rebase-merged`: each of its commits has an equivalent patch on the base;
  * - `squash-merged`: the base reached the exact content of every file it changed;
- * - `pr-merged`: its tip is the head of a merged pull request, or behind it;
+ * - `pr-merged`: its tip is the head of a pull request merged into the default branch, or behind it;
  * - `commits-merged`: each of its own commits is proven merged separately (integration branches);
  * - `upstream-gone`: its upstream was deleted. Not a proof by itself: see `unpushedCommits`.
  */
@@ -61,7 +61,10 @@ export type Evidence =
 			readonly pullRequest: number;
 			readonly state: 'merged' | 'open';
 			readonly headSha: string;
-			/** `head`: the tip is the PR head; `ancestor`: the PR head contains it; `api`: GitHub lists the tip in the PR. */
+			/**
+			 * `head`: the tip is the PR head; `ancestor`: the PR head, present locally, contains it;
+			 * `api`: GitHub lists the tip in the PR and its compare API confirms the PR head contains it.
+			 */
 			readonly match: 'head' | 'ancestor' | 'api';
 	  }
 	| { readonly method: 'commits'; readonly base: string; readonly commits: number; readonly proofs: readonly CommitProof[] }
@@ -457,12 +460,30 @@ class Prover {
 	}
 
 	/**
+	 * Whether a pull request proves its commits merged: merged into the default
+	 * branch. One merged into another branch only moved them there.
+	 */
+	private isMergedIntoBase(pr: PullRequest): boolean {
+		return pr.state === 'merged' && pr.baseRef === this.base.name;
+	}
+
+	/** Whether `head` contains `commit`, or undefined when either is missing locally. */
+	private async isAncestor(commit: string, head: string): Promise<boolean | undefined> {
+		try {
+			await this.git(['merge-base', '--is-ancestor', commit, head]);
+			return true;
+		} catch (error) {
+			return (error as { code?: unknown }).code === 1 ? false : undefined;
+		}
+	}
+
+	/**
 	 * Commits of the merged pull requests whose heads exist locally, mapped to
 	 * their pull request (computed once, only when a proof needs it).
 	 */
 	private mergedPullRequestCommits(): Promise<ReadonlyMap<string, PullRequest>> {
 		this.pullRequestCommits ??= (async () => {
-			const merged = (this.github?.pullRequests ?? []).filter((pr) => pr.state === 'merged');
+			const merged = (this.github?.pullRequests ?? []).filter((pr) => this.isMergedIntoBase(pr));
 			if (merged.length === 0) {
 				return new Map();
 			}
@@ -484,12 +505,18 @@ class Prover {
 		return this.pullRequestCommits;
 	}
 
-	/** Proves `commit` belongs to a merged pull request: its head, behind its local head, or per the GitHub API. */
+	/**
+	 * Proves `commit` belongs to a pull request merged into the default branch:
+	 * its head, or behind its final head. The API only finds candidates; the
+	 * final head must contain the commit, checked locally when the head is
+	 * here, else with GitHub's compare API.
+	 */
 	async pullRequestProof(commit: string, useApi: boolean): Promise<PullRequestMatch | undefined> {
-		if (!this.github) {
+		const { github } = this;
+		if (!github) {
 			return undefined;
 		}
-		const head = this.github.pullRequests.find((pr) => pr.state === 'merged' && pr.headSha === commit);
+		const head = github.pullRequests.find((pr) => this.isMergedIntoBase(pr) && pr.headSha === commit);
 		if (head) {
 			return { pullRequest: head, match: 'head' };
 		}
@@ -500,8 +527,19 @@ class Prover {
 		if (!useApi) {
 			return undefined;
 		}
-		const viaApi = (await this.github.pullRequestsOf(commit)).find((pr) => pr.state === 'merged');
-		return viaApi && { pullRequest: viaApi, match: 'api' };
+		for (const pullRequest of (await github.pullRequestsOf(commit)).filter((pr) => this.isMergedIntoBase(pr))) {
+			if (pullRequest.headSha === commit) {
+				return { pullRequest, match: 'head' };
+			}
+			const local = await this.isAncestor(commit, pullRequest.headSha);
+			if (local) {
+				return { pullRequest, match: 'ancestor' };
+			}
+			if (local === undefined && (await github.contains(pullRequest.headSha, commit))) {
+				return { pullRequest, match: 'api' };
+			}
+		}
+		return undefined;
 	}
 
 	openPullRequest(commit: string): PullRequest | undefined {
