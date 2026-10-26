@@ -821,7 +821,7 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 
 	block(analysis.checks.cleanedRemote);
 	const plannedBase = analysis.checks.base;
-	const decideOptions: DecideOptions = { force: options.force, discardChanges: options.discardChanges, named, defaultBranch: plannedBase?.name };
+	const decideOptions: DecideOptions = { force: options.force, discardChanges: options.discardChanges, named, defaultBranch: plannedBase?.name, scope };
 	let branches = holdLocal(decideActions(planned, decideOptions));
 	let remoteBranches = holdRemote(decideRemote(analysis.remoteBranches, deleting(branches)));
 	let worktreesPruned: readonly string[] = apply ? [] : plan.prunable;

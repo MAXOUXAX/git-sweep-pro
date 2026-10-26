@@ -448,7 +448,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	const decideOthers = (planned: readonly PlannedBranch[]) =>
 		decideActions(
 			planned.filter((branch) => !excluded.has(branch.name)),
-			{ force: false, discardChanges: false, named: new Set(), defaultBranch: base?.name }
+			{ force: false, discardChanges: false, named: new Set(), defaultBranch: base?.name, scope }
 		);
 	let others = decideOthers(plan.planned);
 	let { analysis, remote } = plan;

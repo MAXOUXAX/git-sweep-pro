@@ -131,7 +131,7 @@ suite('clean workflow (real git)', function () {
 		});
 		const { report, outcome } = await runCleanWorkflow(context, APPLY);
 		const branch = report.branches.find((entry) => entry.name === 'feature/x');
-		assert.deepStrictEqual([branch?.action, branch?.reason, branch?.verdictReason, branch?.hint], ['skip', 'fetch-failed', 'upstream-gone', 'gsp clean feature/x --yes']);
+		assert.deepStrictEqual([branch?.action, branch?.reason, branch?.verdictReason, branch?.hint], ['skip', 'fetch-failed', 'upstream-gone', 'gsp clean feature/x --no-github --yes']);
 		assert.deepStrictEqual(report.checks.remote, { source: 'local-refs', reason: 'unreachable', detail: 'unable to access the remote' });
 		assert.strictEqual(outcome, 'not-applied');
 		assert.ok(branchExists(fx.repo, 'feature/x'));
@@ -150,7 +150,7 @@ suite('clean workflow (real git)', function () {
 		const { context } = contextFor({ git: { 'fetch --prune --multiple origin': new Error('fatal: unable to access the remote') } });
 		const { report, outcome } = await runCleanWorkflow(context, APPLY);
 		const branch = report.branches.find((entry) => entry.name === 'feature/x');
-		assert.deepStrictEqual([branch?.action, branch?.reason, branch?.hint], ['skip', 'fetch-failed', 'gsp clean feature/x --yes']);
+		assert.deepStrictEqual([branch?.action, branch?.reason, branch?.hint], ['skip', 'fetch-failed', 'gsp clean feature/x --no-github --yes']);
 		assert.strictEqual(outcome, 'not-applied');
 		assert.strictEqual(formatSummary(report), 'Nothing deleted · 1 skipped (1 fetch failed)');
 		assert.ok(branchExists(fx.repo, 'feature/x'));

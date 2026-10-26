@@ -251,11 +251,11 @@ suite('merged branch detection (real git)', function () {
 		const planned = JSON.parse(plan.out.join('')) as { branches: Array<{ name: string; action: string; reason: string; protected: unknown; hint: string | null }> };
 		const byName = Object.fromEntries(planned.branches.map((branch) => [branch.name, [branch.action, branch.reason, branch.protected, branch.hint]]));
 		assert.deepStrictEqual(byName, {
-			'develop-x': ['delete', 'merged', null, 'gsp clean develop-x --yes'],
-			develop: ['skip', 'protected', { by: 'default-name' }, 'gsp clean develop'],
+			'develop-x': ['delete', 'merged', null, 'gsp clean develop-x --no-github --yes'],
+			develop: ['skip', 'protected', { by: 'default-name' }, 'gsp clean develop --no-github'],
 			main: ['keep', 'default-branch', { by: 'default-branch' }, null],
-			master: ['skip', 'protected', { by: 'default-name' }, 'gsp clean master'],
-			trunk: ['skip', 'protected', { by: 'default-name' }, 'gsp clean trunk'],
+			master: ['skip', 'protected', { by: 'default-name' }, 'gsp clean master --no-github'],
+			trunk: ['skip', 'protected', { by: 'default-name' }, 'gsp clean trunk --no-github'],
 		});
 
 		const human = createFakeIo(fx.repo);

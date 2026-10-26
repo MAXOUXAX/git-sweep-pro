@@ -243,7 +243,18 @@ export type DecideOptions = {
 	readonly defaultBranch: string | undefined;
 	/** Branches picked interactively; the other candidates are skipped as `not-selected`. Undefined: no picker. */
 	readonly picked?: ReadonlySet<string>;
+	/** The options of the run that hints keep, as `next` does. */
+	readonly scope?: HintScope;
 };
+
+/** The options of a run that every command gsp suggests keeps: `-C`, `--no-github` and `--no-fetch`. */
+export type HintScope = Pick<CleanScope, 'cwd' | 'github' | 'fetch'>;
+
+/** `gsp <command> <operands>`, the options of `scope` (as `next` places them), then `flags`; `worktree` commands only keep `-C`. */
+function gspCommand(scope: HintScope | undefined, command: 'clean' | 'post-pr' | 'worktree', operands: readonly string[], ...flags: string[]): string {
+	const offline = scope && command !== 'worktree' ? [...(scope.github ? [] : ['--no-github']), ...(scope.fetch ? [] : ['--no-fetch'])] : [];
+	return cmd('gsp', ...(scope?.cwd === undefined ? [] : ['-C', scope.cwd]), command, ...operands, ...offline, ...flags);
+}
 
 /** True when `pattern` is a glob rather than a branch name: Git forbids `*` and `?` in branch names. */
 export function isBranchGlob(pattern: string): boolean {
@@ -264,7 +275,7 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 	}
 	if (branch.protected?.by === 'default-name') {
 		// Naming it exactly lifts the protection, not the proofs.
-		return { reason: 'protected', hint: cmd('gsp', 'clean', branch.name) };
+		return { reason: 'protected', hint: gspCommand(options.scope, 'clean', [branch.name]) };
 	}
 	if (branch.protected?.by === 'branch-config') {
 		return { reason: 'delete-merged-false', hint: null };
@@ -272,7 +283,7 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 	const worktree = branch.worktree && !branch.worktree.prunable ? branch.worktree : null;
 	// During a rebase or a bisect HEAD is detached: the branch is not "current", but it is being worked on.
 	if (worktree?.inProgress === 'rebase') {
-		const drop = worktree.isMain ? '' : `, or, to drop the rebase with the worktree: ${cmd('gsp', 'worktree', 'remove', worktree.path, '--discard-changes')} && ${cmd('gsp', 'clean', branch.name, '--yes')}`;
+		const drop = worktree.isMain ? '' : `, or, to drop the rebase with the worktree: ${gspCommand(options.scope, 'worktree', ['remove', worktree.path], '--discard-changes')} && ${gspCommand(options.scope, 'clean', [branch.name], '--yes')}`;
 		return { reason: 'rebase-in-progress', hint: `${cmd('git', '-C', worktree.path, 'rebase', '--continue')}${drop}` };
 	}
 	if (worktree?.inProgress === 'bisect') {
@@ -284,7 +295,7 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 			defaultBranch === undefined
 				? 'git switch <another-branch>'
 				: branch.verdict === 'dead'
-					? cmd('gsp', 'post-pr', branch.name, '--yes')
+					? gspCommand(options.scope, 'post-pr', [branch.name], '--yes')
 					: cmd('git', 'switch', defaultBranch);
 		return { reason: 'current-branch', hint };
 	}
@@ -293,15 +304,15 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 			defaultBranch === undefined
 				? `${cmd('git', '-C', worktree.path, 'switch')} <another-branch>`
 				: branch.verdict === 'dead'
-					? cmd('gsp', 'post-pr', branch.name, '--yes')
+					? gspCommand(options.scope, 'post-pr', [branch.name], '--yes')
 					: cmd('git', '-C', worktree.path, 'switch', defaultBranch);
 		return { reason: 'main-worktree', hint };
 	}
 	if (worktree?.locked) {
 		return { reason: 'locked-worktree', hint: cmd('git', 'worktree', 'unlock', worktree.path) };
 	}
-	const again = cmd('gsp', 'clean', branch.name, '--yes');
-	const discard = worktree && `${cmd('gsp', 'worktree', 'remove', worktree.path, '--discard-changes')} && ${again}`;
+	const again = gspCommand(options.scope, 'clean', [branch.name], '--yes');
+	const discard = worktree && `${gspCommand(options.scope, 'worktree', ['remove', worktree.path], '--discard-changes')} && ${again}`;
 	if (worktree?.dirty) {
 		// Never suggest losing the changes first: put them aside, then clean again.
 		return {
@@ -321,7 +332,7 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 		const needsForce = branch.verdict === 'alive' || branch.unpushedCommits > 0;
 		return {
 			reason: 'ignored-files',
-			hint: `move what you need out of ${quoteShellArg(worktree.path)}, then: ${cmd('gsp', 'clean', branch.name, '--yes', ...(needsForce ? ['--force'] : []), '--discard-changes')}`,
+			hint: `move what you need out of ${quoteShellArg(worktree.path)}, then: ${gspCommand(options.scope, 'clean', [branch.name], '--yes', ...(needsForce ? ['--force'] : []), '--discard-changes')}`,
 		};
 	}
 	return undefined;
@@ -371,12 +382,12 @@ export function decideActions(branches: readonly PlannedBranch[], options: Decid
 			return make('skip', blocker.reason, blocker.hint);
 		}
 		if (needsForce && !options.force && !options.picked?.has(branch.name)) {
-			return make('skip', 'needs-force', cmd('gsp', 'clean', branch.name, '--yes', '--force'));
+			return make('skip', 'needs-force', gspCommand(options.scope, 'clean', [branch.name], '--yes', '--force'));
 		}
 		if (options.picked && !options.picked.has(branch.name)) {
-			return make('skip', 'not-selected', cmd('gsp', 'clean', branch.name));
+			return make('skip', 'not-selected', gspCommand(options.scope, 'clean', [branch.name]));
 		}
-		return make('delete', branch.reason, cmd('gsp', 'clean', branch.name, '--yes', ...approvalFlags([{ needsForce, worktree: branch.worktree && { ignoredFiles: branch.worktree.ignoredFiles ?? null } }])));
+		return make('delete', branch.reason, gspCommand(options.scope, 'clean', [branch.name], '--yes', ...approvalFlags([{ needsForce, worktree: branch.worktree && { ignoredFiles: branch.worktree.ignoredFiles ?? null } }])));
 	});
 
 	// A branch another kept branch tracks stays, so that branch keeps its upstream.

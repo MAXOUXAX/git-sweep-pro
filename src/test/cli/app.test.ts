@@ -410,7 +410,7 @@ suite('cli app (real git)', function () {
 			const realWt = fs.realpathSync(wt);
 			const lines = io.out.join('').split('\n');
 			assert.ok(lines.includes(`delete  feature/wt    already in origin/main, removes worktree ${realWt}`), lines.join('\n'));
-			assert.ok(lines.includes('skip    feature/here  current branch (already in origin/main) → gsp post-pr feature/here --yes'), lines.join('\n'));
+			assert.ok(lines.includes('skip    feature/here  current branch (already in origin/main) → gsp post-pr feature/here --no-fetch --yes'), lines.join('\n'));
 
 			const json = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['list', '--json', '--no-fetch'], json), EXIT.notApplied);
@@ -801,7 +801,7 @@ suite('cli app (real git)', function () {
 				verdictReason: 'empty',
 				action: 'delete',
 				reason: 'empty',
-				hint: 'gsp clean feature/clean --yes',
+				hint: 'gsp clean feature/clean --no-github --yes',
 			});
 			const pick = (entry: Record<string, unknown>, keys: string[]) => keys.map((key) => entry[key]);
 			const keys = ['branch', 'isMain', 'prunable', 'dirty', 'inProgress', 'action', 'reason', 'hint'];
@@ -813,7 +813,7 @@ suite('cli app (real git)', function () {
 				null,
 				'skip',
 				'dirty-worktree',
-				`git -C ${real(dirty)} stash --include-untracked && gsp clean feature/dirty --yes, or, to delete them for good: gsp worktree remove ${real(dirty)} --discard-changes && gsp clean feature/dirty --yes`,
+				`git -C ${real(dirty)} stash --include-untracked && gsp clean feature/dirty --no-github --yes, or, to delete them for good: gsp worktree remove ${real(dirty)} --discard-changes && gsp clean feature/dirty --no-github --yes`,
 			]);
 			assert.deepStrictEqual(pick(byPath[real(rebasing)], keys), [
 				'feature/rebasing',
@@ -833,7 +833,7 @@ suite('cli app (real git)', function () {
 				null,
 				'delete',
 				'empty',
-				'gsp clean feature/gone --yes',
+				'gsp clean feature/gone --no-github --yes',
 				null,
 			]);
 			assert.deepStrictEqual(pick(byPath[real(detached)], ['branch', 'head', 'verdict', 'action', 'reason', 'hint']), [null, head('HEAD'), null, 'keep', 'detached', null]);
@@ -857,7 +857,7 @@ suite('cli app (real git)', function () {
 			const width = linked.length;
 			assert.deepStrictEqual(io.out.join('').split('\n').filter(Boolean), [
 				`${root.padEnd(width)}  main        [main]       keep    default branch`,
-				`${linked}  feature/wt  [1 ignored]  skip    removing worktree ${linked} would delete 1 ignored file (.env), needs --discard-changes (already in origin/main) → move what you need out of ${linked}, then: gsp clean feature/wt --yes --discard-changes`,
+				`${linked}  feature/wt  [1 ignored]  skip    removing worktree ${linked} would delete 1 ignored file (.env), needs --discard-changes (already in origin/main) → move what you need out of ${linked}, then: gsp clean feature/wt --no-github --yes --discard-changes`,
 			]);
 		});
 

@@ -364,6 +364,18 @@ suite('clean plan', () => {
 		);
 	});
 
+	test('hints keep -C, --no-github and --no-fetch, as next does', () => {
+		const scope = { cwd: '/my repo', github: false, fetch: false };
+		const hints = decide(
+			[branch('feature/gone', { reason: 'upstream-gone', unpushedCommits: 1 }), branch('feature/dirty', { worktree: worktree({ path: '/wt/d', dirty: true }) })],
+			{ scope }
+		).map((entry) => entry.hint);
+		assert.deepStrictEqual(hints, [
+			"gsp -C '/my repo' clean feature/gone --no-github --no-fetch --yes --force",
+			"git -C /wt/d stash --include-untracked && gsp -C '/my repo' clean feature/dirty --no-github --no-fetch --yes, or, to delete them for good: gsp -C '/my repo' worktree remove /wt/d --discard-changes && gsp -C '/my repo' clean feature/dirty --no-github --no-fetch --yes",
+		]);
+	});
+
 	test('a forced deletion says so, and a half-done one says what is left', () => {
 		const [forced] = decide([branch('feature/gone', { reason: 'upstream-gone', unpushedCommits: 1 })], { force: true });
 		const halfDone: CleanBranch = { ...forced, worktree: { ...worktree({ path: '/wt/g' }), ignoredFiles: null, submodules: null, changedFiles: null }, result: 'worktree-removed', error: 'boom' };
