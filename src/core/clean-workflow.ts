@@ -11,15 +11,19 @@ import {
 	type CleanMode,
 	type CleanReport,
 	type CleanResult,
+	type DecideOptions,
+	type PlannedBranch,
 	type RemoteCheck,
+	type SkipReason,
 } from './clean-plan';
 import { canRecordDeletions, createDeletionRecorder, type DeletionRecorder } from './deletion-log';
-import { toErrorMessage } from './errors';
-import type { RunGit } from './git-command';
+import { gitFailureReason, toErrorMessage } from './errors';
+import { quoteShellArg, type RunGit } from './git-command';
 import type { RunGh } from './github-signal';
+import { findIgnoredFiles } from './ignored-files';
 import { isNotFullyMergedError } from './sweep-logic';
 import type { PickItem, WorkflowContext } from './workflow';
-import { listWorktrees, pruneWorktrees } from './worktrees';
+import { listWorktrees, parseWorktrees, pruneWorktrees } from './worktrees';
 
 export type CleanOptions = {
 	/** Branch names or globs; only the matching branches are considered. All branches when empty. */
@@ -29,7 +33,7 @@ export type CleanOptions = {
 	/** Apply the plan without asking. */
 	readonly yes: boolean;
 	readonly force: boolean;
-	/** `git fetch --prune` before applying, `git ls-remote` before planning. */
+	/** `git ls-remote` while planning, `git fetch --prune` before applying. */
 	readonly fetch: boolean;
 	/** Ask GitHub for merged pull requests through `gh`. */
 	readonly github: boolean;
@@ -94,16 +98,14 @@ async function remotesToCheck(git: RunGit, upstreams: ReadonlyMap<string, Upstre
 	return [...tracked];
 }
 
-function firstLine(message: string): string {
-	return message.split('\n').find((line) => line.trim())?.trim() ?? message;
-}
-
 /**
  * Plan mode only: finds the upstreams deleted on their remote with
  * `git ls-remote --heads`, which writes nothing, where a fetch would prune
  * them. Each tracked branch whose remote head is missing is marked gone, as
- * the analysis would after a prune: an alive branch becomes `upstream-gone`,
- * and its unpushed commits are counted without the stale remote-tracking ref.
+ * the analysis would after a prune: a branch alive only for its unmerged
+ * commits becomes `upstream-gone`, and its unpushed commits are counted
+ * without the stale remote-tracking ref. Other alive branches (open pull
+ * request, no base, failed analysis, default branch) stay alive.
  */
 async function markGoneUpstreams(
 	git: RunGit,
@@ -118,7 +120,7 @@ async function markGoneUpstreams(
 			heads.set(remote, new Set(stdout.split('\n').map((line) => line.split('\t')[1]).filter(Boolean)));
 		}
 	} catch (error) {
-		return { analysis, remote: { source: 'local-refs', reason: 'unreachable', detail: firstLine(toErrorMessage(error)) } };
+		return { analysis, remote: { source: 'local-refs', reason: 'unreachable', detail: gitFailureReason(error) } };
 	}
 
 	const stale = new Map<string, Upstream>();
@@ -140,8 +142,7 @@ async function markGoneUpstreams(
 			if (!stale.has(branch.name)) {
 				return branch;
 			}
-			const proven = branch.verdict === 'dead';
-			if (proven || branch.reason === 'default-branch') {
+			if (branch.reason !== 'unmerged-commits') {
 				return { ...branch, upstreamState: 'gone' };
 			}
 			const { stdout } = await git(['rev-list', '--count', branch.tip, '--not', ...excludes, '--remotes', ...(baseRef ? [baseRef] : [])]);
@@ -159,7 +160,7 @@ async function markGoneUpstreams(
 }
 
 /**
- * Apply mode only: `git fetch --prune`, following a renamed remote default
+ * Applying only: `git fetch --prune`, following a renamed remote default
  * branch (Git 2.48+; older versions ignore the setting). A failure is not
  * fatal: the local remote-tracking refs are used instead.
  */
@@ -171,10 +172,31 @@ async function fetchAndPrune(context: CleanContext, remotes: readonly string[]):
 		);
 		return { source: 'fetch', remotes };
 	} catch (error) {
-		const detail = firstLine(toErrorMessage(error));
-		context.output.appendLine(`Could not fetch (${detail}); using the local remote-tracking refs.`);
-		return { source: 'local-refs', reason: 'unreachable', detail };
+		return { source: 'local-refs', reason: 'unreachable', detail: gitFailureReason(error) };
 	}
+}
+
+/**
+ * Looks for the ignored files of the linked worktrees that deleting a
+ * candidate would remove. Worktrees that are kept anyway (main, locked,
+ * dirty, mid-rebase) are not read. A worktree that cannot be read counts as
+ * dirty, as in the analysis.
+ */
+async function withIgnoredFiles(git: RunGit, branches: readonly BranchAnalysis[], named: ReadonlySet<string>): Promise<PlannedBranch[]> {
+	return Promise.all(
+		branches.map(async (branch): Promise<PlannedBranch> => {
+			const { worktree } = branch;
+			const candidate = branch.verdict === 'dead' || named.has(branch.name);
+			if (!candidate || !worktree || worktree.isMain || worktree.prunable || worktree.locked || worktree.dirty || worktree.inProgress) {
+				return branch;
+			}
+			try {
+				return { ...branch, worktree: { ...worktree, ignoredFiles: await findIgnoredFiles(git, worktree.path) } };
+			} catch {
+				return { ...branch, worktree: { ...worktree, dirty: true } };
+			}
+		})
+	);
 }
 
 async function readTip(git: RunGit, branch: string): Promise<{ sha: string; upstream?: string } | undefined> {
@@ -186,23 +208,51 @@ async function readTip(git: RunGit, branch: string): Promise<{ sha: string; upst
 }
 
 /**
- * Deletes one planned branch: checks it still points at the analysed commit,
- * removes its linked worktree (never with --force: Git refuses a dirty or
- * locked one), then deletes it. `git branch -d` is tried first; `-D` only
- * follows for a branch the plan proved dead or that `--force` covers, since
- * Git cannot see squash merges.
+ * True when the worktree at `path` is still as analysed: the branch checked
+ * out there and nowhere else, not locked, no uncommitted change, and no
+ * ignored file that the plan did not show.
  */
-async function deleteBranch(git: RunGit, branch: CleanBranch, recorder: DeletionRecorder): Promise<{ result: CleanResult; error?: string }> {
+async function worktreeUnchanged(git: RunGit, branch: CleanBranch, path: string | undefined): Promise<boolean> {
+	const worktrees = parseWorktrees((await git(['worktree', 'list', '--porcelain'])).stdout);
+	const holders = worktrees.filter((worktree) => worktree.branch === branch.name && worktree.state !== 'prunable');
+	if (path === undefined) {
+		return holders.length === 0;
+	}
+	if (holders.length !== 1 || holders[0].path !== path || holders[0].state !== 'linked') {
+		return false;
+	}
+	const status = await git(['-C', path, '--no-optional-locks', 'status', '--porcelain']);
+	if (status.stdout.trim()) {
+		return false;
+	}
+	const ignored = await findIgnoredFiles(git, path);
+	return ignored.count <= (branch.worktree?.ignoredFiles?.count ?? 0);
+}
+
+type Outcome = { readonly result: CleanResult; readonly error?: string } | { readonly skip: SkipReason };
+
+/**
+ * Deletes one planned branch: checks it still points at the analysed commit
+ * and that its worktree is still as analysed, removes that worktree (never
+ * with --force: Git refuses a dirty or locked one), then deletes the branch.
+ * `git branch -d` is tried first, as it also refuses a branch being rebased
+ * or bisected; since it cannot see squash merges, a proven branch then goes
+ * with `git update-ref -d`, only if it still points at the analysed commit.
+ */
+async function deleteBranch(git: RunGit, branch: CleanBranch, recorder: DeletionRecorder): Promise<Outcome> {
 	const tip = await readTip(git, branch.name);
 	if (tip?.sha !== branch.tip) {
 		return { result: 'failed', error: tip ? 'it moved since it was analysed; run gsp clean again' : 'it no longer exists' };
 	}
 	const worktree = branch.worktree && !branch.worktree.prunable ? branch.worktree.path : undefined;
+	if (!(await worktreeUnchanged(git, branch, worktree))) {
+		return { skip: 'worktree-changed' };
+	}
 	if (worktree) {
 		try {
 			await git(['worktree', 'remove', worktree]);
 		} catch (error) {
-			return { result: 'failed', error: `could not remove worktree ${worktree}: ${firstLine(toErrorMessage(error))}` };
+			return { result: 'failed', error: `could not remove worktree ${worktree}: ${gitFailureReason(error)}` };
 		}
 	}
 	try {
@@ -212,24 +262,69 @@ async function deleteBranch(git: RunGit, branch: CleanBranch, recorder: Deletion
 			if (!isNotFullyMergedError(toErrorMessage(error))) {
 				throw error;
 			}
-			await git(['branch', '-D', branch.name]);
+			// Compare-and-swap: fails if the branch moved since it was analysed.
+			await git(['update-ref', '-m', 'gsp clean', '-d', `refs/heads/${branch.name}`, branch.tip]);
+			// What `git branch -D` removes too: its upstream and other settings. None is fine.
+			await git(['config', '--remove-section', `branch.${branch.name}`]).catch(() => undefined);
 		}
 	} catch (error) {
-		return { result: worktree ? 'worktree-removed' : 'failed', error: firstLine(toErrorMessage(error)) };
+		return { result: worktree ? 'worktree-removed' : 'failed', error: gitFailureReason(error) };
 	}
 	await recorder.record({ branch: branch.name, ...tip, ...(worktree ? { worktree } : {}) });
 	return { result: 'deleted' };
 }
 
-/** Picker entries: every planned deletion pre-selected, branches needing --force shown unselected. */
-function pickItems(branches: readonly CleanBranch[]): PickItem[] {
+/**
+ * Picker entries: every planned deletion, pre-selected unless it needs
+ * --force. Branches needing --force are only offered with --force, never
+ * pre-selected.
+ */
+function pickItems(branches: readonly CleanBranch[], force: boolean): PickItem[] {
 	return branches
-		.filter((branch) => branch.action === 'delete' || branch.reason === 'needs-force')
+		.filter((branch) => branch.action === 'delete' || (force && branch.reason === 'needs-force'))
 		.map((branch) => {
 			const worktree = branch.worktree && !branch.worktree.prunable ? `, removes worktree ${branch.worktree.path}` : '';
-			const force = branch.needsForce ? (branch.verdict === 'alive' ? ', not merged' : `, ${branch.unpushedCommits} unpushed`) : '';
-			return { label: branch.name, description: `${describeVerdict(branch)}${force}${worktree}`, picked: branch.action === 'delete' };
+			const unpushed = branch.verdict === 'alive' ? ', not merged' : `, ${branch.unpushedCommits} unpushed`;
+			return {
+				label: branch.name,
+				description: `${describeVerdict(branch)}${branch.needsForce ? unpushed : ''}${worktree}`,
+				picked: branch.action === 'delete' && !branch.needsForce,
+			};
 		});
+}
+
+const skipped = (branch: CleanBranch, reason: SkipReason, hint: string | null): CleanBranch => ({ ...branch, action: 'skip', reason, hint });
+
+/**
+ * Holds the analysis made after the fetch to the plan that was shown (and
+ * picked from): only branches approved then, and still deleted now, are
+ * deleted. An approved branch that is now kept, or a branch deleted now but
+ * not approved, is skipped as `plan-changed`; one that is now skipped keeps
+ * its own reason. When the fetch failed, a deletion that only stale
+ * remote-tracking refs prove is skipped as `fetch-failed`.
+ */
+export function holdToPlan(planned: readonly CleanBranch[], current: readonly CleanBranch[], remote: RemoteCheck): CleanBranch[] {
+	const before = new Map(planned.map((branch) => [branch.name, branch]));
+	const stale = remote.source === 'local-refs' && remote.reason === 'unreachable';
+	const replan = (branch: CleanBranch) => `gsp clean ${quoteShellArg(branch.name)}`;
+	return current.map((branch) => {
+		const previous = before.get(branch.name);
+		const approved = previous?.action === 'delete';
+		if (!approved) {
+			if (branch.action !== 'delete') {
+				return branch;
+			}
+			return previous?.reason === 'not-selected' ? skipped(branch, 'not-selected', previous.hint) : skipped(branch, 'plan-changed', replan(branch));
+		}
+		if (branch.action === 'keep') {
+			return skipped(branch, 'plan-changed', replan(branch));
+		}
+		if (branch.action === 'delete' && stale && branch.verdictReason === 'upstream-gone' && !branch.needsForce) {
+			// Its hint, `gsp clean <branch> --yes`, retries once the remote can be reached.
+			return skipped(branch, 'fetch-failed', branch.hint);
+		}
+		return branch;
+	});
 }
 
 function buildReport(
@@ -255,11 +350,12 @@ function buildReport(
  * `gsp clean`: classifies the local branches (see `analyzeBranches`) and
  * deletes the dead ones and their clean linked worktrees.
  *
- * Planning writes nothing: no fetch, no prune, no ref, config or object
- * write; deleted upstreams are found with `git ls-remote`. Applying fetches
+ * The plan is always made first, writing nothing: no fetch, no prune, no
+ * ref, config or object write; deleted upstreams are found with
+ * `git ls-remote`. Without `yes` or someone to answer the picker, it is only
+ * reported. Otherwise, once picked and confirmed (or with `yes`), gsp fetches
  * with --prune, prunes the worktree registrations whose directory is gone,
- * analyses again, then deletes. The plan is applied with `yes`, or after the
- * picker when someone can answer it; otherwise it is only reported.
+ * analyses again, then deletes only what was approved and is still proven.
  */
 export async function runCleanWorkflow(context: CleanContext, options: CleanOptions): Promise<CleanRun> {
 	const { git, ui, output } = context;
@@ -274,60 +370,59 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	const upstreams = await readUpstreams(git);
 	const remotes = await remotesToCheck(git, upstreams);
 	const online = options.fetch && remotes.length > 0;
-	let remote: RemoteCheck = online ? { source: 'fetch', remotes } : { source: 'local-refs', reason: options.fetch ? 'no-remote' : 'no-fetch' };
-	let worktreesPruned: readonly string[];
-	if (apply) {
-		if (online) {
-			remote = await fetchAndPrune(context, remotes);
+	const offline: RemoteCheck = { source: 'local-refs', reason: options.fetch ? 'no-remote' : 'no-fetch' };
+	const prunable = (await listWorktrees(context)).filter((worktree) => worktree.state === 'prunable').map((worktree) => worktree.path);
+	const named = new Set(options.patterns.filter((pattern) => !isBranchGlob(pattern)));
+	const analyse = (fetched: boolean) =>
+		ui.withProgress({ title: 'Analysing branches' }, () =>
+			analyzeBranches(
+				{ git, ...(context.gh ? { gh: context.gh } : {}) },
+				{
+					...(options.patterns.length > 0 ? { branches: options.patterns } : {}),
+					protectedPatterns: options.protectedPatterns,
+					github: options.github,
+					fetched,
+				}
+			)
+		);
+	let warned = false;
+	const warnIfUnreachable = (remote: RemoteCheck) => {
+		if (!warned && remote.source === 'local-refs' && remote.reason === 'unreachable') {
+			output.appendLine(`Could not reach the remote (${remote.detail ?? 'unknown error'}); using the local remote-tracking refs.`);
+			warned = true;
 		}
-		// Until pruned, a worktree whose directory is gone still holds its branch.
-		worktreesPruned = (await pruneWorktrees(context)).pruned;
-	} else {
-		worktreesPruned = (await listWorktrees(context)).filter((worktree) => worktree.state === 'prunable').map((worktree) => worktree.path);
-	}
+	};
 
-	let analysis = await ui.withProgress({ title: 'Analysing branches' }, () =>
-		analyzeBranches(
-			{ git, ...(context.gh ? { gh: context.gh } : {}) },
-			{
-				...(options.patterns.length > 0 ? { branches: options.patterns } : {}),
-				protectedPatterns: options.protectedPatterns,
-				github: options.github,
-				fetched: apply && remote.source === 'fetch',
-			}
-		)
-	);
-	if (!apply && online) {
+	// The plan: read-only, whatever the mode.
+	let analysis = await analyse(false);
+	let remote: RemoteCheck = offline;
+	if (online) {
 		({ analysis, remote } = await ui.withProgress({ title: 'Checking remote branches' }, () => markGoneUpstreams(git, analysis, upstreams, remotes)));
 	}
-	if (remote.source === 'local-refs' && remote.reason === 'unreachable') {
-		output.appendLine(`Could not reach the remote (${remote.detail ?? 'unknown error'}); using the local remote-tracking refs.`);
-	}
-
-	const decideOptions = {
-		force: options.force,
-		named: new Set(options.patterns.filter((pattern) => !isBranchGlob(pattern))),
-		defaultBranch: analysis.checks.base?.name,
-	};
-	let branches = decideActions(analysis.branches, decideOptions);
+	warnIfUnreachable(remote);
+	const decideOptions: DecideOptions = { force: options.force, named, defaultBranch: analysis.checks.base?.name };
+	let planned = await withIgnoredFiles(git, analysis.branches, named);
+	let branches = decideActions(planned, decideOptions);
+	let worktreesPruned: readonly string[] = apply ? [] : prunable;
 	const report = (outcome: CleanOutcome, restored: readonly string[] = []): CleanRun => ({
 		report: buildReport(mode, analysis, remote, branches, worktreesPruned, restored),
 		outcome,
 	});
-	const offered = pickItems(branches);
-	const planned = branches.some((branch) => branch.action === 'delete');
 
 	if (!apply) {
 		return report(hasPendingDeletions(branches) ? 'not-applied' : 'done');
 	}
 
+	let picked: ReadonlySet<string> | undefined;
+	const offered = pickItems(branches, options.force);
 	if (options.canPrompt && !options.yes && offered.length > 0) {
-		const picked = await ui.pickMany({ items: offered, title: 'Select branches to delete' });
-		if (picked === undefined || picked.length === 0) {
-			branches = decideActions(analysis.branches, { ...decideOptions, picked: new Set() });
+		const answer = await ui.pickMany({ items: offered, title: 'Select branches to delete' });
+		if (answer === undefined || answer.length === 0) {
+			branches = decideActions(planned, { ...decideOptions, picked: new Set() });
 			return report('cancelled');
 		}
-		branches = decideActions(analysis.branches, { ...decideOptions, picked: new Set(picked) });
+		picked = new Set(answer);
+		branches = decideActions(planned, { ...decideOptions, picked });
 		const deleting = branches.filter((branch) => branch.action === 'delete');
 		const forced = deleting.filter((branch) => branch.needsForce).length;
 		if (options.confirm && deleting.length > 0) {
@@ -335,13 +430,24 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 			const work = forced > 0 ? ` ${forced} of them hold work found nowhere else.` : '';
 			const confirmed = await ui.confirm(`Delete ${deleting.length} branch(es)?${work} ${undo}`, `Delete ${deleting.length}`);
 			if (!confirmed) {
-				branches = decideActions(analysis.branches, { ...decideOptions, picked: new Set() });
+				branches = decideActions(planned, { ...decideOptions, picked: new Set() });
 				return report('cancelled');
 			}
 		}
-	} else if (!planned) {
-		return report(hasPendingDeletions(branches) ? 'not-applied' : 'done');
 	}
+
+	// Approved (or nothing to approve): refresh the remote branches, analyse
+	// again, and hold the result to what was approved. A branch that only the
+	// fetch proves is reported as `plan-changed`, for the next run.
+	if (online) {
+		remote = await fetchAndPrune(context, remotes);
+		warnIfUnreachable(remote);
+	}
+	// Until pruned, a worktree whose directory is gone still holds its branch.
+	worktreesPruned = prunable.length > 0 ? (await pruneWorktrees(context)).pruned : [];
+	analysis = await analyse(remote.source === 'fetch');
+	planned = await withIgnoredFiles(git, analysis.branches, named);
+	branches = holdToPlan(branches, decideActions(planned, decideOptions), remote);
 
 	const recorder = createDeletionRecorder(context.deletionLog, 'sweep', output.appendLine);
 	const applied: CleanBranch[] = [];
@@ -350,11 +456,14 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 			applied.push(branch);
 			continue;
 		}
-		const { result, error } = await deleteBranch(git, branch, recorder);
-		applied.push({ ...branch, result, hint: result === 'deleted' ? null : branch.hint, ...(error ? { error } : {}) });
+		const outcome = await deleteBranch(git, branch, recorder);
+		if ('skip' in outcome) {
+			applied.push(skipped(branch, outcome.skip, branch.hint));
+		} else {
+			applied.push({ ...branch, result: outcome.result, hint: outcome.result === 'deleted' ? null : branch.hint, ...(outcome.error ? { error: outcome.error } : {}) });
+		}
 	}
 	branches = applied;
-	const failed = applied.some((branch) => branch.result === 'failed' || branch.result === 'worktree-removed');
-	const pending = hasPendingDeletions(applied);
-	return report(failed ? 'failed' : pending ? 'not-applied' : 'done', recorder.recorded);
+	const failed = branches.some((branch) => branch.result === 'failed' || branch.result === 'worktree-removed');
+	return report(failed ? 'failed' : hasPendingDeletions(branches) ? 'not-applied' : 'done', recorder.recorded);
 }

@@ -122,8 +122,8 @@ suite('restore (real git)', function () {
 		// Clean from one linked worktree; the branch lives in another one.
 		const { prompter, seen } = createFakePrompter({ multiselect: [0], confirm: true });
 		const clean = { ...createFakeIo(detached, { interactive: true }), loadPrompter: async () => prompter };
-		assert.strictEqual(await runCli([], clean), EXIT.ok);
-		assert.deepStrictEqual(seen.initial, [], 'unpushed work is offered, never pre-selected');
+		assert.strictEqual(await runCli(['--force'], clean), EXIT.ok);
+		assert.deepStrictEqual(seen.initial, [], 'unpushed work is offered with --force, never pre-selected');
 		assert.ok(!branchExists(fx.repo, 'feature/wt'));
 		assert.ok(!fs.existsSync(linked));
 
