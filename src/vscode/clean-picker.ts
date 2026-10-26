@@ -28,9 +28,10 @@ export function showCleanPicker(options: CleanPickerOptions): Promise<CleanPick>
 		quickPick.placeholder = 'Reading branches…';
 
 		const copyButton = (hint: string): vscode.QuickInputButton => ({ iconPath: new vscode.ThemeIcon('copy'), tooltip: `Copy the fix: ${hint}` });
+		// The icon shows the state, as VS Code's own toggles do; the tooltip says what a click changes.
 		const forceButton = (on: boolean): vscode.QuickInputButton => ({
-			iconPath: new vscode.ThemeIcon(on ? 'shield' : 'warning'),
-			tooltip: on ? 'Hide the branches that need a forced delete' : 'Also offer the branches that need a forced delete',
+			iconPath: new vscode.ThemeIcon(on ? 'warning' : 'shield'),
+			tooltip: on ? 'Forced deletes are offered. Click to hide them' : 'Forced deletes are hidden. Click to offer them',
 		});
 		const selectAllButton: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('check-all'), tooltip: 'Select all' };
 		const clearAllButton: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('clear-all'), tooltip: 'Clear all' };
@@ -38,6 +39,9 @@ export function showCleanPicker(options: CleanPickerOptions): Promise<CleanPick>
 		let force = options.force;
 		let sections: CleanSection[] = [];
 		let notice: string | undefined;
+		let note: string | undefined;
+		// The branches checked before the last change, to tell an uncheck from a check.
+		let previous = new Set<string>();
 		let settled = false;
 		const finish = (pick: CleanPick): void => {
 			if (!settled) {
@@ -48,10 +52,11 @@ export function showCleanPicker(options: CleanPickerOptions): Promise<CleanPick>
 		};
 
 		const entryItems = () => quickPick.items.filter((item): item is EntryItem & { entry: CleanEntry } => item.entry !== undefined);
-		const placeholder = () => notice ?? pickerPlaceholder(sections, options.readOnly);
+		const placeholder = () => notice ?? pickerPlaceholder(sections, options.readOnly, options.confirm);
 
 		const render = (keep: ReadonlySet<string> | undefined): void => {
-			const items: EntryItem[] = sections.flatMap((section) => [
+			const noteItems: EntryItem[] = note ? [{ label: `$(info) ${note}`, alwaysShow: true }] : [];
+			const items: EntryItem[] = [...noteItems, ...sections.flatMap((section) => [
 				{ label: section.title, kind: vscode.QuickPickItemKind.Separator },
 				...section.entries.map(
 					(entry): EntryItem => ({
@@ -62,22 +67,24 @@ export function showCleanPicker(options: CleanPickerOptions): Promise<CleanPick>
 						entry,
 					})
 				),
-			]);
+			])];
 			quickPick.items = items;
 			// Start on the first branch, not on the last one selected.
 			quickPick.activeItems = entryItems().slice(0, 1);
 			// A single-select pick (the preview) would read a selection as accepting it.
 			quickPick.selectedItems = options.readOnly ? [] : entryItems().filter(({ entry }) => entry.selectable && (keep ? keep.has(entry.arg) : entry.picked));
+			previous = new Set(quickPick.selectedItems.flatMap((item) => (item.entry ? [item.entry.arg] : [])));
 			const forceable = !options.readOnly && (force || document?.summary.needsForce);
 			quickPick.buttons = options.readOnly ? [] : [...(forceable ? [forceButton(force)] : []), selectAllButton, clearAllButton];
 			quickPick.placeholder = placeholder();
 		};
 
 		let document: Awaited<CleanPickerOptions['plan']>;
-		void options.plan.then((plan) => {
+		void Promise.all([options.plan, options.note]).then(([plan, planNote]) => {
 			if (settled) {
 				return;
 			}
+			note = planNote;
 			if (!plan) {
 				finish({ kind: 'closed' });
 				return;
@@ -96,19 +103,43 @@ export function showCleanPicker(options: CleanPickerOptions): Promise<CleanPick>
 		// Setting the selection echoes back later as a change: the revert's echo must not clear the notice.
 		let reverted: string | undefined;
 		const selectionKey = (items: readonly EntryItem[]) => items.map((item) => item.entry?.arg).join('\n');
+		const revert = (allowed: readonly EntryItem[], why: string): void => {
+			notice = why;
+			reverted = selectionKey(allowed);
+			previous = new Set(allowed.flatMap((item) => (item.entry ? [item.entry.arg] : [])));
+			quickPick.selectedItems = allowed;
+			quickPick.placeholder = placeholder();
+		};
 		quickPick.onDidChangeSelection((selected) => {
-			const blocked = selected.find((item) => item.entry && !item.entry.selectable);
-			if (blocked?.entry) {
-				// A skipped branch can't be checked: undo the click and say why.
-				notice = `${blocked.entry.arg} can't be deleted here: ${lowerFirst(blocked.entry.detail ?? blocked.entry.description)}.`;
-				const allowed = selected.filter((item) => item.entry?.selectable);
-				reverted = selectionKey(allowed);
-				quickPick.selectedItems = allowed;
-				quickPick.placeholder = placeholder();
+			const blocked = selected.find((item) => !item.entry?.selectable);
+			const checked = new Set(selected.flatMap((item) => (item.entry ? [item.entry.arg] : [])));
+			// A remote branch goes only with the local branches tracking it: the CLI would skip it as tracked by a kept branch.
+			const keptTracker = (entry: CleanEntry | undefined) =>
+				entry?.trackedBy?.find((local) => !checked.has(local) && entryItems().some((item) => item.entry.arg === local && item.entry.selectable));
+			const stranded = selected.find((item) => keptTracker(item.entry) !== undefined);
+			if (blocked) {
+				// A skipped branch (or the note) can't be checked: undo the click and say why.
+				const why = blocked.entry ? `${blocked.entry.arg} can't be deleted here: ${lowerFirst(blocked.entry.detail ?? blocked.entry.description)}.` : (note ?? '');
+				revert(
+					selected.filter((item) => item.entry?.selectable),
+					why
+				);
+			} else if (stranded?.entry) {
+				const local = keptTracker(stranded.entry)!;
+				const why = previous.has(local)
+					? `${stranded.entry.arg} was unchecked too: ${local} tracks it, so it stays while ${local} is kept.`
+					: `${stranded.entry.arg} can't be deleted alone: ${local} tracks it. Check ${local} too.`;
+				revert(
+					selected.filter((item) => item !== stranded),
+					why
+				);
 			} else if (notice && selectionKey(selected) !== reverted) {
 				notice = undefined;
 				reverted = undefined;
 				quickPick.placeholder = placeholder();
+			}
+			if (!blocked && !stranded) {
+				previous = checked;
 			}
 		});
 

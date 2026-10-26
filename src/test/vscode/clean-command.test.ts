@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { buildCleanSections, confirmLocal, confirmRemote, describeCleanResult, displayPath, pickerPlaceholder, type CleanEntry } from '../../vscode/clean-model';
-import { runCleanCommand, type CleanCommandOptions } from '../../vscode/clean-command';
+import { NO_ORIGIN_NOTE, runCleanCommand, type CleanCommandOptions } from '../../vscode/clean-command';
 import { SHOW_OUTPUT, UNDO } from '../../vscode/command-ui';
 import { readJsonRun } from '../../vscode/gsp-client';
 import { branch, cleanDocument, createFakeClient, createFakeUi, deps, ok, remoteBranch } from './fakes';
@@ -95,9 +95,14 @@ suite('clean model', () => {
 
 	test('result wording and placeholders', () => {
 		assert.strictEqual(describeCleanResult({ local: ['a'], remote: [] }, 0, []), 'Deleted a.');
-		assert.strictEqual(describeCleanResult({ local: ['a', 'b'], remote: [] }, 1, [{ arg: 'c', why: 'Changed since the plan' }]), 'Deleted 2 branches and 1 worktree. c was not deleted: changed since the plan.');
+		assert.strictEqual(describeCleanResult({ local: ['a', 'b'], remote: [] }, 1, [{ arg: 'c', why: 'Changed since the plan' }]), "Deleted 2 branches and 1 worktree. c wasn't deleted: changed since the plan.");
 		assert.strictEqual(describeCleanResult({ local: [], remote: ['x', 'y'], remoteName: 'origin' }, 0, []), 'Deleted 2 branches on origin.');
-		assert.strictEqual(describeCleanResult({ local: [], remote: [] }, 0, [{ arg: 'a', why: 'X' }, { arg: 'b', why: 'Y' }]), 'Nothing was deleted. 2 were not deleted: a (x), b (y).');
+		assert.strictEqual(describeCleanResult({ local: [], remote: [] }, 0, [{ arg: 'a', why: 'X' }, { arg: 'b', why: 'Y' }]), "Nothing was deleted. 2 branches weren't deleted: a (x) and b (y).");
+		const many = Array.from({ length: 10 }, (_, i) => ({ arg: `b${i}`, why: 'X' }));
+		assert.strictEqual(
+			describeCleanResult({ local: [], remote: [] }, 0, many),
+			"Nothing was deleted. 10 branches weren't deleted: b0 (x), b1 (x), b2 (x), b3 (x), b4 (x), b5 (x), b6 (x), b7 (x) and 2 more."
+		);
 		assert.strictEqual(pickerPlaceholder(buildCleanSections(cleanDocument([dirty]), { force: false }), false), 'Nothing to delete. 1 branch is skipped: see why below.');
 		assert.strictEqual(pickerPlaceholder(buildCleanSections(cleanDocument([empty]), { force: false }), true), '1 branch to delete. Nothing changes until you run Sweep Stale Branches.');
 		assert.strictEqual(displayPath('/home/me/code/x', '/home/me'), '~/code/x');
@@ -118,19 +123,54 @@ suite('clean model', () => {
 });
 
 suite('Sweep Stale Branches command', () => {
-	test('plans read-only, deletes exactly the picked branches, and offers Undo', async () => {
-		const { client, calls } = createFakeClient([ok(cleanDocument([squashed, empty, dirty]), 5), ok(applied(['feature/squash', 'feature/empty']))]);
-		const fake = createFakeUi({ pick: pickAll, notify: () => UNDO });
+	test('plans read-only, deletes exactly the picked branches at the tips shown, and offers Undo', async () => {
+		const { client, calls } = createFakeClient([ok(cleanDocument([squashed, { ...empty, tip: 'e3b0c44' }, dirty]), 5), ok(applied(['feature/squash', 'feature/empty']))]);
+		const fake = createFakeUi({ pick: pickAll, notify: (message) => (message.startsWith('Deleted') ? UNDO : undefined) });
 
 		await runCleanCommand(deps(client, fake.ui), OPTIONS);
 
 		assert.deepStrictEqual(calls.map((call) => [call.args, call.json]), [
 			[['clean'], true],
-			[['clean', '--yes', 'feature/squash', 'feature/empty'], true],
+			[['clean', '--yes', '--expect', 'feature/squash=a4d8464', '--expect', 'feature/empty=e3b0c44'], true],
 			[['restore', 'feature/squash', 'feature/empty'], false],
 		]);
 		assert.strictEqual(fake.confirms[0].message, 'Delete 2 branches?');
-		assert.deepStrictEqual(fake.notices, [{ kind: 'info', message: 'Deleted 2 branches and 1 worktree.', actions: [UNDO] }]);
+		assert.deepStrictEqual(fake.notices, [
+			{ kind: 'info', message: 'Deleted 2 branches and 1 worktree.', actions: [UNDO] },
+			{ kind: 'info', message: 'Restored 2 branches.', actions: [] },
+		]);
+		assert.deepStrictEqual(fake.progress, ['Deleting branches', 'Restoring 2 branches']);
+	});
+
+	test('Undo says when gsp could not restore, unless the CLI already did', async () => {
+		const failing = createFakeClient([ok(cleanDocument([empty]), 5), ok(applied(['feature/empty'], [empty]))]);
+		failing.runResults.push({ exitCode: 1, errorShown: false });
+		const failingUi = createFakeUi({ pick: pickAll, notify: (message) => (message.startsWith('Deleted') ? UNDO : SHOW_OUTPUT) });
+		await runCleanCommand(deps(failing.client, failingUi.ui), OPTIONS);
+		assert.deepStrictEqual(failingUi.notices.at(-1), { kind: 'error', message: 'Could not restore feature/empty.', actions: [SHOW_OUTPUT] });
+		assert.strictEqual(failingUi.outputShown(), 1);
+
+		const shown = createFakeClient([ok(cleanDocument([empty]), 5), ok(applied(['feature/empty'], [empty]))]);
+		shown.runResults.push({ exitCode: 1, errorShown: true });
+		const shownUi = createFakeUi({ pick: pickAll, notify: () => UNDO });
+		await runCleanCommand(deps(shown.client, shownUi.ui), OPTIONS);
+		assert.strictEqual(shownUi.notices.length, 1);
+	});
+
+	test('proven and forced picks go in separate runs: only the forced one gets --force', async () => {
+		const forcedDone = cleanDocument([{ ...unpushed, action: 'delete', result: 'deleted' }], { mode: 'apply' });
+		const { client, calls } = createFakeClient([ok(cleanDocument([empty, unpushed]), 5), ok(applied(['feature/empty'], [empty])), ok(forcedDone)]);
+		const fake = createFakeUi({ pick: pickAll });
+
+		await runCleanCommand(deps(client, fake.ui), { ...OPTIONS, force: true });
+
+		assert.deepStrictEqual(calls.map((call) => call.args), [
+			['clean'],
+			['clean', '--yes', '--expect', 'feature/empty=a4d8464'],
+			['clean', '--yes', '--force', '--expect', 'feature/unpushed=a4d8464'],
+		]);
+		assert.deepStrictEqual(fake.progress, ['Deleting branches', 'Force deleting feature/unpushed']);
+		assert.strictEqual(fake.notices[0].message, 'Deleted 2 branches.');
 	});
 
 	test('a forced pick adds --force, and is confirmed even when confirmations are off', async () => {
@@ -139,7 +179,7 @@ suite('Sweep Stale Branches command', () => {
 
 		await runCleanCommand(deps(client, fake.ui), { ...OPTIONS, force: true, confirm: false });
 
-		assert.deepStrictEqual(calls[1].args, ['clean', '--yes', '--force', 'feature/unpushed']);
+		assert.deepStrictEqual(calls[1].args, ['clean', '--yes', '--force', '--expect', 'feature/unpushed=a4d8464']);
 		assert.strictEqual(fake.confirms.length, 1);
 		assert.strictEqual(fake.pickers[0].options.force, true);
 	});
@@ -172,8 +212,8 @@ suite('Sweep Stale Branches command', () => {
 		assert.deepStrictEqual(fake.confirms.map((c) => c.message), ['Delete feature/empty?', 'Delete 2 branches on origin?']);
 		assert.deepStrictEqual(calls.map((call) => call.args), [
 			['clean', '--remote'],
-			['clean', '--yes', 'feature/empty'],
-			['clean', '--yes', '--remote=origin', 'origin/feature/empty', 'origin/feature/b'],
+			['clean', '--yes', '--expect', 'feature/empty=a4d8464'],
+			['clean', '--yes', '--remote=origin', '--expect', 'origin/feature/empty=b5e9575', '--expect', 'origin/feature/b=b5e9575'],
 			['restore', 'feature/empty', 'origin/feature/empty', 'origin/feature/b'],
 		]);
 		assert.strictEqual(fake.notices[0].message, 'Deleted feature/empty. Also deleted 2 branches on origin.');
@@ -197,7 +237,7 @@ suite('Sweep Stale Branches command', () => {
 
 		await runCleanCommand(deps(client, fake.ui), { ...OPTIONS, remote: true });
 
-		assert.deepStrictEqual(calls.map((call) => call.args), [['clean', '--remote'], ['clean', '--yes', 'feature/empty']]);
+		assert.deepStrictEqual(calls.map((call) => call.args), [['clean', '--remote'], ['clean', '--yes', '--expect', 'feature/empty=a4d8464']]);
 	});
 
 	test('what changed while applying is reported with why, as a warning', async () => {
@@ -207,7 +247,7 @@ suite('Sweep Stale Branches command', () => {
 
 		await runCleanCommand(deps(client, fake.ui), OPTIONS);
 
-		assert.deepStrictEqual(fake.notices, [{ kind: 'warning', message: 'Deleted feature/squash and 1 worktree. feature/empty was not deleted: changed since the plan.', actions: [UNDO, SHOW_OUTPUT] }]);
+		assert.deepStrictEqual(fake.notices, [{ kind: 'warning', message: "Deleted feature/squash and 1 worktree. feature/empty wasn't deleted: changed since the plan.", actions: [UNDO, SHOW_OUTPUT] }]);
 		assert.strictEqual(fake.outputShown(), 1);
 	});
 
@@ -218,7 +258,7 @@ suite('Sweep Stale Branches command', () => {
 
 		await runCleanCommand(deps(client, fake.ui), OPTIONS);
 
-		assert.deepStrictEqual(fake.notices, [{ kind: 'error', message: 'Nothing was deleted. feature/empty was not deleted: cannot lock ref.', actions: [SHOW_OUTPUT] }]);
+		assert.deepStrictEqual(fake.notices, [{ kind: 'error', message: "Nothing was deleted. feature/empty wasn't deleted: cannot lock ref.", actions: [SHOW_OUTPUT] }]);
 	});
 
 	test('a plan error shows the JSON error, unless the CLI already did', async () => {
@@ -233,6 +273,31 @@ suite('Sweep Stale Branches command', () => {
 		const shownUi = createFakeUi();
 		await runCleanCommand(deps(shown.client, shownUi.ui), OPTIONS);
 		assert.deepStrictEqual(shownUi.notices, []);
+	});
+
+	test('with no remote to pick, remote branches are left out of the plan, with a note saying why', async () => {
+		const { client, calls } = createFakeClient([{ kind: 'error', exitCode: 2, message: 'No remote named "origin".', code: 'unknown-remote', shown: false }, ok(cleanDocument([empty]), 5)]);
+		const fake = createFakeUi({ pick: () => ({ kind: 'closed' }) });
+
+		await runCleanCommand(deps(client, fake.ui), { ...OPTIONS, remote: true });
+
+		assert.deepStrictEqual(calls.map((call) => call.args), [['clean', '--remote'], ['clean']]);
+		assert.strictEqual(await fake.pickers[0].options.note, NO_ORIGIN_NOTE);
+		assert.deepStrictEqual(fake.pickers[0].document?.branches, [empty]);
+		assert.deepStrictEqual(fake.notices, []);
+	});
+
+	test('closing the picker before the plan is read stops it, and drops what it would say', async () => {
+		let finishPlan!: (run: ReturnType<typeof ok>) => void;
+		const { client, signals } = createFakeClient([() => new Promise((resolve) => (finishPlan = resolve)) as never]);
+		const fake = createFakeUi();
+		const ui = { ...fake.ui, pickCleanup: async () => ({ kind: 'closed' as const }) };
+
+		await runCleanCommand(deps(client, ui), OPTIONS);
+
+		assert.strictEqual(signals[0]?.aborted, true);
+		finishPlan({ kind: 'error', exitCode: -1, message: 'stopped', code: 'crashed', shown: false } as never);
+		assert.deepStrictEqual(fake.notices, []);
 	});
 
 	test('nothing to clean, nothing picked, a closed picker and a preview delete nothing', async () => {

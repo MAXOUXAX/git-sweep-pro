@@ -13,6 +13,8 @@ export type CleanEntry = {
 	readonly scope: 'local' | 'remote';
 	/** The branch as the command line names it: `feature/x`, or `origin/feature/x` on the remote. */
 	readonly arg: string;
+	/** The tip the plan read: applying passes it with `--expect`, so a branch that moved since is left alone. */
+	readonly tip: string;
 	readonly label: string;
 	readonly description: string;
 	readonly detail?: string;
@@ -27,7 +29,12 @@ export type CleanEntry = {
 	readonly hint: string | null;
 	/** The worktree deleting it removes, and the ignored files that go with it. */
 	readonly worktree?: { readonly path: string; readonly ignoredFiles: IgnoredFiles | null };
+	/** On the remote: the local branches whose upstream it is. It goes only if they go too. */
+	readonly trackedBy?: readonly string[];
 };
+
+/** `--expect <arg>=<tip>`: applying deletes the entry only if it is still at the tip the picker showed. */
+export const expectArgs = (entries: readonly CleanEntry[]): string[] => entries.flatMap((entry) => ['--expect', `${entry.arg}=${entry.tip}`]);
 
 export type CleanSection = { readonly title: string; readonly entries: readonly CleanEntry[] };
 
@@ -150,6 +157,7 @@ function localEntry(branch: CleanBranch, kind: 'delete' | 'force' | 'skip' | 'ke
 	return {
 		scope: 'local',
 		arg: branch.name,
+		tip: branch.tip,
 		label: `$(${kind === 'force' ? 'warning' : 'git-branch'}) ${branch.name}`,
 		description: describeVerdict(branch),
 		...(detail ? { detail } : {}),
@@ -166,6 +174,7 @@ function remoteEntry(branch: CleanRemoteBranch, kind: 'delete' | 'skip'): CleanE
 	return {
 		scope: 'remote',
 		arg: remoteBranchArg(branch),
+		tip: branch.tip,
 		label: `$(cloud) ${branch.remote}/${branch.name}`,
 		description: remoteVerdict(branch),
 		...(kind === 'skip' ? { detail: describeRemoteSkip(branch) } : {}),
@@ -174,6 +183,7 @@ function remoteEntry(branch: CleanRemoteBranch, kind: 'delete' | 'skip'): CleanE
 		forced: false,
 		unproven: false,
 		hint: branch.hint,
+		trackedBy: branch.trackedBy,
 	};
 }
 
@@ -247,9 +257,22 @@ export function confirmRemote(entries: readonly CleanEntry[], remote: string): {
 
 const MAX_LISTED = 8;
 
-function listNames(names: readonly string[]): string {
+/** The first names, then how many more: a dialog or a notification stays readable. */
+function capNames(names: readonly string[]): string[] {
 	const shown = names.slice(0, MAX_LISTED);
-	return [...shown, ...(names.length > shown.length ? [`and ${names.length - shown.length} more`] : [])].join('\n');
+	return [...shown, ...(names.length > shown.length ? [`and ${names.length - shown.length} more`] : [])];
+}
+
+function listNames(names: readonly string[]): string {
+	return capNames(names).join('\n');
+}
+
+/** Names in a sentence, e.g. "a, b and 3 more". */
+export function listInline(names: readonly string[]): string {
+	const shown = names.slice(0, MAX_LISTED);
+	const rest = names.length - shown.length;
+	const last = rest > 0 ? `${rest} more` : shown.pop();
+	return shown.length > 0 ? `${shown.join(', ')} and ${last}` : (last ?? '');
 }
 
 /** The branches a run deleted, as `gsp restore` names them. */
@@ -297,17 +320,17 @@ export function describeCleanResult(deleted: { readonly local: readonly string[]
 		parts.push('Nothing was deleted.');
 	}
 	if (problems.length === 1) {
-		parts.push(`${problems[0].arg} was not deleted: ${lowerFirst(problems[0].why)}.`);
+		parts.push(`${problems[0].arg} wasn't deleted: ${lowerFirst(problems[0].why)}.`);
 	} else if (problems.length > 1) {
-		parts.push(`${problems.length} were not deleted: ${problems.map((problem) => `${problem.arg} (${lowerFirst(problem.why)})`).join(', ')}.`);
+		parts.push(`${problems.length} branches weren't deleted: ${listInline(problems.map((problem) => `${problem.arg} (${lowerFirst(problem.why)})`))}.`);
 	}
 	return parts.join(' ');
 }
 
 const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
 
-/** The picker's placeholder: what pressing Enter does. */
-export function pickerPlaceholder(sections: readonly CleanSection[], readOnly: boolean): string {
+/** The picker's placeholder: what pressing Enter does. `confirm`: proven deletions are confirmed first. */
+export function pickerPlaceholder(sections: readonly CleanSection[], readOnly: boolean, confirm = true): string {
 	const entries = sections.flatMap((section) => section.entries);
 	const toDelete = entries.filter((entry) => entry.picked).length;
 	const skipped = entries.filter((entry) => !entry.selectable && sections.some((section) => section.title.startsWith('Skipped') && section.entries.includes(entry))).length;
@@ -317,5 +340,5 @@ export function pickerPlaceholder(sections: readonly CleanSection[], readOnly: b
 	if (!entries.some((entry) => entry.selectable)) {
 		return skipped > 0 ? `Nothing to delete. ${plural(skipped, 'branch is', 'branches are')} skipped: see why below.` : 'Nothing to delete.';
 	}
-	return 'Pick the branches to delete, then press Enter to review them.';
+	return confirm ? 'Pick the branches to delete, then press Enter to review them.' : 'Pick the branches to delete, then press Enter to delete them.';
 }
