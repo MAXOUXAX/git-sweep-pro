@@ -190,6 +190,19 @@ suite('cli post-pr (real git)', function () {
 		assert.strictEqual(tip('main'), tip('origin/main'), 'main is still updated');
 	});
 
+	test('an untracked file keeps the worktree even when status.showUntrackedFiles hides it', async () => {
+		const wt = addFeatureWorktree('feature/x');
+		squashMergeOnRemote('feature/x');
+		git(['config', 'status.showUntrackedFiles', 'no'], fx.repo);
+		fs.writeFileSync(path.join(wt, 'notes.md'), 'not committed\n');
+
+		const io = createFakeIo(wt);
+		assert.strictEqual(await runCli(['post-pr', '--yes', '--json'], io), EXIT.notApplied, io.err.join(''));
+		assert.strictEqual(json(io.out).branch?.reason, 'dirty-worktree');
+		assert.ok(fs.existsSync(path.join(wt, 'notes.md')));
+		assert.ok(branchExists(fx.repo, 'feature/x'));
+	});
+
 	test('a main checkout with uncommitted changes is not switched', async () => {
 		git(['checkout', '-q', '-b', 'feature/x'], fx.repo);
 		commitFile(fx.repo, 'x.txt', 'x\n', 'work');

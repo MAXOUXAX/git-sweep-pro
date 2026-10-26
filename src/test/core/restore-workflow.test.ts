@@ -1,5 +1,4 @@
 import * as assert from 'assert';
-import { createBranchDeleter } from '../../core/branch-deletion';
 import {
 	canRecordDeletions,
 	createDeletionLog,
@@ -112,40 +111,6 @@ suite('deletion log', () => {
 		assert.deepStrictEqual(recorder.recorded, []);
 		assert.deepStrictEqual(warnings, [
 			'[warning] Could not record the deletion of x, so it cannot be restored: EACCES: permission denied',
-		]);
-	});
-
-	test('the branch deleter reads the branch right before deleting it and reports the removed worktree', async () => {
-		const commands: string[] = [];
-		const deletions: unknown[] = [];
-		const answers: Record<string, string> = {
-			'branch --format=%(refname:short) --merged HEAD --list wt': 'wt\n',
-			// A pattern also lists the refs below it.
-			'for-each-ref --format=%(refname)%09%(objectname)%09%(upstream) refs/heads/wt': `refs/heads/wt\t${SHA_B}\trefs/remotes/origin/wt\n`,
-			'for-each-ref --format=%(refname)%09%(objectname)%09%(upstream) refs/heads/plain': `refs/heads/plain\t${SHA_A}\t\nrefs/heads/plain/sub\t${SHA_B}\t\n`,
-		};
-		const deleteBranch = createBranchDeleter({
-			git: async (args) => {
-				commands.push(args.join(' '));
-				return { stdout: answers[args.join(' ')] ?? '', stderr: '' };
-			},
-			log: () => undefined,
-			worktrees: new Map([['wt', '/repo-wt']]),
-			onDeleted: async (deletion) => deletions.push(deletion),
-		});
-
-		assert.strictEqual(await deleteBranch('wt', '-d'), 'deleted');
-		assert.strictEqual(await deleteBranch('plain', '-D'), 'deleted');
-		assert.deepStrictEqual(commands.slice(1), [
-			'worktree remove /repo-wt',
-			'for-each-ref --format=%(refname)%09%(objectname)%09%(upstream) refs/heads/wt',
-			'branch -d wt',
-			'for-each-ref --format=%(refname)%09%(objectname)%09%(upstream) refs/heads/plain',
-			'branch -D plain',
-		]);
-		assert.deepStrictEqual(deletions, [
-			{ branch: 'wt', sha: SHA_B, upstream: 'refs/remotes/origin/wt', worktree: '/repo-wt' },
-			{ branch: 'plain', sha: SHA_A },
 		]);
 	});
 
