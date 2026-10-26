@@ -627,25 +627,30 @@ const ACTION_LABEL: Record<CleanAction | CleanResult, string> = {
 export function formatBranchLines(report: Pick<CleanReport, 'branches' | 'mode'>): string[] {
 	const branches = [...report.branches].sort((a, b) => ORDER[a.action] - ORDER[b.action]);
 	const nameWidth = Math.max(0, ...branches.map((branch) => branch.name.length));
-	return branches.map((branch) => {
-		const label = ACTION_LABEL[branch.result ?? branch.action].padEnd(8);
-		const verdict = describeVerdict(branch);
-		let detail: string;
-		if (branch.result === 'failed' || branch.result === 'worktree-removed') {
-			detail = `${branch.result === 'worktree-removed' ? 'worktree removed, but the branch was not deleted: ' : ''}${branch.error ?? 'unknown error'}`;
-		} else if (branch.action === 'skip') {
-			const skip = describeSkip(branch);
-			detail = `${skip === verdict ? skip : `${skip} (${verdict})`}${branch.hint ? ` → ${branch.hint}` : ''}`;
-		} else {
-			const ignored = branch.worktree?.ignoredFiles?.count ? ` and its ${describeIgnored(branch.worktree.ignoredFiles)}` : '';
-			const worktree =
-				branch.action === 'delete' && branch.worktree && !branch.worktree.prunable
-					? `, ${branch.result ? 'removed' : 'removes'} worktree ${branch.worktree.path}${ignored}`
-					: '';
-			detail = `${verdict}${branch.needsForce && branch.action === 'delete' ? ', forced' : ''}${worktree}`;
-		}
-		return `${label}${branch.name.padEnd(nameWidth)}  ${detail}`;
-	});
+	return branches.map((branch) => `${actionLabel(branch).padEnd(8)}${branch.name.padEnd(nameWidth)}  ${describeAction(branch)}`);
+}
+
+/** What was (or would be) done to a branch, in one word: "delete", "deleted", "skip"… */
+export function actionLabel(branch: Pick<CleanBranch, 'action' | 'result'>): string {
+	return ACTION_LABEL[branch.result ?? branch.action];
+}
+
+/** Why a branch was (or would be) deleted, skipped or kept, with the hint of a skip, e.g. "squash-merged into origin/main". */
+export function describeAction(branch: CleanBranch): string {
+	const verdict = describeVerdict(branch);
+	if (branch.result === 'failed' || branch.result === 'worktree-removed') {
+		return `${branch.result === 'worktree-removed' ? 'worktree removed, but the branch was not deleted: ' : ''}${branch.error ?? 'unknown error'}`;
+	}
+	if (branch.action === 'skip') {
+		const skip = describeSkip(branch);
+		return `${skip === verdict ? skip : `${skip} (${verdict})`}${branch.hint ? ` → ${branch.hint}` : ''}`;
+	}
+	const ignored = branch.worktree?.ignoredFiles?.count ? ` and its ${describeIgnored(branch.worktree.ignoredFiles)}` : '';
+	const worktree =
+		branch.action === 'delete' && branch.worktree && !branch.worktree.prunable
+			? `, ${branch.result ? 'removed' : 'removes'} worktree ${branch.worktree.path}${ignored}`
+			: '';
+	return `${verdict}${branch.needsForce && branch.action === 'delete' ? ', forced' : ''}${worktree}`;
 }
 
 /** Why a remote branch is skipped, in words. */
@@ -672,7 +677,7 @@ export function formatRemoteLines(report: Pick<CleanReport, 'remoteBranches'>): 
 	}
 	const nameWidth = Math.max(...branches.map((branch) => branch.name.length));
 	const lines = branches.map((branch) => {
-		const label = ACTION_LABEL[branch.result ?? branch.action].padEnd(8);
+		const label = actionLabel(branch).padEnd(8);
 		const verdict = describeVerdict({ ...branch, unpushedCommits: 0, upstream: null });
 		let detail = verdict;
 		if (branch.result === 'failed') {

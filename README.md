@@ -26,7 +26,7 @@ gsp clean --yes         # delete every branch proven merged
 gsp clean feature/x --yes            # delete one branch, if proven merged
 gsp clean feature/x --yes --force    # delete a branch with unpushed work
 gsp clean --json        # the plan as JSON, for scripts and agents
-gsp worktree list       # every worktree, its branch and its state
+gsp worktree list       # every worktree, its state, and what clean would do
 gsp worktree prune      # forget worktree registrations whose directory is gone
 gsp worktree remove <path|branch>   # remove one linked worktree
 gsp post-pr main        # after a merged PR: switch to main, delete the old branch, clean, pull
@@ -205,7 +205,7 @@ Other JSON outputs:
 
 | Command | JSON value |
 | --- | --- |
-| `gsp worktree list --json` | Array of worktrees, each with `path`, `branch` (`null` when detached) and `state` (`main`, `linked`, `prunable` or `locked`) |
+| `gsp worktree list --json` | `{ "schema": 2, "command": "worktree list", "worktrees": [...] }`, main worktree first. Each has `path`, `branch` (during a rebase or a bisect, the branch being worked on; `null` when detached), `head`, `isMain`, `locked`, `prunable`, `dirty`, `inProgress` (`rebase`, `bisect` or `null`), `ignoredFiles` (`{ count, sample }`, as in `gsp clean`; `null` for the main worktree and a prunable one), and what `gsp clean` would do with its branch: `verdict`, `verdictReason`, `action`, `reason` and `hint`, as in `gsp clean --json` (all `null` without a branch). Read-only, like a plan |
 | `gsp restore --json` | Array of recoverable deletion records, including `branch`, `sha`, `deletedAt`, `source`, and `remote` for a branch deleted on a remote |
 
 `sync` rebases and force-pushes with a lease. `post-pr` switches branches, deletes the old branch, cleans and pulls. Agents should run these commands only when authorized.

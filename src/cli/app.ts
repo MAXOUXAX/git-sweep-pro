@@ -13,7 +13,8 @@ import { runResumeWorkflow } from '../core/sync-resume-workflow';
 import type { SyncContext } from '../core/sync-state';
 import { runSyncWorkflow } from '../core/sync-workflow';
 import type { WorkflowContext, WorkflowOutcome } from '../core/workflow';
-import { describeWorktree, listWorktrees, pruneWorktrees, removeWorktree } from '../core/worktrees';
+import { formatWorktreeLines, listWorktreeStates } from '../core/worktree-list';
+import { pruneWorktrees, removeWorktree } from '../core/worktrees';
 import { EXIT, parseArgs, UsageError, type CliOptions } from './args';
 import { createFrontend, type Frontend } from './frontend';
 import { helpFor, USAGE } from './help';
@@ -351,12 +352,14 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 	try {
 		switch (worktree.subcommand) {
 			case 'list': {
-				const worktrees = await listWorktrees(context);
+				const { document, branches } = await listWorktreeStates(
+					{ ...context, ...(options.github ? { gh: createGhRunner(context.root) } : {}) },
+					{ fetch: options.fetch, github: options.github, protectedPatterns: options.protect }
+				);
 				if (options.json) {
-					const json = worktrees.map(({ path, branch, state }) => ({ path, branch: branch ?? null, state }));
-					io.stdout(`${JSON.stringify(json, null, 2)}\n`);
+					io.stdout(`${JSON.stringify(document, null, 2)}\n`);
 				} else {
-					worktrees.forEach((entry) => io.stdout(describeWorktree(entry)));
+					formatWorktreeLines(document, branches).forEach((line) => io.stdout(`${line}\n`));
 				}
 				return 'ok';
 			}
