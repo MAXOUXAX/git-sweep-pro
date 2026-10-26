@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import * as path from 'node:path';
 import type { RunGit } from './git-command';
 import { loadGitHubSignal, parseGitHubRemote, type GitHubSignal, type GitHubSkipReason, type PullRequest, type RunGh } from './github-signal';
 import { branchMatchesPattern, isProtectedBranch } from './sweep-logic';
@@ -90,6 +92,11 @@ export type BranchWorktree = {
 	readonly locked: boolean;
 	/** Its directory is gone: Git still registers it until `git worktree prune`. */
 	readonly prunable: boolean;
+	/**
+	 * A rebase or a bisect of the branch is in progress there: HEAD is
+	 * detached meanwhile, but the branch is still being worked on. Never delete it.
+	 */
+	readonly inProgress: 'rebase' | 'bisect' | null;
 };
 
 export type BranchAnalysis = {
@@ -859,6 +866,33 @@ async function classify(prover: Prover | undefined, ref: Ref, name: string, ance
 	return verdict.verdict === 'alive' && gone ? gone : verdict;
 }
 
+type Operation = { readonly kind: 'rebase' | 'bisect'; readonly branch: string };
+
+/** The branch a rebase or bisect in progress works on in the worktree at `worktreePath`, read from its git dir. */
+async function operationIn(git: RunGit, worktreePath: string): Promise<Operation | undefined> {
+	const gitDir = await git(['-C', worktreePath, 'rev-parse', '--absolute-git-dir']).then(
+		(result) => result.stdout.trim(),
+		() => ''
+	);
+	if (!gitDir) {
+		return undefined;
+	}
+	const read = (file: string) =>
+		readFile(path.join(gitDir, file), 'utf8').then(
+			(text) => text.trim(),
+			() => ''
+		);
+	for (const file of ['rebase-merge/head-name', 'rebase-apply/head-name']) {
+		const head = await read(file);
+		if (head.startsWith('refs/heads/')) {
+			return { kind: 'rebase', branch: head.slice('refs/heads/'.length) };
+		}
+	}
+	// The branch, or a commit when the bisect started on a detached HEAD.
+	const bisected = await read('BISECT_START');
+	return bisected ? { kind: 'bisect', branch: bisected.replace(/^refs\/heads\//, '') } : undefined;
+}
+
 /** A branch whose analysis failed stays alive: no proof was found. */
 function failedVerdict(error: unknown): Verdict {
 	const failure = error as Error & { stderr?: string };
@@ -961,7 +995,22 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 	});
 
 	const worktrees = parseWorktrees(worktreesOutput);
-	const worktreeOf = new Map(worktrees.filter((worktree) => worktree.branch).map((worktree) => [worktree.branch as string, worktree]));
+	// A rebase or a bisect detaches HEAD: the branch it works on is only named in the worktree's git dir.
+	const names = new Set(locals.map(nameOf));
+	const operations = await mapWithLimit(
+		worktrees.filter((worktree) => !worktree.branch && worktree.state !== 'prunable'),
+		CONCURRENCY,
+		async (worktree) => {
+			const operation = await operationIn(git, worktree.path);
+			return operation && names.has(operation.branch) ? [{ ...worktree, branch: operation.branch, inProgress: operation.kind }] : [];
+		}
+	);
+	const worktreeOf = new Map(
+		[...operations.flat(), ...worktrees.flatMap((worktree) => (worktree.branch ? [{ ...worktree, inProgress: null }] : []))].map((worktree) => [
+			worktree.branch as string,
+			worktree,
+		])
+	);
 	const dirty = new Map(
 		await mapWithLimit(
 			selected.flatMap((ref) => {
@@ -1008,6 +1057,7 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 						dirty: dirty.get(worktree.path) ?? false,
 						locked: worktree.state === 'locked',
 						prunable: worktree.state === 'prunable',
+						inProgress: worktree.inProgress,
 					}
 				: null,
 			...verdicts[index],

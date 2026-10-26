@@ -394,7 +394,14 @@ suite('branch analysis (real git)', function () {
 		const realpath = (p: string) => fs.realpathSync(p);
 		const dirtyTree = branches['feature/dirty'].worktree;
 		assert.ok(dirtyTree);
-		assert.deepStrictEqual({ ...dirtyTree, path: realpath(dirtyTree.path) }, { path: realpath(dirty), isMain: false, dirty: true, locked: false, prunable: false });
+		assert.deepStrictEqual({ ...dirtyTree, path: realpath(dirtyTree.path) }, {
+			path: realpath(dirty),
+			isMain: false,
+			dirty: true,
+			locked: false,
+			prunable: false,
+			inProgress: null,
+		});
 		assert.strictEqual(branches['feature/locked'].worktree?.locked, true);
 		assert.strictEqual(branches['feature/locked'].worktree?.dirty, false);
 		assert.strictEqual(branches.main.current, true);
@@ -407,6 +414,32 @@ suite('branch analysis (real git)', function () {
 		assert.strictEqual(branches['feature/stacked'].upstream, 'feature/keep');
 		assert.strictEqual(branches['feature/stacked'].upstreamState, 'tracking');
 		assert.strictEqual(branches['feature/dirty'].upstreamState, 'none');
+	});
+
+	test('a branch being rebased or bisected in a worktree is attached to it, though HEAD is detached', async () => {
+		makeBranch('feature/rebasing', [['conflict.txt', 'branch\n']]);
+		makeBranch('feature/bisecting', [['b.txt', '1\n'], ['b.txt', '2\n'], ['b.txt', '3\n']]);
+		commitFile(fx.repo, 'conflict.txt', 'main\n', 'conflicting');
+		const rebasing = path.join(fx.dir, 'rebasing');
+		const bisecting = path.join(fx.dir, 'bisecting');
+		git(['worktree', 'add', '-q', rebasing, 'feature/rebasing'], fx.repo);
+		git(['worktree', 'add', '-q', bisecting, 'feature/bisecting'], fx.repo);
+		assert.throws(() => git(['rebase', 'main'], rebasing));
+		git(['bisect', 'start', 'feature/bisecting', 'main'], bisecting);
+		assert.match(git(['worktree', 'list', '--porcelain'], fx.repo), /detached\n[\s\S]*detached/);
+
+		const branches = byName(await analyze());
+		const realpath = (p: string) => fs.realpathSync(p);
+		for (const [name, where, inProgress] of [
+			['feature/rebasing', rebasing, 'rebase'],
+			['feature/bisecting', bisecting, 'bisect'],
+		]) {
+			const worktree = branches[name].worktree;
+			assert.ok(worktree, name);
+			assert.strictEqual(realpath(worktree.path), realpath(where));
+			assert.strictEqual(worktree.inProgress, inProgress);
+		}
+		assert.strictEqual(branches.main.worktree?.inProgress, null);
 	});
 
 	test('a repository without a remote compares with its local default branch', async () => {
