@@ -257,7 +257,10 @@ ${GLOBAL_OPTIONS}
 
 Common tasks:
   gsp restore --json           List the deletions that can be undone
-  gsp restore feature/x        Recreate feature/x`;
+  gsp restore feature/x        Recreate feature/x
+  gsp restore origin/feature/x Recreate a branch deleted on origin
+
+${EXIT_CODES}`;
 
 const AGENTS_HELP = `Usage: gsp agents [file...] [options]
        gsp agents --check [file...] [options]
@@ -265,7 +268,8 @@ const AGENTS_HELP = `Usage: gsp agents [file...] [options]
 Add a short note about gsp to AGENTS.md (Codex, Cursor, GitHub Copilot,
 OpenCode) and/or CLAUDE.md (Claude Code), at the repository's root. Without
 file names, pick them. Running it again updates its own note, or replaces
-an older one, and leaves the rest alone.
+a note an older gsp wrote, word for word. It leaves the rest alone, and
+names any other "Git cleanup" section for you to review.
 
 With --check, read the files (any file named, or the repository's AGENTS.md
 and CLAUDE.md) and print each line whose advice contradicts gsp, such as
@@ -281,7 +285,9 @@ Common tasks:
   gsp agents AGENTS.md CLAUDE.md       Add or update the note
   gsp agents --check                   Find outdated advice
   gsp agents --check ~/.claude/CLAUDE.md
-                                       Check a file outside the repository`;
+                                       Check a file outside the repository
+
+${EXIT_CODES}`;
 
 const HELP: Partial<Record<CommandName, string>> = {
 	clean: CLEAN_HELP,
