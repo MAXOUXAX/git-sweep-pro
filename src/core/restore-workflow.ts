@@ -1,4 +1,4 @@
-import { describeDeletion, latestDeletions, type DeletedBranch } from './deletion-log';
+import { deletionLabel, describeDeletion, latestDeletions, type DeletedBranch } from './deletion-log';
 import { describeGitFailure, toErrorMessage } from './errors';
 import { quoteShellArg } from './git-command';
 import type { WorkflowContext, WorkflowOutcome } from './workflow';
@@ -16,7 +16,8 @@ const lineSet = (stdout: string) => new Set(stdout.split('\n').map((line) => lin
 
 /**
  * The newest recorded deletion of each branch, checked against the
- * repository: a branch whose name is in use again is never overwritten, a
+ * repository: a branch whose name is in use again (locally, or on its
+ * remote as last fetched for a remote deletion) is never overwritten, a
  * commit that Git garbage-collected cannot come back, and an upstream that
  * was deleted is not tracked again (the next sweep would delete the branch).
  */
@@ -34,8 +35,8 @@ export async function inspectDeletions({ deletionLog, git }: WorkflowContext): P
 	const availableCommits = lineSet(commits.stdout);
 	return entries.map((entry) => ({
 		entry,
-		blocker: existingRefs.has(`refs/heads/${entry.branch}`)
-			? 'a branch with this name already exists'
+		blocker: existingRefs.has(entry.remote ? `refs/remotes/${entry.remote}/${entry.branch}` : `refs/heads/${entry.branch}`)
+			? `a branch with this name already exists${entry.remote ? ` on ${entry.remote}` : ''}`
 			: availableCommits.has(entry.sha)
 				? undefined
 				: `Git has garbage-collected its commit ${entry.sha.slice(0, 7)}`,
@@ -43,14 +44,36 @@ export async function inspectDeletions({ deletionLog, git }: WorkflowContext): P
 	}));
 }
 
+/**
+ * Pushes a branch deleted on its remote back at its recorded commit. The
+ * empty lease makes the push fail if a branch of that name was created
+ * there since, instead of moving it.
+ */
+async function restoreRemoteBranch({ git, output, deletionLog }: WorkflowContext, entry: DeletedBranch & { remote: string }): Promise<string | undefined> {
+	const ref = `refs/heads/${entry.branch}`;
+	try {
+		await git(['push', `--force-with-lease=${ref}:`, entry.remote, `${entry.sha}:${ref}`]);
+	} catch (error) {
+		return toErrorMessage(error);
+	}
+	output.appendLine(`Restored ${entry.branch} on ${entry.remote} at ${entry.sha.slice(0, 7)}.`);
+	try {
+		await deletionLog.forget(entry.branch, entry.remote);
+	} catch (error) {
+		output.appendLine(`[warning] Could not remove ${deletionLabel(entry)} from the deleted-branch log: ${toErrorMessage(error)}`);
+	}
+	return undefined;
+}
+
 /** Recreates one branch at its recorded commit; resolves to why it could not, if it could not. */
-async function restoreBranch(
-	{ git, output, deletionLog }: WorkflowContext,
-	{ entry, blocker, upstream }: RestoreCandidate
-): Promise<string | undefined> {
+async function restoreBranch(context: WorkflowContext, { entry, blocker, upstream }: RestoreCandidate): Promise<string | undefined> {
 	if (blocker) {
 		return blocker;
 	}
+	if (entry.remote !== undefined) {
+		return restoreRemoteBranch(context, { ...entry, remote: entry.remote });
+	}
+	const { git, output, deletionLog } = context;
 	try {
 		// Fails instead of overwriting a branch created since the inspection.
 		await git(['branch', entry.branch, entry.sha]);
@@ -87,7 +110,7 @@ async function chooseDeletions(
 	candidates: readonly RestoreCandidate[],
 	now: Date
 ): Promise<readonly RestoreCandidate[] | WorkflowOutcome> {
-	const named = (name: string) => candidates.filter(({ entry }) => entry.branch === name);
+	const named = (name: string) => candidates.filter(({ entry }) => deletionLabel(entry) === name);
 	if (requested.length > 0) {
 		const unknown = requested.filter((name) => named(name).length === 0);
 		if (unknown.length > 0) {
@@ -105,10 +128,10 @@ async function chooseDeletions(
 		return 'ok';
 	}
 	const picked = await ui.pickMany({
-		items: restorable.map(({ entry }) => ({ label: entry.branch, picked: false, description: describeDeletion(entry, now) })),
+		items: restorable.map(({ entry }) => ({ label: deletionLabel(entry), picked: false, description: describeDeletion(entry, now) })),
 		title: 'Select branches to restore',
 	});
-	const chosen = restorable.filter(({ entry }) => picked?.includes(entry.branch));
+	const chosen = restorable.filter(({ entry }) => picked?.includes(deletionLabel(entry)));
 	if (chosen.length === 0) {
 		output.appendLine('Operation cancelled or no branches selected.');
 		ui.showInformationMessage('No branches selected.');
@@ -141,7 +164,7 @@ export async function runRestoreWorkflow(
 		const restored: string[] = [];
 		const failed: string[] = [];
 		for (const candidate of chosen) {
-			const { branch } = candidate.entry;
+			const branch = deletionLabel(candidate.entry);
 			const reason = await restoreBranch(context, candidate);
 			if (reason === undefined) {
 				restored.push(branch);

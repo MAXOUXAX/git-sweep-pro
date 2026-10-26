@@ -43,6 +43,8 @@ export type CliOptions = {
 	/** Ask GitHub for merged pull requests through `gh` (`--no-github` turns it off). */
 	readonly github: boolean;
 	readonly protect: readonly string[];
+	/** `--remote[=<name>]`: also clean the branches of that remote; empty for the default (origin). */
+	readonly remote: string | undefined;
 	readonly json: boolean;
 	readonly verbose: boolean;
 	/** Internal: drive the UI over NDJSON on stdio (used by the VS Code extension). */
@@ -71,6 +73,8 @@ const OPTIONS = {
 	'non-interactive': { type: 'boolean', default: false },
 	merged: { type: 'boolean', short: 'm', default: false },
 	protect: { type: 'string', short: 'p', multiple: true, default: [] },
+	/** `--remote` alone is read as `--remote=` (see {@link withRemoteValue}): its value is optional. */
+	remote: { type: 'string' },
 	// Declared explicitly: `allowNegative` needs Node 22.4, and VS Code 1.92 runs Node 20.14.
 	'no-fetch': { type: 'boolean', default: false },
 	'no-confirm': { type: 'boolean', default: false },
@@ -84,6 +88,16 @@ const OPTIONS = {
 	continue: { type: 'boolean', default: false },
 	rpc: { type: 'boolean', default: false },
 } satisfies ParseArgsOptionsConfig;
+
+/**
+ * `--remote` takes an optional value, which `util.parseArgs` cannot express:
+ * a bare `--remote` becomes `--remote=` (the default remote), so the next
+ * argument stays a branch name. The value is only read inline (`--remote=upstream`).
+ */
+function withRemoteValue(argv: readonly string[]): string[] {
+	const end = argv.indexOf('--');
+	return argv.map((arg, index) => (arg === '--remote' && (end < 0 || index < end) ? '--remote=' : arg));
+}
 
 /**
  * Reports unknown options and missing values with the CLI's own wording. The
@@ -136,9 +150,10 @@ function parseWorktreeArgs(args: readonly string[]): WorktreeArgs {
  * CLI ships inside the VS Code extension, which is packaged without
  * node_modules.
  */
-export function parseArgs(argv: readonly string[]): CliOptions {
+export function parseArgs(rawArgv: readonly string[]): CliOptions {
+	const argv = withRemoteValue(rawArgv);
 	rejectInvalidOptions(argv);
-	const { values, positionals } = parseArgv({ args: [...argv], options: OPTIONS, allowPositionals: true });
+	const { values, positionals } = parseArgv({ args: argv, options: OPTIONS, allowPositionals: true });
 
 	if (values['dry-run'] && values.force) {
 		throw new UsageError('--dry-run and --force cannot be combined.');
@@ -186,6 +201,12 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 		// `worktree list` ignores it and `worktree prune` uses it as a preview.
 		throw new UsageError('--dry-run cannot be used with worktree remove.');
 	}
+	if (values.remote !== undefined && command !== 'clean') {
+		throw new UsageError('--remote can only be used with clean.');
+	}
+	if (values.remote !== undefined && /^-|\s/.test(values.remote)) {
+		throw new UsageError(`Invalid remote name: "${values.remote}".`);
+	}
 	if (requested === 'list' && values.force) {
 		throw new UsageError('list only plans: --force cannot be used with it.');
 	}
@@ -216,6 +237,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 		merged: values.merged,
 		github: !values['no-github'],
 		protect: values.protect,
+		remote: values.remote,
 		json: values.json,
 		verbose: values.verbose,
 		rpc: values.rpc,
@@ -238,6 +260,7 @@ function helpOptions(topic: CommandName | undefined): CliOptions {
 		merged: false,
 		github: true,
 		protect: [],
+		remote: undefined,
 		json: false,
 		verbose: false,
 		rpc: false,

@@ -162,9 +162,25 @@ export type AnalysisChecks = {
 	readonly durationMs: number;
 };
 
+/** A branch on a remote: its verdict, as for a local branch. */
+export type RemoteBranchAnalysis = {
+	readonly remote: string;
+	/** Name on the remote, e.g. "feature/x". */
+	readonly name: string;
+	readonly tip: string;
+	readonly verdict: 'dead' | 'alive';
+	/** Never `upstream-gone`. `open-pr` wins over any proof: someone may still push to it. */
+	readonly reason: DeadReason | AliveReason;
+	readonly evidence: Evidence | null;
+	/** The remote's default branch, or a protected name or pattern. */
+	readonly protected: Protection | null;
+};
+
 export type BranchAnalysisResult = {
 	readonly checks: AnalysisChecks;
 	readonly branches: readonly BranchAnalysis[];
+	/** The branches of {@link AnalyzeOptions.remote}, when asked. */
+	readonly remoteBranches?: readonly RemoteBranchAnalysis[];
 };
 
 export type AnalyzeContext = {
@@ -187,6 +203,12 @@ export type AnalyzeOptions = {
 	readonly fetched?: boolean;
 	/** Branch names the user gave exactly: they lift the {@link DEFAULT_PROTECTED_NAMES} protection. */
 	readonly named?: readonly string[];
+	/**
+	 * Also classify the branches of this remote (those matching `branches`).
+	 * `heads` maps each branch name to its tip on the remote, as `git ls-remote`
+	 * read it; without it, the remote-tracking refs are used.
+	 */
+	readonly remote?: { readonly name: string; readonly heads?: ReadonlyMap<string, string> };
 };
 
 /** Squash proofs give up beyond this many changed files. */
@@ -1047,6 +1069,13 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 
 	const patterns = [...(options.protectedPatterns ?? []), ...config.protectedPatterns];
 	const named = new Set(options.named ?? []);
+	const byPatternOrName = (name: string): Protection | null => {
+		const pattern = patterns.find((candidate) => isProtectedBranch(name, [candidate]));
+		if (pattern !== undefined) {
+			return { by: 'pattern', pattern: pattern.trim() };
+		}
+		return DEFAULT_PROTECTED_NAMES.includes(name) && !named.has(name) ? { by: 'default-name' } : null;
+	};
 	const protection = (name: string): Protection | null => {
 		if (base && name === base.name) {
 			return { by: 'default-branch' };
@@ -1054,11 +1083,7 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 		if (config.keepMerged.has(name)) {
 			return { by: 'branch-config', key: `branch.${name}.deleteMerged` };
 		}
-		const pattern = patterns.find((candidate) => isProtectedBranch(name, [candidate]));
-		if (pattern !== undefined) {
-			return { by: 'pattern', pattern: pattern.trim() };
-		}
-		return DEFAULT_PROTECTED_NAMES.includes(name) && !named.has(name) ? { by: 'default-name' } : null;
+		return byPatternOrName(name);
 	};
 
 	const branches = selected.map((ref, index): BranchAnalysis => {
@@ -1087,10 +1112,74 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 		};
 	});
 
+	const remoteBranches = options.remote && (await classifyRemote(git, prover, refs, options, byPatternOrName));
+
 	const githubCheck: GitHubCheck =
 		github.check.used && github.signal ? { ...github.check, apiCalls: github.signal.apiCalls() } : github.check;
 	return {
 		checks: { base: base ?? null, fetched: options.fetched ?? false, github: githubCheck, durationMs: Date.now() - started },
 		branches,
+		...(remoteBranches ? { remoteBranches } : {}),
 	};
+}
+
+/**
+ * Classifies the branches of `options.remote` with the same proofs as the
+ * local ones, at their tip on the remote. A tip missing from the repository
+ * (pushed since the last fetch) cannot be proven: it stays alive. The
+ * remote's own HEAD and default branch are protected, and so is the head of
+ * an open pull request, whatever proves it merged.
+ */
+async function classifyRemote(
+	git: RunGit,
+	prover: Prover | undefined,
+	refs: ReadonlyMap<string, Ref>,
+	options: AnalyzeOptions,
+	byPatternOrName: (name: string) => Protection | null
+): Promise<RemoteBranchAnalysis[]> {
+	const remote = options.remote?.name ?? '';
+	const prefix = `refs/remotes/${remote}/`;
+	const remoteHead = refs.get(`${prefix}HEAD`)?.symref.slice(prefix.length);
+	const heads =
+		options.remote?.heads ??
+		new Map(
+			[...refs.values()]
+				.filter((ref) => ref.name.startsWith(prefix) && !ref.symref && ref.name !== `${prefix}HEAD`)
+				.map((ref) => [ref.name.slice(prefix.length), ref.oid] as const)
+		);
+	const selected = [...heads].filter(
+		([name]) => name !== 'HEAD' && (!options.branches || options.branches.some((pattern) => branchMatchesPattern(name, pattern)))
+	);
+	const tips = [...new Set(selected.map(([, tip]) => tip))];
+	const present = new Set(tips.length > 0 ? lines((await git(['rev-list', '--no-walk', '--ignore-missing', ...tips])).stdout) : []);
+
+	const verdictOf = async (tip: string): Promise<Verdict> => {
+		if (!present.has(tip)) {
+			const message = `its tip ${tip.slice(0, 7)} is not in this repository yet: fetch ${remote} first`;
+			return { verdict: 'alive', reason: 'analysis-failed', evidence: { method: 'error', message } };
+		}
+		if (!prover) {
+			return { verdict: 'alive', reason: 'no-base', evidence: null };
+		}
+		const open = prover.openPullRequest(tip);
+		if (open) {
+			return {
+				verdict: 'alive',
+				reason: 'open-pr',
+				evidence: { method: 'pull-request', pullRequest: open.number, state: 'open', headSha: open.headSha, match: 'head' },
+			};
+		}
+		const isAncestor = await git(['merge-base', '--is-ancestor', tip, prover.base.ref]).then(
+			() => true,
+			() => false
+		);
+		return prover.verdictOf(tip, isAncestor);
+	};
+
+	return mapWithLimit(selected, CONCURRENCY, async ([name, tip]): Promise<RemoteBranchAnalysis> => {
+		if (name === remoteHead || name === prover?.base.name) {
+			return { remote, name, tip, verdict: 'alive', reason: 'default-branch', evidence: null, protected: { by: 'default-branch' } };
+		}
+		return { remote, name, tip, ...(await verdictOf(tip).catch(failedVerdict)), protected: byPatternOrName(name) };
+	});
 }

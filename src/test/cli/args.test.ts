@@ -31,6 +31,17 @@ suite('cli args', () => {
 		assert.throws(() => parseArgs(['clean', '--', '-x']), /Invalid branch name: "-x"/);
 	});
 
+	test('--remote takes an optional inline value, and only with clean', () => {
+		assert.strictEqual(parseArgs([]).remote, undefined);
+		const bare = parseArgs(['clean', '--remote', 'feature/a']);
+		assert.deepStrictEqual([bare.remote, bare.positionals], ['', ['feature/a']]);
+		assert.strictEqual(parseArgs(['--remote=upstream', '--yes']).remote, 'upstream');
+		assert.strictEqual(parseArgs(['list', '--remote']).remote, '');
+		assert.throws(() => parseArgs(['clean', '--', '--remote']), /Invalid branch name: "--remote"/, 'after --, not the option');
+		assert.throws(() => parseArgs(['worktree', 'list', '--remote']), /--remote can only be used with clean/);
+		assert.throws(() => parseArgs(['--remote=-x']), /Invalid remote name: "-x"/);
+	});
+
 	test('--merged is still accepted, as a no-op; --no-github turns GitHub off', () => {
 		assert.strictEqual(parseArgs(['-m']).merged, true);
 		assert.strictEqual(parseArgs(['--merged']).command, 'clean');

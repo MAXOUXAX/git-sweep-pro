@@ -1,11 +1,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
-import { createDeletionLog, describeDeletion } from '../core/deletion-log';
+import { createDeletionLog, deletionLabel, describeDeletion } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
-import { CLEAN_SCHEMA, formatBranchLines, formatSummary, nextCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
-import { runCleanWorkflow, UnknownBranchError, type CleanOutcome } from '../core/clean-workflow';
+import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, nextCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
+import { runCleanWorkflow, UnknownBranchError, UnknownRemoteError, type CleanOutcome } from '../core/clean-workflow';
 import { createGhRunner } from '../core/github-signal';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import { inspectDeletions, runRestoreWorkflow } from '../core/restore-workflow';
@@ -133,7 +133,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 }
 
 /** Why a command stopped before producing its JSON document. */
-type JsonErrorCode = 'usage' | 'no-such-directory' | 'unknown-branch' | 'not-a-repository' | 'failed';
+type JsonErrorCode = 'usage' | 'no-such-directory' | 'unknown-branch' | 'unknown-remote' | 'not-a-repository' | 'failed';
 
 /**
  * With `--json`, a fatal error is still one JSON document on stdout, so a
@@ -246,14 +246,15 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 				protectedPatterns: options.protect,
 				canPrompt: frontend.canPrompt && !options.json,
 				confirm: options.confirm,
+				...(options.remote === undefined ? {} : { remote: options.remote }),
 			}
 		);
 		printCleanReport(report, outcome, options, frontend, io);
 		return { kind: 'clean', outcome };
 	} catch (error) {
-		if (error instanceof UnknownBranchError) {
+		if (error instanceof UnknownBranchError || error instanceof UnknownRemoteError) {
 			if (options.json) {
-				printJsonError(io, error.message, 'unknown-branch');
+				printJsonError(io, error.message, error instanceof UnknownBranchError ? 'unknown-branch' : 'unknown-remote');
 			}
 			io.stderr(`error: ${error.message}\n`);
 			return EXIT.usage;
@@ -271,9 +272,12 @@ function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | nul
 	if (outcome !== 'not-applied') {
 		return undefined;
 	}
-	if (next && report.summary.delete > 0 && !report.branches.some((branch) => branch.result !== undefined)) {
+	const remote = report.summary.remote;
+	const remoteBranches = report.remoteBranches ?? [];
+	if (next && report.summary.delete + (remote?.delete ?? 0) > 0 && ![...report.branches, ...remoteBranches].some((branch) => branch.result !== undefined)) {
 		return `Nothing was changed. To apply this plan, run: ${next}`;
 	}
+	const unapplied = remoteBranches.filter((branch) => branch.action === 'delete' && branch.result === undefined).length;
 	const count = (test: (branch: CleanReport['branches'][number]) => boolean) => report.branches.filter(test).length;
 	const unpushed = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'dead');
 	const unmerged = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'alive');
@@ -283,9 +287,12 @@ function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | nul
 		...(unmerged > 0 ? [`${unmerged} named but not merged`] : []),
 		...(ignored > 0 ? [`${ignored} whose worktree holds ignored files`] : []),
 	];
-	const changed = count((branch) => branch.reason === 'plan-changed' || branch.reason === 'fetch-failed' || branch.reason === 'worktree-changed');
+	const changed = [...report.branches, ...remoteBranches].filter(
+		(branch) => branch.reason === 'plan-changed' || branch.reason === 'fetch-failed' || branch.reason === 'worktree-changed'
+	).length;
 	const lines = [
 		...(kept.length > 0 ? [`Kept without --force: ${kept.join(', ')}. Each line above gives the command.`] : []),
+		...(unapplied > 0 && remote && next ? [`Branches on ${remote.remote} are only deleted with --yes. To delete them, run: ${next}`] : []),
 		...(changed > 0 && next ? [`${changed} not deleted, as things changed while applying. Review them with: ${next}`] : []),
 	];
 	return lines.length > 0 ? lines.join('\n') : undefined;
@@ -301,13 +308,16 @@ function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: C
 					protectedPatterns: options.protect,
 					github: options.github,
 					fetch: options.fetch,
+					...(report.summary.remote ? { remote: report.summary.remote.remote } : {}),
 				});
 	if (options.json) {
 		const document: CleanDocument = { ...report, next: command };
 		io.stdout(`${JSON.stringify(document, null, 2)}\n`);
 		return;
 	}
-	const lines = formatBranchLines(report);
+	const remoteLines = formatRemoteLines(report);
+	const localLines = formatBranchLines(report);
+	const lines = [...localLines, ...(localLines.length > 0 && remoteLines.length > 0 ? [''] : []), ...remoteLines];
 	const summary = outcome === 'cancelled' ? 'Cancelled. Nothing was deleted.' : formatSummary(report);
 	const next = nextStep(report, outcome, command);
 	if (options.rpc || frontend.canPrompt) {
@@ -409,8 +419,8 @@ async function runRestore(context: WorkflowContext, options: CliOptions, fronten
 			io.stderr('No deleted branches to restore.\n');
 		} else {
 			const now = new Date();
-			const width = Math.max(...entries.map((entry) => entry.branch.length));
-			entries.forEach((entry) => io.stdout(`${entry.branch.padEnd(width)}  ${describeDeletion(entry, now)}\n`));
+			const width = Math.max(...entries.map((entry) => deletionLabel(entry).length));
+			entries.forEach((entry) => io.stdout(`${deletionLabel(entry).padEnd(width)}  ${describeDeletion(entry, now)}\n`));
 			io.stderr('To restore them, run: gsp restore <branch>...\n');
 		}
 		return 'ok';

@@ -3,7 +3,7 @@ import type { CommandName } from './args';
 const EXIT_CODES = `Exit codes:
   0  Done, or nothing to do
   1  At least one action failed (details in the output)
-  2  Invalid arguments, or a branch that does not exist
+  2  Invalid arguments, or a branch or remote that does not exist
   3  Sync paused on conflicts: resolve them, then run "gsp resume"
   4  Cancelled at a prompt
   5  clean: some planned deletions were not applied; the output says why
@@ -82,6 +82,10 @@ Options:
                      (named exactly, or listed as needing --force), and
                      worktrees holding ignored files
       --json         Print the plan or the result as one JSON document
+      --remote[=<name>]
+                     Also delete the branches on <name> (origin by default)
+                     whose work is merged into the default branch; never
+                     forced, and only with --yes
   -p, --protect <glob>
                      Never delete branches matching <glob> (repeatable; also
                      read from "git config --get-all git-sweep-pro.protected")
@@ -96,6 +100,7 @@ Common tasks:
   gsp clean --json                         Preview the plan as JSON
   gsp clean feature/x --yes                Delete one branch, if proven merged
   gsp clean feature/x --yes --force        Delete a branch with unpushed work
+  gsp clean --remote --yes                 Also delete merged branches on origin
   gsp restore feature/x                    Undo a deletion
 
 ${EXIT_CODES}`;
