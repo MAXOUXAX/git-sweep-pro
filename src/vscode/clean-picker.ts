@@ -127,8 +127,8 @@ export function showCleanPicker(options: CleanPickerOptions): Promise<CleanPick>
 			} else if (stranded?.entry) {
 				const local = keptTracker(stranded.entry)!;
 				const why = previous.has(local)
-					? `${stranded.entry.arg} was unchecked too: ${local} tracks it, so it stays while ${local} is kept.`
-					: `${stranded.entry.arg} can't be deleted alone: ${local} tracks it. Check ${local} too.`;
+					? `Also unchecked ${stranded.entry.arg}: ${local} tracks it.`
+					: `${stranded.entry.arg} goes only with ${local}, which tracks it.`;
 				revert(
 					selected.filter((item) => item !== stranded),
 					why

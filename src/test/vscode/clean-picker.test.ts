@@ -170,11 +170,11 @@ suite('clean picker', () => {
 
 		fake.uncheck('feature/a');
 		assert.deepStrictEqual(fake.args(), []);
-		assert.strictEqual(fake.quickPick.placeholder, 'origin/feature/a was unchecked too: feature/a tracks it, so it stays while feature/a is kept.');
+		assert.strictEqual(fake.quickPick.placeholder, 'Also unchecked origin/feature/a: feature/a tracks it.');
 
 		fake.check('origin/feature/a');
 		assert.deepStrictEqual(fake.args(), []);
-		assert.strictEqual(fake.quickPick.placeholder, "origin/feature/a can't be deleted alone: feature/a tracks it. Check feature/a too.");
+		assert.strictEqual(fake.quickPick.placeholder, 'origin/feature/a goes only with feature/a, which tracks it.');
 
 		fake.check('feature/a');
 		fake.check('origin/feature/a');
