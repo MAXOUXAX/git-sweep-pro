@@ -139,14 +139,12 @@ function blockerOf(branch: BranchAnalysis, defaultBranch: string | undefined): B
 		return { reason: 'delete-merged-false', hint: cmd('git', 'config', '--unset', branch.protected.key) };
 	}
 	const worktree = branch.worktree && !branch.worktree.prunable ? branch.worktree : null;
+	// post-pr leaves the worktree first: it switches the main checkout, or removes the linked one gsp runs in.
 	if (branch.current) {
-		return { reason: 'current-branch', hint: defaultBranch ? cmd('gsp', 'post-pr', defaultBranch) : 'git switch <another-branch>' };
+		return { reason: 'current-branch', hint: defaultBranch ? cmd('gsp', 'post-pr', branch.name, '--yes') : 'git switch <another-branch>' };
 	}
 	if (worktree?.isMain) {
-		return {
-			reason: 'main-worktree',
-			hint: `${cmd('git', '-C', worktree.path, 'switch')} ${defaultBranch ? quoteShellArg(defaultBranch) : '<another-branch>'}`,
-		};
+		return { reason: 'main-worktree', hint: defaultBranch ? cmd('gsp', 'post-pr', branch.name, '--yes') : `${cmd('git', '-C', worktree.path, 'switch')} <another-branch>` };
 	}
 	if (worktree?.locked) {
 		return { reason: 'locked-worktree', hint: cmd('git', 'worktree', 'unlock', worktree.path) };

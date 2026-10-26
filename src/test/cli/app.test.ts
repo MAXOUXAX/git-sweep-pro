@@ -333,7 +333,7 @@ suite('cli app (real git)', function () {
 			const realWt = fs.realpathSync(wt);
 			const lines = io.out.join('').split('\n');
 			assert.ok(lines.includes(`delete  feature/wt    no commits beyond origin/main, removes worktree ${realWt}`), lines.join('\n'));
-			assert.ok(lines.includes('skip    feature/here  current branch (no commits beyond origin/main) → gsp post-pr main'), lines.join('\n'));
+			assert.ok(lines.includes('skip    feature/here  current branch (no commits beyond origin/main) → gsp post-pr feature/here --yes'), lines.join('\n'));
 
 			const json = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['list', '--json', '--no-fetch'], json), EXIT.notApplied);
