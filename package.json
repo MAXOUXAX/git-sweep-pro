@@ -74,6 +74,24 @@
         "shortTitle": "Finish PR"
       },
       {
+        "command": "git-sweep-pro.worktrees",
+        "category": "Git Sweep Pro",
+        "title": "Show Worktrees",
+        "shortTitle": "Worktrees"
+      },
+      {
+        "command": "git-sweep-pro.removeWorktree",
+        "category": "Git Sweep Pro",
+        "title": "Remove Worktree",
+        "shortTitle": "Remove Worktree"
+      },
+      {
+        "command": "git-sweep-pro.pruneWorktrees",
+        "category": "Git Sweep Pro",
+        "title": "Prune Worktrees",
+        "shortTitle": "Prune Worktrees"
+      },
+      {
         "command": "git-sweep-pro.syncWithUpstream",
         "category": "Git Sweep Pro",
         "title": "Sync Branch With Upstream",

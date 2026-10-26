@@ -13,6 +13,7 @@ import { runPostPrCommand } from './vscode/post-pr-command';
 import { applyTerminalPath } from './vscode/terminal-path';
 import { createVscodeCommandUi } from './vscode/vscode-command-ui';
 import { resolveTargetRepository, resolveWorkspaceRoot, type RepositoryResolution } from './vscode/workspace';
+import { runPruneWorktreesCommand, runRemoveWorktreeCommand, runWorktreeListCommand } from './vscode/worktree-commands';
 
 const OUTPUT_CHANNEL_NAME = 'Git Sweep';
 const LAST_REPO_STATE_KEY = 'gitSweepPro.lastSelectedRepo';
@@ -172,6 +173,9 @@ export function activate(context: vscode.ExtensionContext) {
 		registerRepoCommand('git-sweep-pro.run', withRoot((root) => runCleanCommand(deps, cleanOptions(root, false)))),
 		registerRepoCommand('git-sweep-pro.dryRun', withRoot((root) => runCleanCommand(deps, cleanOptions(root, true)))),
 		registerRepoCommand('git-sweep-pro.postPullRequest', withRoot((root) => runPostPrCommand(deps, root))),
+		registerRepoCommand('git-sweep-pro.worktrees', withRoot((root) => runWorktreeListCommand(deps, root))),
+		registerRepoCommand('git-sweep-pro.pruneWorktrees', withRoot((root) => runPruneWorktreesCommand(deps, root))),
+		registerRepoCommand('git-sweep-pro.removeWorktree', withRoot((root) => runRemoveWorktreeCommand(deps, root))),
 		registerRepoCommand('git-sweep-pro.syncWithUpstream', (root) => runCli(root, ['sync'])),
 		registerRepoCommand('git-sweep-pro.syncWithUpstreamResume', (root) => runCli(root, ['resume'])),
 		registerRepoCommand('git-sweep-pro.restore', (root) => runCli(root, ['restore'])),
