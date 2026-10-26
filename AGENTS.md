@@ -22,6 +22,8 @@ Settled by Maxence on 2026-10-26.
 - **Exit 5 means "more could be cleaned with your approval"**: deletions planned but not applied, or branches that need `--force`. Skips that need the user to act elsewhere (current branch, dirty worktree) don't change the exit code.
 - `--yes` without a picker applies whatever is proven after the fetch, within the requested scope (patterns, `--protect`) and never beyond the `--force` rules. Only branches a person picked in the picker are held to the plan they saw.
 - A branch needing `--force` is never offered or pre-selected in the picker without `--force`.
+- Local branches named `main`, `master`, `trunk` or `develop` are protected by default, besides the detected default branch, so a moved `origin/HEAD` can't get them deleted; naming one exactly on the command line lifts it.
+- Secret-like files (`.env*`, `*.pem`, `*.key`, `.npmrc`, `.netrc`) are never regenerable, even inside ignored build or cache folders; dependency folders are not searched.
 
 ## Release workflow for 2.0
 
