@@ -425,8 +425,10 @@ class Prover {
 		commits.reverse();
 		const changes = commits.map((commit) => parseRawChanges(commit.tokens));
 		// Cheap gate before reading any tree: every wanted state must show up in the base's changes.
+		// Only sound when the log is complete: a capped one may start after the squash.
+		const complete = commits.length < MAX_SQUASH_CANDIDATES;
 		const reached = new Set(changes.flat().map((change) => `${change.path}\0${change.state}`));
-		if (commits.length > 0 && paths.some((path) => !reached.has(`${path}\0${wanted.get(path)}`))) {
+		if (complete && commits.length > 0 && paths.some((path) => !reached.has(`${path}\0${wanted.get(path)}`))) {
 			return undefined;
 		}
 
@@ -436,8 +438,8 @@ class Prover {
 			? parseTree(await this.gitRead(['--literal-pathspecs', 'ls-tree', '-r', '-z', '--full-tree', start, '--', ...paths]))
 			: new Map<string, string>();
 		const matches = () => paths.every((path) => (state.get(path) ?? '') === wanted.get(path));
-		if (commits.length === 0) {
-			return matches() ? { squashCommit: this.base.tip, files: paths.length } : undefined;
+		if (start && (commits.length === 0 || !complete) && matches()) {
+			return { squashCommit: start, files: paths.length };
 		}
 		for (const [index, commit] of commits.entries()) {
 			for (const change of changes[index]) {
