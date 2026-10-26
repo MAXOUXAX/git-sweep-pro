@@ -226,15 +226,10 @@ export function confirmLocal(entries: readonly CleanEntry[]): { readonly message
 	const worktrees = entries.filter((entry) => entry.worktree);
 	const forced = entries.filter((entry) => entry.forced);
 	const unproven = entries.filter((entry) => entry.unproven);
-	const ignored = worktrees.filter((entry) => entry.forced && entry.worktree?.ignoredFiles?.count);
 	const lines = [
 		// One branch is named in the title already.
 		...(entries.length > 1 ? [names] : []),
 		...(worktrees.length > 0 ? [`This also removes ${plural(worktrees.length, 'worktree')}.`] : []),
-		...ignored.map(
-			(entry) =>
-				`Removing ${displayPath(entry.worktree!.path)} deletes ${plural(entry.worktree!.ignoredFiles!.count, 'ignored file')} for good: ${describeIgnoredFiles(entry.worktree!.ignoredFiles!)}.`
-		),
 		...(unproven.length === 0
 			? []
 			: [
