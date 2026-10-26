@@ -7,9 +7,9 @@ const EXIT_CODES = `Exit codes:
   3  Sync paused on conflicts: resolve them, then run "gsp resume"
   4  Cancelled at a prompt
   5  clean, post-pr: some planned deletions were not applied; the output
-     says why and what to run next. post-pr also when the merged branch
-     was not deleted. Other commands: a confirmation was needed but
-     nobody could answer; rerun with --yes`;
+     says why and what to run next. For post-pr, 5 also means the branch
+     you asked to finish isn't finished. Other commands: a confirmation
+     was needed but nobody could answer; rerun with --yes`;
 
 const GLOBAL_OPTIONS = `  -C <path>          Run as if started in <path>
       --non-interactive
@@ -126,9 +126,17 @@ would.
 
 <branch> is deleted only when its work is proven to be in the default
 branch, with the rules of "gsp clean". Otherwise nothing is changed on it,
-gsp says why, and exits with 5; the same when its worktree has uncommitted
-changes. A <branch> that no longer exists (gh pr merge --delete-branch
-deletes it) is reported as already deleted, and the rest goes on.
+gsp says why and what may prove it (fetching, pushing, --into), and exits
+with 5; the same when its worktree has uncommitted changes. A <branch> that
+no longer exists is reported as already deleted, and the rest goes on, when
+gsp deleted it, a remote branch of that name is still listed, or GitHub
+shows its pull request merged (gh pr merge --delete-branch deletes it).
+Any other missing <branch> is an error (exit 2).
+
+<branch> never names a protected branch: "gsp post-pr main", the old form
+naming the branch to go back to, still finishes the current branch, with a
+deprecation note. So does a protected branch, or the branch of the main
+checkout when gsp runs in another worktree.
 Works from any worktree:
   - run from the branch's own linked worktree, gsp removes it, carries on
     from the main checkout and tells you where to "cd" next;

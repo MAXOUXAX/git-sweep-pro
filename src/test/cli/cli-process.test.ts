@@ -162,8 +162,8 @@ suite('cli process client (real git)', function () {
 	test('the help says what exit code 5 means for clean and for the other commands', () => {
 		const help = run(['help']);
 		assert.strictEqual(help.status, EXIT.ok);
-		assert.ok(help.stdout.includes('5  clean, post-pr: some planned deletions were not applied; the output\n     says why and what to run next. post-pr also when the merged branch\n     was not deleted.'), help.stdout);
-		assert.ok(help.stdout.includes('Other commands: a confirmation was needed but\n     nobody could answer; rerun with --yes'), help.stdout);
+		assert.ok(help.stdout.includes('5  clean, post-pr: some planned deletions were not applied; the output\n     says why and what to run next. For post-pr, 5 also means the branch\n     you asked to finish isn\'t finished.'), help.stdout);
+		assert.ok(help.stdout.includes('Other commands: a confirmation\n     was needed but nobody could answer; rerun with --yes'), help.stdout);
 		assert.ok(!help.stdout.includes('nothing was changed'));
 	});
 
