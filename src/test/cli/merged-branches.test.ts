@@ -148,17 +148,34 @@ suite('merged branch detection (real git)', function () {
 		git(['checkout', '-q', 'main'], fx.repo);
 		git(['branch', '-q', '-D', 'later'], fx.repo);
 
-		// The plan, made before fetching, cannot see the new default branch: the branch is not approved.
-		const first = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['clean', 'feature/on-trunk', '--yes', '--json'], first), EXIT.notApplied);
-		assert.deepStrictEqual(
-			JSON.parse(first.out.join('')).branches.map((branch: { reason: string; hint: string }) => [branch.reason, branch.hint]),
-			[['plan-changed', 'gsp clean feature/on-trunk']]
-		);
+		// The plan, made before fetching, cannot see the new default branch; `--yes` applies what the fetch proves.
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['clean', 'feature/on-trunk', '--yes', '--json'], io), EXIT.ok);
 		const [branch] = JSON.parse(io.out.join('')).branches;
 		assert.deepStrictEqual([branch.result, branch.reason, branch.evidence.base], ['deleted', 'empty', 'refs/remotes/origin/trunk']);
+	});
+
+	test('with --yes, a squash merge only the fetch reveals is deleted in the same run', async () => {
+		makeLocalBranch('feature/squashed', 's.txt', ['s\n', 's\nt\n']);
+		// Someone else squash-merges it on the remote; the local remote-tracking refs don't know yet.
+		const before = git(['rev-parse', 'origin/main'], fx.repo).trim();
+		git(['checkout', '-q', '-b', 'elsewhere', 'main'], fx.repo);
+		git(['merge', '-q', '--squash', 'feature/squashed'], fx.repo);
+		git(['commit', '-q', '-m', 'squash feature/squashed'], fx.repo);
+		git(['push', '-q', 'origin', 'elsewhere:main'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['branch', '-q', '-D', 'elsewhere'], fx.repo);
+		git(['update-ref', 'refs/remotes/origin/main', before], fx.repo);
+
+		const plan = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', '--json', '--no-github'], plan), EXIT.ok);
+		assert.strictEqual(JSON.parse(plan.out.join('')).branches.find((branch: { name: string }) => branch.name === 'feature/squashed').action, 'keep');
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', '--yes', '--json', '--no-github'], io), EXIT.ok);
+		const branch = JSON.parse(io.out.join('')).branches.find((entry: { name: string }) => entry.name === 'feature/squashed');
+		assert.deepStrictEqual([branch.result, branch.reason], ['deleted', 'squash-merged']);
+		assert.ok(!branchExists(fx.repo, 'feature/squashed'));
 	});
 
 	test('the plan skips protected and current branches, and keeps the default branch', async () => {

@@ -202,6 +202,16 @@ suite('clean workflow', () => {
 		});
 	});
 
+	test('with --yes, deletes what the fetch proves, and still reports what it disproves', () => {
+		const planned = decide([branch('kept'), branch('now-alive')]);
+		const current = decide([branch('kept'), branch('now-alive', { verdict: 'alive', reason: 'unmerged-commits' }), branch('new')]);
+		assert.deepStrictEqual(actions(holdToPlan(planned, current, fetched, false)), {
+			kept: ['delete', 'squash-merged', 'gsp clean kept --yes'],
+			'now-alive': ['skip', 'plan-changed', 'gsp clean now-alive'],
+			new: ['delete', 'squash-merged', 'gsp clean new --yes'],
+		});
+	});
+
 	test('after a failed fetch, only deletions that remote-tracking refs alone prove are held back', () => {
 		const branches = [branch('gone', { reason: 'upstream-gone' }), branch('squashed')];
 		const unreachable: RemoteCheck = { source: 'local-refs', reason: 'unreachable', detail: 'offline' };

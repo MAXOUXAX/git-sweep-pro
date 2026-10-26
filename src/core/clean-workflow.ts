@@ -296,27 +296,28 @@ function pickItems(branches: readonly CleanBranch[], force: boolean): PickItem[]
 const skipped = (branch: CleanBranch, reason: SkipReason, hint: string | null): CleanBranch => ({ ...branch, action: 'skip', reason, hint });
 
 /**
- * Holds the analysis made after the fetch to the plan that was shown (and
- * picked from): only branches approved then, and still deleted now, are
- * deleted. An approved branch that is now kept, or a branch deleted now but
- * not approved, is skipped as `plan-changed`; one that is now skipped keeps
- * its own reason. When the fetch failed, a deletion that only stale
- * remote-tracking refs prove is skipped as `fetch-failed`.
+ * Checks the analysis made after the fetch against the plan made before it.
+ * A branch the plan deleted but that is now kept is skipped as
+ * `plan-changed`; one that is now skipped keeps its own reason. When the
+ * fetch failed, a deletion that only stale remote-tracking refs prove is
+ * skipped as `fetch-failed`.
+ *
+ * With `heldToPlan` (a person could pick from the plan), only branches approved
+ * then are deleted: one deleted now but not approved is skipped as
+ * `plan-changed`. Without it (`--yes`), a branch only the fetch proves is
+ * deleted too.
  */
-export function holdToPlan(planned: readonly CleanBranch[], current: readonly CleanBranch[], remote: RemoteCheck): CleanBranch[] {
+export function holdToPlan(planned: readonly CleanBranch[], current: readonly CleanBranch[], remote: RemoteCheck, heldToPlan = true): CleanBranch[] {
 	const before = new Map(planned.map((branch) => [branch.name, branch]));
 	const stale = remote.source === 'local-refs' && remote.reason === 'unreachable';
 	const replan = (branch: CleanBranch) => `gsp clean ${quoteShellArg(branch.name)}`;
 	return current.map((branch) => {
 		const previous = before.get(branch.name);
 		const approved = previous?.action === 'delete';
-		if (!approved) {
-			if (branch.action !== 'delete') {
-				return branch;
-			}
+		if (!approved && heldToPlan && branch.action === 'delete') {
 			return previous?.reason === 'not-selected' ? skipped(branch, 'not-selected', previous.hint) : skipped(branch, 'plan-changed', replan(branch));
 		}
-		if (branch.action === 'keep') {
+		if (approved && branch.action === 'keep') {
 			return skipped(branch, 'plan-changed', replan(branch));
 		}
 		if (branch.action === 'delete' && stale && branch.verdictReason === 'upstream-gone' && !branch.needsForce) {
@@ -436,9 +437,10 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 		}
 	}
 
-	// Approved (or nothing to approve): refresh the remote branches, analyse
-	// again, and hold the result to what was approved. A branch that only the
-	// fetch proves is reported as `plan-changed`, for the next run.
+	// Approved (or nothing to approve): refresh the remote branches and analyse
+	// again. A person who picked is held to what they picked: a branch that
+	// only the fetch proves is reported as `plan-changed`, for the next run.
+	// `--yes` applies whatever is proven now, within the same scope.
 	if (online) {
 		remote = await fetchAndPrune(context, remotes);
 		warnIfUnreachable(remote);
@@ -447,7 +449,7 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	worktreesPruned = prunable.length > 0 ? (await pruneWorktrees(context)).pruned : [];
 	analysis = await analyse(remote.source === 'fetch');
 	planned = await withIgnoredFiles(git, analysis.branches, named);
-	branches = holdToPlan(branches, decideActions(planned, decideOptions), remote);
+	branches = holdToPlan(branches, decideActions(planned, decideOptions), remote, !options.yes);
 
 	const recorder = createDeletionRecorder(context.deletionLog, 'sweep', output.appendLine);
 	const applied: CleanBranch[] = [];
