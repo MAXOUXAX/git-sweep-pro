@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import type { BranchAnalysis } from '../../core/branch-analysis';
-import { CLEAN_SCHEMA, type CleanReport } from '../../core/clean-plan';
+import { CLEAN_SCHEMA, type CleanReport, type PlannedBranch } from '../../core/clean-plan';
 import {
 	decideTarget,
 	formatDefaultBranch,
@@ -15,7 +15,7 @@ import {
 const BASE = 'refs/remotes/origin/main';
 
 /** A squash-merged branch with nothing holding it; override what a test needs. */
-function branch(overrides: Partial<BranchAnalysis> = {}): BranchAnalysis {
+function branch(overrides: Partial<PlannedBranch> = {}): PlannedBranch {
 	return {
 		name: 'feature/x',
 		tip: 'a'.repeat(40),
@@ -39,6 +39,7 @@ const worktree = (overrides: Partial<NonNullable<BranchAnalysis['worktree']>> = 
 	dirty: false,
 	locked: false,
 	prunable: false,
+	inProgress: null,
 	...overrides,
 });
 
@@ -96,7 +97,7 @@ suite('post-pr plan', () => {
 		assert.strictEqual(decided.worktree, null);
 
 		const dirty = decideTarget(branch({ worktree: worktree({ path: '/repo', isMain: true }) }), { ...OPTIONS, mainCheckoutDirty: true });
-		assert.deepStrictEqual([dirty.action, dirty.reason, dirty.hint], ['skip', 'dirty-worktree', "git -C /repo stash push && gsp post-pr feature/x --yes"]);
+		assert.deepStrictEqual([dirty.action, dirty.reason, dirty.hint], ['skip', 'dirty-worktree', "git -C /repo stash --include-untracked && gsp post-pr feature/x --yes"]);
 		assert.strictEqual(dirty.worktree?.isMain, true);
 	});
 
@@ -116,6 +117,10 @@ suite('post-pr plan', () => {
 		assert.deepStrictEqual([locked.action, locked.reason], ['skip', 'locked-worktree']);
 		const protectedBranch = decideTarget(branch({ protected: { by: 'pattern', pattern: 'feature/*' } }), { ...OPTIONS, force: true });
 		assert.deepStrictEqual([protectedBranch.action, protectedBranch.reason], ['skip', 'protected']);
+		const rebasing = decideTarget(branch({ worktree: worktree({ path: '/repo', isMain: true, inProgress: 'rebase' }) }), { ...OPTIONS, force: true });
+		assert.deepStrictEqual([rebasing.action, rebasing.reason, rebasing.worktree?.isMain], ['skip', 'rebase-in-progress', true]);
+		const ignored = decideTarget(branch({ worktree: { ...worktree(), ignoredFiles: { count: 1, sample: ['.env'] } } }), OPTIONS);
+		assert.deepStrictEqual([ignored.action, ignored.reason, ignored.hint], ['skip', 'ignored-files', 'gsp post-pr feature/x --yes --force']);
 		const tracked = decideTarget(branch({ upstreamOf: ['feature/y'] }), OPTIONS);
 		assert.deepStrictEqual([tracked.action, tracked.reason], ['skip', 'tracked-by-kept-branch']);
 	});

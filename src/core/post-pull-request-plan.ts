@@ -1,5 +1,13 @@
-import type { BranchAnalysis } from './branch-analysis';
-import { CLEAN_SCHEMA, decideActions, formatBranchLines, formatSummary, type CleanBranch, type CleanMode, type CleanReport } from './clean-plan';
+import {
+	CLEAN_SCHEMA,
+	decideActions,
+	formatBranchLines,
+	formatSummary,
+	type CleanBranch,
+	type CleanMode,
+	type CleanReport,
+	type PlannedBranch,
+} from './clean-plan';
 import { quoteShellArg } from './git-command';
 
 /*
@@ -92,7 +100,7 @@ export type DecideTargetOptions = {
  * it; nor is the main checkout, which it switches to the default branch
  * first, unless it has uncommitted changes. Hints rerun post-pr.
  */
-export function decideTarget(branch: BranchAnalysis, options: DecideTargetOptions): CleanBranch {
+export function decideTarget(branch: PlannedBranch, options: DecideTargetOptions): CleanBranch {
 	const worktree = branch.worktree && !branch.worktree.prunable ? branch.worktree : null;
 	const inMain = worktree?.isMain === true;
 	const [decided] = decideActions(
@@ -100,18 +108,17 @@ export function decideTarget(branch: BranchAnalysis, options: DecideTargetOption
 		{ force: options.force, named: new Set([branch.name]), defaultBranch: options.into }
 	);
 	const again = (...flags: string[]) => cmd('gsp', 'post-pr', branch.name, '--yes', ...flags);
+	// The main checkout is switched, never removed.
+	const shown = inMain ? (decided.action === 'delete' || !decided.worktree ? null : { ...decided.worktree, isMain: true }) : decided.worktree;
 	if (decided.action === 'delete') {
-		// The main checkout is switched, never removed.
-		return { ...decided, worktree: inMain ? null : decided.worktree, hint: again(...(decided.needsForce ? ['--force'] : [])) };
+		return { ...decided, worktree: shown, hint: again(...(decided.needsForce ? ['--force'] : [])) };
 	}
 	if (decided.reason === 'needs-force') {
 		// Fetching may prove the merge: suggest that before forcing.
-		return { ...decided, hint: options.remoteAhead ? again() : again('--force') };
+		return { ...decided, worktree: shown, hint: options.remoteAhead ? again() : again('--force') };
 	}
-	if (inMain && worktree && decided.reason === 'dirty-worktree') {
-		return { ...decided, worktree, hint: `${cmd('git', '-C', worktree.path, 'stash', 'push')} && ${again()}` };
-	}
-	return { ...decided, worktree: branch.worktree };
+	// Hints that rerun gsp clean on this branch rerun post-pr instead.
+	return { ...decided, worktree: shown, hint: decided.hint?.split(cmd('gsp', 'clean', branch.name, '--yes')).join(again()) ?? null };
 }
 
 const short = (sha: string | null) => sha?.slice(0, 7) ?? '';

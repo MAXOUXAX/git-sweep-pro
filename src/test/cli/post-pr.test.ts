@@ -184,7 +184,7 @@ suite('cli post-pr (real git)', function () {
 		assert.strictEqual(await runCli(['post-pr', '--yes', '--json'], io), EXIT.notApplied, io.err.join(''));
 		const report = json(io.out);
 		assert.strictEqual(report.branch?.reason, 'dirty-worktree');
-		assert.ok(report.branch?.hint, 'a hint resolves it');
+		assert.strictEqual(report.branch?.hint, `git -C ${wt} stash --include-untracked && gsp post-pr feature/x --yes`);
 		assert.ok(fs.existsSync(path.join(wt, 'wip.txt')));
 		assert.ok(branchExists(fx.repo, 'feature/x'));
 		assert.strictEqual(tip('main'), tip('origin/main'), 'main is still updated');
@@ -201,7 +201,7 @@ suite('cli post-pr (real git)', function () {
 		assert.strictEqual(await runCli(['post-pr', '--yes', '--json'], io), EXIT.notApplied, io.err.join(''));
 		const report = json(io.out);
 		assert.strictEqual(report.branch?.reason, 'dirty-worktree');
-		assert.strictEqual(report.branch?.hint, `git -C ${mainCheckout()} stash push && gsp post-pr feature/x --yes`);
+		assert.strictEqual(report.branch?.hint, `git -C ${mainCheckout()} stash --include-untracked && gsp post-pr feature/x --yes`);
 		assert.strictEqual(report.worktree.switched, false);
 		assert.strictEqual(headOf(fx.repo), 'feature/x');
 		assert.ok(branchExists(fx.repo, 'feature/x'));

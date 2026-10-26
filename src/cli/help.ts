@@ -6,9 +6,10 @@ const EXIT_CODES = `Exit codes:
   2  Invalid arguments, or a branch that does not exist
   3  Sync paused on conflicts: resolve them, then run "gsp resume"
   4  Cancelled at a prompt
-  5  Deletions planned but not applied (no --yes, --dry-run, or --force
-     missing): nothing was changed. For post-pr: also when the merged
-     branch was not deleted`;
+  5  clean, post-pr: some planned deletions were not applied (no --yes,
+     or --force needed); the output says what was done. post-pr also
+     when the merged branch was not deleted. Other commands: a
+     confirmation was needed but nobody could answer; rerun with --yes`;
 
 const GLOBAL_OPTIONS = `  -C <path>          Run as if started in <path>
       --non-interactive
@@ -64,18 +65,23 @@ a merged pull request, or its upstream is gone and every commit is on a
 remote. Branches with work found nowhere else need --force.
 
 Never deleted: the default branch, protected branches, branches with
-"branch.<name>.deleteMerged" set to false, the current branch, a branch
-checked out in the main worktree or in a dirty or locked worktree, and a
-branch another kept branch tracks.
+"branch.<name>.deleteMerged" set to false, a branch being rebased or
+bisected, the current branch, a branch checked out in the main worktree or
+in a dirty or locked worktree, and a branch another kept branch tracks.
+A worktree holding ignored files that a build does not recreate (a .env,
+notes) is kept too, unless --force is given.
 
 Without a terminal, gsp clean prints the plan and changes nothing unless
---yes is given. In a terminal, it lets you pick the branches first.
+--yes is given. In a terminal, it lets you pick the branches first. The
+plan writes nothing; once approved, gsp fetches, checks again, and deletes
+only what was approved and is still proven.
 
 Options:
   -n, --dry-run      Print the plan and change nothing (no fetch, no prune)
   -y, --yes          Apply the plan without asking
   -f, --force        Also delete branches with unpushed or unmerged work
-                     (named exactly, or listed as needing --force)
+                     (named exactly, or listed as needing --force), and
+                     worktrees holding ignored files
       --json         Print the plan or the result as one JSON document
   -p, --protect <glob>
                      Never delete branches matching <glob> (repeatable; also

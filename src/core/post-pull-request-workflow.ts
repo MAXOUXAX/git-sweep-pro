@@ -1,6 +1,17 @@
-import { analyzeBranches, type BranchAnalysis } from './branch-analysis';
-import { CLEAN_SCHEMA, decideActions, hasPendingDeletions, restoreCommand, type CleanBranch } from './clean-plan';
-import { appliedOutcome, applyDeletions, buildReport, inspectBranches, type CleanContext, type CleanOptions, type CleanOutcome } from './clean-workflow';
+import { analyzeBranches } from './branch-analysis';
+import { CLEAN_SCHEMA, decideActions, hasPendingDeletions, restoreCommand, type CleanBranch, type PlannedBranch } from './clean-plan';
+import {
+	appliedOutcome,
+	applyDeletions,
+	buildReport,
+	holdToPlan,
+	planBranches,
+	refreshBranches,
+	withIgnoredFiles,
+	type CleanContext,
+	type CleanOptions,
+	type CleanOutcome,
+} from './clean-workflow';
 import { canRecordDeletions, createDeletionRecorder } from './deletion-log';
 import { toErrorMessage } from './errors';
 import { quoteShellArg, type RunGit } from './git-command';
@@ -147,9 +158,10 @@ async function switchMainCheckout(git: RunGit, into: string, worktrees: readonly
 
 function confirmMessage(target: CleanBranch | null, others: number, undo: string): string {
 	const actions: string[] = [];
-	if (target?.action === 'delete') {
-		const worktree = target.worktree && !target.worktree.prunable ? ` and its worktree ${target.worktree.path}` : '';
-		actions.push(`delete ${target.name}${worktree}${target.needsForce ? ' (its work is found nowhere else)' : ''}`);
+	if (target) {
+		const worktree = target.worktree && !target.worktree.prunable && !target.worktree.isMain ? ` and its worktree ${target.worktree.path}` : '';
+		const proof = target.action === 'delete' ? (target.needsForce ? ' (its work is found nowhere else)' : '') : ', if fetching proves it merged';
+		actions.push(`delete ${target.name}${worktree}${proof}`);
 	}
 	if (others > 0) {
 		actions.push(`delete ${others} other merged branch(es)`);
@@ -191,8 +203,12 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	}
 
 	const apply = !options.dryRun && (options.yes || options.canPrompt);
-	const { mode, remote, worktreesPruned, analysis } = await inspectBranches(context, { ...options, patterns: [], apply });
-	const base = analysis.checks.base;
+	const mode = apply ? 'apply' : 'plan';
+	const read = { ...options, patterns: [] };
+	// Ignored files are read for the branch to finish even when it is not proven merged, as for a branch named to gsp clean.
+	const named = new Set([options.branch, current].filter((name): name is string => name !== undefined && name !== 'HEAD'));
+	const plan = await planBranches(context, read, named);
+	const base = plan.analysis.checks.base;
 	const into = options.into ?? base?.name;
 	if (!into) {
 		throw new PostPrUsageError('No default branch found: name the branch the pull request was merged into with --into <branch>.');
@@ -200,10 +216,6 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	const intoRef = into === base?.name ? base.ref : await resolveInto(git, into, base?.remote ?? 'origin');
 	const intoRemote = /^refs\/remotes\/([^/]+)\//.exec(intoRef)?.[1];
 	const upstreamRef = intoRemote ? intoRef : null;
-	const remoteAhead =
-		!apply && remote.source === 'ls-remote' && intoRemote !== undefined
-			? await isRemoteAhead(git, intoRef, intoRemote, (await readTips(git, [intoRef])).get(intoRef) ?? '')
-			: false;
 
 	let requested = options.branch;
 	if (requested === into) {
@@ -214,11 +226,11 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	}
 	const targetName = requested ?? (current !== 'HEAD' && current !== into ? current : undefined);
 
-	let analysed: BranchAnalysis | undefined;
-	if (targetName && into === base?.name) {
-		analysed = analysis.branches.find((branch) => branch.name === targetName);
-	} else if (targetName) {
-		// Compared with --into; the detected default branch stays protected.
+	/** The branch to finish, compared with --into; the detected default branch stays protected. */
+	const analyseTarget = async (planned: readonly PlannedBranch[], fetched: boolean): Promise<PlannedBranch | undefined> => {
+		if (!targetName || into === base?.name) {
+			return planned.find((branch) => branch.name === targetName);
+		}
 		const result = await analyzeBranches(
 			{ git, ...(context.gh ? { gh: context.gh } : {}) },
 			{
@@ -226,82 +238,105 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 				base: intoRef,
 				protectedPatterns: [...options.protectedPatterns, ...(base ? [base.name] : [])],
 				github: options.github,
-				fetched: analysis.checks.fetched,
+				fetched,
 			}
 		);
-		analysed = result.branches.find((branch) => branch.name === targetName);
-	}
+		return (await withIgnoredFiles(git, result.branches, named)).find((branch) => branch.name === targetName);
+	};
+	const decide = async (branch: PlannedBranch | undefined, remoteAhead: boolean): Promise<CleanBranch | null> => {
+		const worktree = branch?.worktree && !branch.worktree.prunable ? branch.worktree : null;
+		return branch
+			? decideTarget(branch, {
+					force: options.force,
+					into,
+					mainCheckoutDirty: worktree?.isMain ? await hasTrackedChanges(git, worktree.path) : false,
+					remoteAhead,
+				})
+			: null;
+	};
 
-	const targetWorktree = analysed?.worktree && !analysed.worktree.prunable ? analysed.worktree : null;
-	const inMain = targetWorktree?.isMain === true;
-	let target = analysed
-		? decideTarget(analysed, {
-				force: options.force,
-				into,
-				mainCheckoutDirty: inMain && targetWorktree ? await hasTrackedChanges(git, targetWorktree.path) : false,
-				remoteAhead,
-			})
-		: null;
-	const leaving = targetWorktree !== null && !inMain && canonical(targetWorktree.path) === canonical(context.root);
-	// Once the worktree gsp runs in is gone, git can only start from the main checkout.
-	const gitAfter = leaving ? context.gitAt(mainCheckout) : git;
-
+	const remoteAhead =
+		plan.remote.source === 'ls-remote' && intoRemote !== undefined
+			? await isRemoteAhead(git, intoRef, intoRemote, (await readTips(git, [intoRef])).get(intoRef) ?? '')
+			: false;
+	let analysed = await analyseTarget(plan.planned, false);
+	let target = await decide(analysed, remoteAhead);
 	// The clean step: the other branches, with the rules of `gsp clean --yes`.
 	const excluded = new Set([targetName, ...(into === base?.name ? [] : [into])]);
-	let others = decideActions(
-		analysis.branches.filter((branch) => !excluded.has(branch.name)),
-		{ force: false, named: new Set(), defaultBranch: base?.name }
-	);
+	const decideOthers = (planned: readonly PlannedBranch[]) =>
+		decideActions(
+			planned.filter((branch) => !excluded.has(branch.name)),
+			{ force: false, named: new Set(), defaultBranch: base?.name }
+		);
+	let others = decideOthers(plan.planned);
+	let { analysis, remote } = plan;
+	let worktreesPruned = apply ? [] : plan.prunable;
+
 	const targetRecorder = createDeletionRecorder(context.deletionLog, 'post-pr', output.appendLine);
 	const cleanRecorder = createDeletionRecorder(context.deletionLog, 'sweep', output.appendLine);
-	const switching = target?.action === 'delete' && inMain;
 	let switched = false;
+	const targetWorktree = () => (analysed?.worktree && !analysed.worktree.prunable ? analysed.worktree : null);
+	const inMain = () => targetWorktree()?.isMain === true;
+	// Once the worktree gsp runs in is gone, git can only start from the main checkout.
+	const leaving = () => {
+		const worktree = targetWorktree();
+		return worktree !== null && !worktree.isMain && canonical(worktree.path) === canonical(context.root);
+	};
 
 	const finish = (outcome: CleanOutcome | undefined, defaultBranch: DefaultBranchUpdate): PostPrRun => {
-		const removed = !inMain && targetWorktree !== null && (target?.result === 'deleted' || target?.result === 'worktree-removed');
+		const worktree = targetWorktree();
+		const removed = worktree !== null && !worktree.isMain && (target?.result === 'deleted' || target?.result === 'worktree-removed');
 		const report: PostPrReport = {
 			schema: CLEAN_SCHEMA,
 			command: 'post-pr',
 			mode,
 			branch: target,
-			worktree: { path: targetWorktree?.path ?? null, removed, switched: mode === 'plan' ? switching : switched },
+			worktree: { path: worktree?.path ?? null, removed, switched: mode === 'plan' ? target?.action === 'delete' && inMain() : switched },
 			defaultBranch,
 			clean: buildReport(mode, analysis, remote, others, worktreesPruned, cleanRecorder.recorded),
-			nextCwd: removed && leaving ? mainCheckout : null,
+			nextCwd: removed && leaving() ? mainCheckout : null,
 			restore: restoreCommand([...targetRecorder.recorded, ...cleanRecorder.recorded]),
 		};
 		return { report, outcome: outcome ?? runOutcome(report) };
 	};
-	const checkedOutAt = switching ? mainCheckout : undefined;
+	const checkedOutAt = () => (target?.action === 'delete' && inMain() ? mainCheckout : undefined);
 
 	if (!apply) {
-		return finish(undefined, await updateDefaultBranch(context, git, into, upstreamRef, { apply, checkedOutAt, remoteAhead }));
+		return finish(undefined, await updateDefaultBranch(context, git, into, upstreamRef, { apply, checkedOutAt: checkedOutAt(), remoteAhead }));
 	}
 
 	const deleting = others.filter((branch) => branch.action === 'delete').length;
-	if (options.canPrompt && !options.yes && options.confirm && (target?.action === 'delete' || deleting > 0)) {
+	const finishing = target?.action === 'delete' || (target?.reason === 'needs-force' && remoteAhead);
+	if (options.canPrompt && !options.yes && options.confirm && (finishing || deleting > 0)) {
 		const undo = canRecordDeletions(context.deletionLog) ? 'You can restore them later.' : 'This cannot be undone.';
-		if (!(await ui.confirm(confirmMessage(target, deleting, undo), 'Finish'))) {
-			return finish(
-				'cancelled',
-				await updateDefaultBranch(context, git, into, upstreamRef, { apply: false, checkedOutAt })
-			);
+		if (!(await ui.confirm(confirmMessage(finishing ? target : null, deleting, undo), 'Finish'))) {
+			return finish('cancelled', await updateDefaultBranch(context, git, into, upstreamRef, { apply: false, checkedOutAt: checkedOutAt() }));
 		}
 	}
 
-	if (target && switching && targetWorktree) {
+	// Approved: fetch, analyse again. The merged branch is decided on what the
+	// fetch shows, since the merge is often what was not fetched yet; the
+	// other branches are held to the plan, as with gsp clean.
+	const refreshed = await refreshBranches(context, read, plan, named);
+	({ analysis, remote, worktreesPruned } = refreshed);
+	analysed = await analyseTarget(refreshed.planned, remote.source === 'fetch');
+	const fresh = await decide(analysed, false);
+	target = fresh && holdToPlan([fresh], [fresh], remote)[0];
+	others = holdToPlan(others, decideOthers(refreshed.planned), remote);
+	const gitAfter = leaving() ? context.gitAt(mainCheckout) : git;
+
+	const worktree = targetWorktree();
+	if (target?.action === 'delete' && worktree?.isMain) {
 		try {
-			await ui.withProgress({ title: `Switching ${targetWorktree.path} to ${into}` }, () =>
-				switchMainCheckout(context.gitAt(targetWorktree.path), into, worktrees)
-			);
+			await ui.withProgress({ title: `Switching ${worktree.path} to ${into}` }, () => switchMainCheckout(context.gitAt(worktree.path), into, worktrees));
 			switched = true;
 		} catch (error) {
-			target = { ...target, result: 'failed', error: `could not switch ${targetWorktree.path} to ${into}: ${firstLine(toErrorMessage(error))}` };
+			target = { ...target, result: 'failed', error: `could not switch ${worktree.path} to ${into}: ${firstLine(toErrorMessage(error))}` };
 		}
 	}
 	if (target?.action === 'delete' && target.result === undefined) {
-		const name = target.name;
-		[target] = await ui.withProgress({ title: `Deleting ${name}` }, () => applyDeletions(gitAfter, [target as CleanBranch], targetRecorder));
+		const deleting = target;
+		[target] = await ui.withProgress({ title: `Deleting ${deleting.name}` }, () => applyDeletions(gitAfter, [deleting], targetRecorder));
 	}
 	const defaultBranch = await updateDefaultBranch(context, gitAfter, into, upstreamRef, { apply });
 	others = await applyDeletions(gitAfter, others, cleanRecorder);

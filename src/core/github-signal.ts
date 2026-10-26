@@ -47,6 +47,8 @@ export type PullRequest = {
 	readonly state: PullRequestState;
 	/** Last head commit GitHub knows for the pull request. */
 	readonly headSha: string;
+	/** Branch it targets (or was merged into), e.g. "main". */
+	readonly baseRef: string;
 };
 
 /** Why the GitHub signal was not used. */
@@ -59,9 +61,15 @@ export type GitHubSignal = {
 	readonly repo: GitHubRepo;
 	/** The most recent pull requests, any state. */
 	readonly pullRequests: readonly PullRequest[];
-	/** Pull requests GitHub associates with a commit (cached; empty once the API budget is spent or on error). */
+	/**
+	 * Pull requests GitHub associates with a commit (cached; empty once the API
+	 * budget is spent or on error). Only candidates: GitHub also lists pull
+	 * requests whose final head no longer contains the commit.
+	 */
 	readonly pullRequestsOf: (sha: string) => Promise<readonly PullRequest[]>;
-	/** API calls made by {@link pullRequestsOf} so far. */
+	/** Whether GitHub says `head` is `commit` or contains it (false once the API budget is spent or on error). */
+	readonly contains: (head: string, commit: string) => Promise<boolean>;
+	/** API calls made by {@link pullRequestsOf} and {@link contains} so far. */
 	readonly apiCalls: () => number;
 };
 
@@ -101,8 +109,8 @@ function skipReason(error: unknown): { reason: GitHubSkipReason; detail?: string
 	return { reason: 'gh-failed', detail };
 }
 
-type ListedPullRequest = { number: number; state: string; headRefOid: string };
-type ApiPullRequest = { number: number; state: string; merged_at: string | null; head: { sha: string } };
+type ListedPullRequest = { number: number; state: string; headRefOid: string; baseRefName: string };
+type ApiPullRequest = { number: number; state: string; merged_at: string | null; head: { sha: string }; base: { ref: string } };
 
 /**
  * Lists the repository's recent pull requests with `gh`, matched later by
@@ -127,16 +135,17 @@ export async function loadGitHubSignal(
 			'--limit',
 			String(limit),
 			'--json',
-			'number,state,headRefOid',
+			'number,state,headRefOid,baseRefName',
 		]);
 		listed = JSON.parse(stdout) as ListedPullRequest[];
 	} catch (error) {
 		return { ok: false, ...skipReason(error) };
 	}
-	const pullRequests = listed.map(({ number, state, headRefOid }) => ({
+	const pullRequests = listed.map(({ number, state, headRefOid, baseRefName }) => ({
 		number,
 		state: state.toLowerCase() as PullRequestState,
 		headSha: headRefOid,
+		baseRef: baseRefName,
 	}));
 
 	const cache = new Map<string, Promise<readonly PullRequest[]>>();
@@ -152,10 +161,24 @@ export async function loadGitHubSignal(
 				number: pr.number,
 				state: pr.merged_at ? 'merged' : (pr.state as PullRequestState),
 				headSha: pr.head.sha,
+				baseRef: pr.base.ref,
 			}));
 		} catch {
 			// Unknown to GitHub (never pushed), rate limited or offline: no proof.
 			return [];
+		}
+	};
+	const contains = async (head: string, commit: string): Promise<boolean> => {
+		if (calls >= apiBudget) {
+			return false;
+		}
+		calls++;
+		try {
+			// `compare/<base>...<head>` is "ahead" when head contains base, "identical" when they are the same commit.
+			const { stdout } = await runGh(['api', '--hostname', repo.host, `repos/${repo.owner}/${repo.name}/compare/${commit}...${head}`, '--jq', '.status']);
+			return ['ahead', 'identical'].includes(stdout.trim());
+		} catch {
+			return false;
 		}
 	};
 	const pullRequestsOf = (sha: string) => {
@@ -166,5 +189,5 @@ export async function loadGitHubSignal(
 		}
 		return found;
 	};
-	return { ok: true, signal: { repo, pullRequests, pullRequestsOf, apiCalls: () => calls } };
+	return { ok: true, signal: { repo, pullRequests, pullRequestsOf, contains, apiCalls: () => calls } };
 }

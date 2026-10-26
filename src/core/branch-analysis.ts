@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import * as path from 'node:path';
 import type { RunGit } from './git-command';
 import { loadGitHubSignal, parseGitHubRemote, type GitHubSignal, type GitHubSkipReason, type PullRequest, type RunGh } from './github-signal';
 import { branchMatchesPattern, isProtectedBranch } from './sweep-logic';
@@ -17,10 +20,10 @@ export type UpstreamState = 'tracking' | 'gone' | 'none';
  * Why a branch is dead:
  * - `empty`: it points at a commit of the base's own history, so it adds nothing;
  * - `merged`: its tip is reachable from the base (a merge commit brought it in);
- * - `rebase-merged`: each of its commits has an equivalent patch on the base;
+ * - `rebase-merged`: each of its commits has exactly the same patch on the base, whitespace included, and its merges add nothing;
  * - `squash-merged`: the base reached the exact content of every file it changed;
- * - `pr-merged`: its tip is the head of a merged pull request, or behind it;
- * - `commits-merged`: each of its own commits is proven merged separately (integration branches);
+ * - `pr-merged`: its tip is the head of a pull request merged into the default branch, or behind it;
+ * - `commits-merged`: each of its own commits is proven merged separately, and its merges add nothing (integration branches);
  * - `upstream-gone`: its upstream was deleted. Not a proof by itself: see `unpushedCommits`.
  */
 export type DeadReason = 'empty' | 'merged' | 'rebase-merged' | 'squash-merged' | 'pr-merged' | 'commits-merged' | 'upstream-gone';
@@ -30,9 +33,10 @@ export type DeadReason = 'empty' | 'merged' | 'rebase-merged' | 'squash-merged' 
  * - `default-branch`: it is the branch everything is compared with;
  * - `open-pr`: its tip is the head of an open pull request;
  * - `unmerged-commits`: some of its work is found nowhere else;
- * - `no-base`: no default branch was found to compare it with.
+ * - `no-base`: no default branch was found to compare it with;
+ * - `analysis-failed`: a Git command failed while looking for a proof (see the evidence).
  */
-export type AliveReason = 'default-branch' | 'open-pr' | 'unmerged-commits' | 'no-base';
+export type AliveReason = 'default-branch' | 'open-pr' | 'unmerged-commits' | 'no-base' | 'analysis-failed';
 
 /** How one commit of an integration branch was proven merged. */
 export type CommitProof = {
@@ -61,12 +65,17 @@ export type Evidence =
 			readonly pullRequest: number;
 			readonly state: 'merged' | 'open';
 			readonly headSha: string;
-			/** `head`: the tip is the PR head; `ancestor`: the PR head contains it; `api`: GitHub lists the tip in the PR. */
+			/**
+			 * `head`: the tip is the PR head; `ancestor`: the PR head, present locally, contains it;
+			 * `api`: GitHub lists the tip in the PR and its compare API confirms the PR head contains it.
+			 */
 			readonly match: 'head' | 'ancestor' | 'api';
 	  }
 	| { readonly method: 'commits'; readonly base: string; readonly commits: number; readonly proofs: readonly CommitProof[] }
 	| { readonly method: 'upstream-gone'; readonly upstream: string }
-	| { readonly method: 'unique-commits'; readonly base: string; readonly commits: number };
+	| { readonly method: 'unique-commits'; readonly base: string; readonly commits: number }
+	/** The analysis of this branch failed: `message` is the first line Git printed. */
+	| { readonly method: 'error'; readonly message: string };
 
 /** Why a branch must be kept whatever its verdict. */
 export type Protection =
@@ -83,6 +92,11 @@ export type BranchWorktree = {
 	readonly locked: boolean;
 	/** Its directory is gone: Git still registers it until `git worktree prune`. */
 	readonly prunable: boolean;
+	/**
+	 * A rebase or a bisect of the branch is in progress there: HEAD is
+	 * detached meanwhile, but the branch is still being worked on. Never delete it.
+	 */
+	readonly inProgress: 'rebase' | 'bisect' | null;
 };
 
 export type BranchAnalysis = {
@@ -101,6 +115,11 @@ export type BranchAnalysis = {
 	 * Commits reachable from the tip but from no remote-tracking ref and not
 	 * from the base, that no proof covers: 0 for every proven branch. A dead
 	 * `upstream-gone` branch with unpushed commits holds work found nowhere else.
+	 * Also 0 when counting failed, which makes the branch `analysis-failed`.
+	 *
+	 * Counted against the local remote-tracking refs, which this module never
+	 * updates: a ref still listed after its remote branch was deleted hides
+	 * commits found nowhere else. Only exact right after `git fetch --prune`.
 	 */
 	readonly unpushedCommits: number;
 	readonly protected: Protection | null;
@@ -337,6 +356,66 @@ function parseTree(output: string): Map<string, string> {
 	return files;
 }
 
+/** Shows commits as `commit <sha>` and their patch, the same way whatever the user's diff and log configuration. */
+const PATCH_ARGS = [
+	'--format=commit %H',
+	'--patch',
+	'--no-color',
+	'--no-ext-diff',
+	'--no-textconv',
+	'--no-renames',
+	'--no-relative',
+	'--no-show-signature',
+	'--full-index',
+	'--src-prefix=a/',
+	'--dst-prefix=b/',
+];
+
+type Patch = { readonly key: string; readonly paths: readonly string[] };
+
+/**
+ * Parses {@link PATCH_ARGS} output into each commit's patch, reduced to what
+ * makes it the same change anywhere in history: hunk positions and blob ids
+ * are dropped (they move with the surrounding file), whitespace is kept.
+ * Blob ids stay for binary files, whose changes the diff does not show.
+ */
+function parsePatches(output: string): Map<string, Patch> {
+	const commits: Array<{ sha: string; files: string[][] }> = [];
+	for (const line of output.split('\n')) {
+		const header = /^commit ([0-9a-f]{40,64})$/.exec(line);
+		if (header) {
+			commits.push({ sha: header[1], files: [] });
+		} else if (line.startsWith('diff --git ')) {
+			commits.at(-1)?.files.push([line]);
+		} else if (line) {
+			commits.at(-1)?.files.at(-1)?.push(line);
+		}
+	}
+	return new Map(
+		commits.map(({ sha, files }) => {
+			const paths: string[] = [];
+			const hash = createHash('sha256');
+			for (const file of files) {
+				// "diff --git a/<path> b/<path>": renames are off, so both paths are the same.
+				const names = file[0].slice('diff --git '.length);
+				const length = (names.length - 5) / 2;
+				if (Number.isInteger(length) && names.slice(2 + length) === ` b/${names.slice(2, 2 + length)}`) {
+					paths.push(names.slice(2, 2 + length));
+				}
+				const binary = file.some((line) => line.startsWith('Binary files '));
+				for (const line of file) {
+					if (line.startsWith('@@')) {
+						hash.update('@@\n');
+					} else if (binary || !line.startsWith('index ')) {
+						hash.update(`${line}\n`);
+					}
+				}
+			}
+			return [sha, { key: hash.digest('hex'), paths }] as const;
+		})
+	);
+}
+
 type Verdict = { readonly verdict: 'dead' | 'alive'; readonly reason: DeadReason | AliveReason; readonly evidence: Evidence | null };
 
 /** A merged pull request containing a commit, and how that was established. */
@@ -349,6 +428,7 @@ type PullRequestMatch = { readonly pullRequest: PullRequest; readonly match: 'he
 class Prover {
 	private firstParent: Promise<ReadonlySet<string>> | undefined;
 	private pullRequestCommits: Promise<ReadonlyMap<string, PullRequest>> | undefined;
+	private anyMerges: Promise<boolean> | undefined;
 	private readonly verdicts = new Map<string, Promise<Verdict>>();
 
 	constructor(
@@ -424,21 +504,22 @@ class Prover {
 		}
 		commits.reverse();
 		const changes = commits.map((commit) => parseRawChanges(commit.tokens));
-		// Cheap gate before reading any tree: every wanted state must show up in the base's changes.
+		// Cheap gate before reading any tree: every wanted state must show up in the base's changes
+		// (when none touched the files since `since`, the change cannot have landed).
 		// Only sound when the log is complete: a capped one may start after the squash.
 		const complete = commits.length < MAX_SQUASH_CANDIDATES;
 		const reached = new Set(changes.flat().map((change) => `${change.path}\0${change.state}`));
-		if (complete && commits.length > 0 && paths.some((path) => !reached.has(`${path}\0${wanted.get(path)}`))) {
+		if (complete && paths.some((path) => !reached.has(`${path}\0${wanted.get(path)}`))) {
 			return undefined;
 		}
 
-		// The state just before the oldest candidate, or the base itself when no commit touched the files.
-		const start = commits.length > 0 ? commits[0].parent : this.base.tip;
+		// The state just before the oldest candidate.
+		const start = commits[0].parent;
 		const state = start
 			? parseTree(await this.gitRead(['--literal-pathspecs', 'ls-tree', '-r', '-z', '--full-tree', start, '--', ...paths]))
 			: new Map<string, string>();
 		const matches = () => paths.every((path) => (state.get(path) ?? '') === wanted.get(path));
-		if (start && (commits.length === 0 || !complete) && matches()) {
+		if (start && !complete && matches()) {
 			return { squashCommit: start, files: paths.length };
 		}
 		for (const [index, commit] of commits.entries()) {
@@ -457,12 +538,30 @@ class Prover {
 	}
 
 	/**
+	 * Whether a pull request proves its commits merged: merged into the default
+	 * branch. One merged into another branch only moved them there.
+	 */
+	private isMergedIntoBase(pr: PullRequest): boolean {
+		return pr.state === 'merged' && pr.baseRef === this.base.name;
+	}
+
+	/** Whether `head` contains `commit`, or undefined when either is missing locally. */
+	private async isAncestor(commit: string, head: string): Promise<boolean | undefined> {
+		try {
+			await this.git(['merge-base', '--is-ancestor', commit, head]);
+			return true;
+		} catch (error) {
+			return (error as { code?: unknown }).code === 1 ? false : undefined;
+		}
+	}
+
+	/**
 	 * Commits of the merged pull requests whose heads exist locally, mapped to
 	 * their pull request (computed once, only when a proof needs it).
 	 */
 	private mergedPullRequestCommits(): Promise<ReadonlyMap<string, PullRequest>> {
 		this.pullRequestCommits ??= (async () => {
-			const merged = (this.github?.pullRequests ?? []).filter((pr) => pr.state === 'merged');
+			const merged = (this.github?.pullRequests ?? []).filter((pr) => this.isMergedIntoBase(pr));
 			if (merged.length === 0) {
 				return new Map();
 			}
@@ -484,12 +583,18 @@ class Prover {
 		return this.pullRequestCommits;
 	}
 
-	/** Proves `commit` belongs to a merged pull request: its head, behind its local head, or per the GitHub API. */
+	/**
+	 * Proves `commit` belongs to a pull request merged into the default branch:
+	 * its head, or behind its final head. The API only finds candidates; the
+	 * final head must contain the commit, checked locally when the head is
+	 * here, else with GitHub's compare API.
+	 */
 	async pullRequestProof(commit: string, useApi: boolean): Promise<PullRequestMatch | undefined> {
-		if (!this.github) {
+		const { github } = this;
+		if (!github) {
 			return undefined;
 		}
-		const head = this.github.pullRequests.find((pr) => pr.state === 'merged' && pr.headSha === commit);
+		const head = github.pullRequests.find((pr) => this.isMergedIntoBase(pr) && pr.headSha === commit);
 		if (head) {
 			return { pullRequest: head, match: 'head' };
 		}
@@ -500,8 +605,75 @@ class Prover {
 		if (!useApi) {
 			return undefined;
 		}
-		const viaApi = (await this.github.pullRequestsOf(commit)).find((pr) => pr.state === 'merged');
-		return viaApi && { pullRequest: viaApi, match: 'api' };
+		for (const pullRequest of (await github.pullRequestsOf(commit)).filter((pr) => this.isMergedIntoBase(pr))) {
+			if (pullRequest.headSha === commit) {
+				return { pullRequest, match: 'head' };
+			}
+			const local = await this.isAncestor(commit, pullRequest.headSha);
+			if (local) {
+				return { pullRequest, match: 'ancestor' };
+			}
+			if (local === undefined && (await github.contains(pullRequest.headSha, commit))) {
+				return { pullRequest, match: 'api' };
+			}
+		}
+		return undefined;
+	}
+
+	/**
+	 * Keeps a `git cherry` "-" only when a base commit has exactly the same
+	 * patch. Git's patch ids ignore whitespace: indenting a line into a block
+	 * would pass for the same line landed with another indentation.
+	 */
+	async exactCherry(tip: string, cherry: ReadonlyMap<string, boolean>): Promise<Map<string, boolean>> {
+		const exact = new Map([...cherry.keys()].map((commit) => [commit, false]));
+		const hinted = [...cherry].filter(([, upstream]) => upstream).map(([commit]) => commit);
+		if (hinted.length === 0) {
+			return exact;
+		}
+		const own = parsePatches(await this.gitRead(['-c', 'core.quotePath=false', 'show', ...PATCH_ARGS, ...hinted]));
+		const paths = [...new Set([...own.values()].flatMap((patch) => patch.paths))];
+		if (paths.length === 0) {
+			return exact;
+		}
+		const upstream = parsePatches(
+			await this.gitRead(['-c', 'core.quotePath=false', '--literal-pathspecs', 'log', '--no-merges', ...PATCH_ARGS, this.base.ref, '--not', tip, '--', ...paths])
+		);
+		const keys = new Set([...upstream.values()].map((patch) => patch.key));
+		for (const commit of hinted) {
+			const patch = own.get(commit);
+			exact.set(commit, patch !== undefined && keys.has(patch.key));
+		}
+		return exact;
+	}
+
+	/**
+	 * The branch's merge commits, and whether one of them changes something
+	 * neither parent has (a conflict resolution, an "evil merge"): git cherry
+	 * never looks at merges, so patch ids alone would miss that work.
+	 */
+	async mergesOf(tip: string): Promise<{ merges: number; ownChanges: boolean }> {
+		// One look at every local branch first: most repositories have no merge off the base at all.
+		this.anyMerges ??= this.gitRead(['rev-list', '--merges', '--max-count=1', '--branches', '--not', this.base.ref]).then((output) => output.trim() !== '');
+		if (!(await this.anyMerges)) {
+			return { merges: 0, ownChanges: false };
+		}
+		const output = await this.gitRead([
+			'log',
+			'--merges',
+			'--cc',
+			'--format=commit %H',
+			'--no-color',
+			'--no-ext-diff',
+			'--no-textconv',
+			'--no-relative',
+			'--no-show-signature',
+			tip,
+			'--not',
+			this.base.ref,
+		]);
+		const headers = lines(output).filter((line) => /^commit [0-9a-f]{40,64}$/.test(line));
+		return { merges: headers.length, ownChanges: lines(output).length > headers.length };
 	}
 
 	openPullRequest(commit: string): PullRequest | undefined {
@@ -585,7 +757,7 @@ class Prover {
 	}
 }
 
-/** Parses `git cherry`: each unique non-merge commit, true when an equivalent patch is upstream ("-"). */
+/** Parses `git cherry`: each unique non-merge commit, true when a patch with the same (whitespace-blind) id is upstream ("-"). */
 function parseCherry(output: string): Map<string, boolean> {
 	return new Map(lines(output).map((line) => [line.slice(2), line.startsWith('-')] as const));
 }
@@ -593,7 +765,8 @@ function parseCherry(output: string): Map<string, boolean> {
 /**
  * The squash proof for a whole branch, from its merge base; or, when its
  * oldest commits are already on the base by patch id (a branch started from
- * a release branch that was later rebase-merged), from the last of them.
+ * a release branch that was later rebase-merged), from the last of them,
+ * provided patch ids cover the branch's merges.
  */
 async function squashProof(
 	git: RunGit,
@@ -601,7 +774,8 @@ async function squashProof(
 	base: AnalysisBase,
 	tip: string,
 	mergeBase: string,
-	cherry: ReadonlyMap<string, boolean>
+	cherry: ReadonlyMap<string, boolean>,
+	patchIdsCover: () => Promise<boolean>
 ): Promise<{ squashCommit: string; files: number; patchIdCommits: number } | undefined> {
 	const fromMergeBase = await prover.fileStateProof(mergeBase, tip, mergeBase);
 	if (fromMergeBase) {
@@ -610,7 +784,7 @@ async function squashProof(
 	// git cherry lists the oldest commit first.
 	const commits = [...cherry];
 	const prefix = commits.findIndex(([, upstream]) => !upstream);
-	if (prefix <= 0) {
+	if (prefix <= 0 || !(await patchIdsCover())) {
 		return undefined;
 	}
 	const last = commits[prefix - 1][0];
@@ -640,12 +814,16 @@ async function proveTip(git: RunGit, prover: Prover, tip: string, isAncestor: bo
 	} catch {
 		// Unrelated histories: only a pull request or a gone upstream can tell.
 	}
-	const cherry = mergeBase ? parseCherry((await git(['cherry', base.ref, tip, mergeBase])).stdout) : new Map<string, boolean>();
+	const cherry = mergeBase ? await prover.exactCherry(tip, parseCherry((await git(['cherry', base.ref, tip, mergeBase])).stdout)) : new Map<string, boolean>();
 	const unmerged = [...cherry.values()].filter((upstream) => !upstream).length;
-	if (mergeBase && cherry.size > 0 && unmerged === 0) {
+	// Patch ids and per-commit proofs only see non-merge commits: they hold when no merge adds work of its own.
+	let merges: Promise<{ merges: number; ownChanges: boolean }> | undefined;
+	const mergesOf = () => (merges ??= prover.mergesOf(tip));
+	const patchIdsCover = async () => !(await mergesOf()).ownChanges;
+	if (mergeBase && cherry.size > 0 && unmerged === 0 && (await patchIdsCover())) {
 		return { verdict: 'dead', reason: 'rebase-merged', evidence: { method: 'patch-id', base: base.ref, commits: cherry.size } };
 	}
-	const squash = mergeBase ? await squashProof(git, prover, base, tip, mergeBase, cherry) : undefined;
+	const squash = mergeBase ? await squashProof(git, prover, base, tip, mergeBase, cherry, patchIdsCover) : undefined;
 	if (squash) {
 		return { verdict: 'dead', reason: 'squash-merged', evidence: { method: 'file-state', base: base.ref, ...squash } };
 	}
@@ -654,8 +832,11 @@ async function proveTip(git: RunGit, prover: Prover, tip: string, isAncestor: bo
 		const { number, headSha } = pr.pullRequest;
 		return { verdict: 'dead', reason: 'pr-merged', evidence: { method: 'pull-request', pullRequest: number, state: 'merged', headSha, match: pr.match } };
 	}
-	// A single commit is the tip itself: already tried above.
-	const proofs = mergeBase && cherry.size > 1 ? await prover.commitsProof(tip, mergeBase, cherry) : undefined;
+	// A single commit is the tip itself: already tried above. The per-commit proof is costly: only for
+	// integration branches (with merges) and branches partly on the base already.
+	const integrates = async () => [...cherry.values()].some(Boolean) || (await mergesOf()).merges > 0;
+	const proofs =
+		mergeBase && cherry.size > 1 && (await integrates()) && (await patchIdsCover()) ? await prover.commitsProof(tip, mergeBase, cherry) : undefined;
 	if (proofs) {
 		return { verdict: 'dead', reason: 'commits-merged', evidence: { method: 'commits', base: base.ref, commits: proofs.length, proofs } };
 	}
@@ -687,6 +868,40 @@ async function classify(prover: Prover | undefined, ref: Ref, name: string, ance
 	}
 	const verdict = await prover.verdictOf(ref.oid, ancestors.has(ref.name));
 	return verdict.verdict === 'alive' && gone ? gone : verdict;
+}
+
+type Operation = { readonly kind: 'rebase' | 'bisect'; readonly branch: string };
+
+/** The branch a rebase or bisect in progress works on in the worktree at `worktreePath`, read from its git dir. */
+async function operationIn(git: RunGit, worktreePath: string): Promise<Operation | undefined> {
+	const gitDir = await git(['-C', worktreePath, 'rev-parse', '--absolute-git-dir']).then(
+		(result) => result.stdout.trim(),
+		() => ''
+	);
+	if (!gitDir) {
+		return undefined;
+	}
+	const read = (file: string) =>
+		readFile(path.join(gitDir, file), 'utf8').then(
+			(text) => text.trim(),
+			() => ''
+		);
+	for (const file of ['rebase-merge/head-name', 'rebase-apply/head-name']) {
+		const head = await read(file);
+		if (head.startsWith('refs/heads/')) {
+			return { kind: 'rebase', branch: head.slice('refs/heads/'.length) };
+		}
+	}
+	// The branch, or a commit when the bisect started on a detached HEAD.
+	const bisected = await read('BISECT_START');
+	return bisected ? { kind: 'bisect', branch: bisected.replace(/^refs\/heads\//, '') } : undefined;
+}
+
+/** A branch whose analysis failed stays alive: no proof was found. */
+function failedVerdict(error: unknown): Verdict {
+	const failure = error as Error & { stderr?: string };
+	const message = [failure.stderr, failure.message].flatMap((text) => text?.split('\n') ?? []).find((line) => line.trim()) ?? String(error);
+	return { verdict: 'alive', reason: 'analysis-failed', evidence: { method: 'error', message: message.trim() } };
 }
 
 function shortRef(ref: string): string {
@@ -722,6 +937,21 @@ async function loadGitHub(
 }
 
 /**
+ * Runs `git` so that it never fetches the objects a partial clone lacks:
+ * `--no-lazy-fetch` (Git 2.44+, which also sets GIT_NO_LAZY_FETCH for the
+ * commands Git runs in turn). Reading a missing object then fails, and the
+ * branch stays alive (`analysis-failed`). Older versions have no way to stop it.
+ */
+async function withoutLazyFetch(git: RunGit): Promise<RunGit> {
+	const version = await git(['version']).then(
+		(result) => /(\d+)\.(\d+)/.exec(result.stdout),
+		() => null
+	);
+	const [major, minor] = version ? [Number(version[1]), Number(version[2])] : [0, 0];
+	return major > 2 || (major === 2 && minor >= 44) ? (args) => git(['--no-lazy-fetch', ...args]) : git;
+}
+
+/**
  * Classifies every local branch as dead (its work exists elsewhere, with the
  * proof) or alive, without writing anything to the repository. Fetching is
  * the caller's concern. GitHub is asked automatically when `gh` is available
@@ -729,7 +959,7 @@ async function loadGitHub(
  */
 export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeOptions = {}): Promise<BranchAnalysisResult> {
 	const started = Date.now();
-	const { git } = context;
+	const git = await withoutLazyFetch(context.git);
 	const [refsOutput, configOutput, worktreesOutput] = await Promise.all([
 		git(['for-each-ref', `--format=${REFS_FORMAT}`, 'refs/heads', 'refs/remotes']).then((result) => result.stdout),
 		git(['config', '--list', '-z']).then(
@@ -752,17 +982,39 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 		loadGitHub(context, options, config, base),
 	]);
 	const prover = base && new Prover(git, base, github.signal);
-	const verdicts = await mapWithLimit(selected, CONCURRENCY, (ref) => classify(prover, ref, nameOf(ref), ancestors));
+	// One branch failing does not fail the others.
+	const verdicts = await mapWithLimit(selected, CONCURRENCY, (ref) => classify(prover, ref, nameOf(ref), ancestors).catch(failedVerdict));
 
 	const proven = (verdict: Verdict) => verdict.verdict === 'dead' && verdict.reason !== 'upstream-gone';
-	const unpushed = await mapWithLimit(selected, CONCURRENCY, async (ref, index) =>
-		proven(verdicts[index])
-			? 0
-			: Number((await git(['rev-list', '--count', ref.oid, '--not', '--remotes', ...(base ? [base.ref] : [])])).stdout.trim())
-	);
+	const unpushed = await mapWithLimit(selected, CONCURRENCY, async (ref, index) => {
+		if (proven(verdicts[index])) {
+			return 0;
+		}
+		try {
+			return Number((await git(['rev-list', '--count', ref.oid, '--not', '--remotes', ...(base ? [base.ref] : [])])).stdout.trim());
+		} catch (error) {
+			verdicts[index] = failedVerdict(error);
+			return 0;
+		}
+	});
 
 	const worktrees = parseWorktrees(worktreesOutput);
-	const worktreeOf = new Map(worktrees.filter((worktree) => worktree.branch).map((worktree) => [worktree.branch as string, worktree]));
+	// A rebase or a bisect detaches HEAD: the branch it works on is only named in the worktree's git dir.
+	const names = new Set(locals.map(nameOf));
+	const operations = await mapWithLimit(
+		worktrees.filter((worktree) => !worktree.branch && worktree.state !== 'prunable'),
+		CONCURRENCY,
+		async (worktree) => {
+			const operation = await operationIn(git, worktree.path);
+			return operation && names.has(operation.branch) ? [{ ...worktree, branch: operation.branch, inProgress: operation.kind }] : [];
+		}
+	);
+	const worktreeOf = new Map(
+		[...operations.flat(), ...worktrees.flatMap((worktree) => (worktree.branch ? [{ ...worktree, inProgress: null }] : []))].map((worktree) => [
+			worktree.branch as string,
+			worktree,
+		])
+	);
 	const dirty = new Map(
 		await mapWithLimit(
 			selected.flatMap((ref) => {
@@ -771,12 +1023,12 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 			}),
 			CONCURRENCY,
 			async (path) => {
-				// No optional locks: status must not refresh and rewrite the index.
-				const status = await git(['-C', path, '--no-optional-locks', 'status', '--porcelain']).then(
-					(result) => result.stdout,
-					() => ''
+				// No optional locks: status must not refresh and rewrite the index. Unknown counts as dirty.
+				const dirty = await git(['-C', path, '--no-optional-locks', 'status', '--porcelain']).then(
+					(result) => result.stdout.trim().length > 0,
+					() => true
 				);
-				return [path, status.trim().length > 0] as const;
+				return [path, dirty] as const;
 			}
 		)
 	);
@@ -809,6 +1061,7 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 						dirty: dirty.get(worktree.path) ?? false,
 						locked: worktree.state === 'locked',
 						prunable: worktree.state === 'prunable',
+						inProgress: worktree.inProgress,
 					}
 				: null,
 			...verdicts[index],
