@@ -330,7 +330,11 @@ suite('cli app (real git)', function () {
 
 		const io = createFakeIo(path.join(fx.repo, 'src'));
 		assert.strictEqual(await runCli(['agents', '--check'], io), EXIT.notApplied);
-		assert.strictEqual(io.out.join(''), 'AGENTS.md:3: Clean up with `git worktree remove --force <path>`.\n  → `gsp worktree remove <path>`; add `--force` when it holds uncommitted work you can throw away.\n');
+		assert.strictEqual(
+			io.out.join(''),
+			'AGENTS.md:3: Clean up with `git worktree remove --force <path>`.\n  → `gsp worktree remove <path>`; if it is kept, read why, and add `--discard-changes` only when what it lists is yours to throw away.\n'
+		);
+		assert.strictEqual(io.err.join(''), '1 outdated line. Update it as suggested.\n');
 		assert.strictEqual(fs.readFileSync(path.join(fx.repo, 'AGENTS.md'), 'utf8'), content);
 
 		const json = createFakeIo(fx.repo);
@@ -347,6 +351,15 @@ suite('cli app (real git)', function () {
 		const clean = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['agents', '--check'], clean), EXIT.ok);
 		assert.strictEqual(clean.err.join(''), 'No outdated gsp advice in AGENTS.md.\n');
+	});
+
+	test('agents --check reads a file linked from another once', async () => {
+		fs.writeFileSync(path.join(fx.repo, 'AGENTS.md'), 'Run `git branch -D x`.\n');
+		fs.symlinkSync('AGENTS.md', path.join(fx.repo, 'CLAUDE.md'));
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['agents', '--check', '--json'], io), EXIT.notApplied);
+		const document = JSON.parse(io.out.join(''));
+		assert.deepStrictEqual([document.files, document.findings.length], [['AGENTS.md'], 1]);
 	});
 
 	test('agents --check reads any file named, relative to where it runs, and refuses a missing one', async () => {

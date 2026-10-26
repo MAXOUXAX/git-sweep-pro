@@ -49,74 +49,206 @@ Without a terminal, gsp changes nothing unless \`--yes\` is passed; in a pseudo-
 Run \`gsp help\` for every command, and \`gsp agents --check\` to find outdated advice in these files.
 ${END_MARKER}`;
 
-/** What adding the block did to a file: `replaced` swaps an older, unmarked gsp note for it. */
+/**
+ * Every note `gsp agents` shipped before this one (1.3.0, 1.3.1, 1.4.0),
+ * without its markers. A copy of one, found without markers, is replaced:
+ * once whitespace is normalised, it is word for word what gsp wrote. Any
+ * other "Git cleanup" section is someone's own text, left in place.
+ */
+const PAST_NOTES: readonly string[] = [
+	'## Git cleanup\n\nUse the `gsp` CLI to clean up the Git workspace. Run `gsp help` to see its commands.',
+	[
+		'## Git cleanup',
+		'',
+		'Use the `gsp` CLI to clean up the Git workspace. Run `gsp help` to see its commands.',
+		'',
+		'Run `gsp list --json` to inspect candidates before deleting. It returns `stale`, `protected`, `checkedOut`, `merged` and `worktrees`; only stale branches outside worktrees are pre-selected. Add `--no-fetch` to inspect local refs without fetching.',
+		'',
+		'Use `--non-interactive` for agent commands, including in a pseudo-terminal. Confirmations are refused unless `--yes` is passed. Only use `gsp sweep --non-interactive --yes` when deletion is authorized. `--yes` accepts every confirmation, including force-deleting branches Git considers unmerged.',
+		'',
+		'Use `gsp restore --json` to list recoverable deletions and `gsp restore <branch> --non-interactive` to restore one. `--json` is supported only for listing candidates or recoverable deletions. Parse stdout as JSON only on exit 0; diagnostics go to stderr.',
+		'',
+		'Exit codes: 0 completed or nothing to do, 1 failed, 2 invalid arguments, 3 sync paused on conflicts, 4 cancelled with `--non-interactive`. On exit 3, resolve the conflicts, stage the resolved files, then run `gsp resume --non-interactive`. `sync` rebases and force-pushes with a lease; `post-pr` switches branches, deletes, sweeps and pulls. Run these only when authorized.',
+	].join('\n'),
+	[
+		'## Git cleanup',
+		'',
+		'Use the `gsp` CLI to clean up the Git workspace. Run `gsp help` to see its commands.',
+		'',
+		'Run `gsp list --json` to inspect candidates before deleting. It returns `stale`, `protected`, `checkedOut`, `merged` and `worktrees`; only stale branches outside worktrees are pre-selected. Add `--no-fetch` to inspect local refs without fetching.',
+		'',
+		'Use `--non-interactive` for agent commands, including in a pseudo-terminal. Confirmations are refused unless `--yes` is passed. Only use `gsp sweep --non-interactive --yes` when deletion is authorized. `--yes` accepts every confirmation, including force-deleting branches Git considers unmerged.',
+		'',
+		'Use `gsp worktree list --json` to inspect the worktrees and their states; `gsp worktree remove <path|branch> --non-interactive` removes one linked worktree (unlock a locked one first), and `gsp worktree prune` forgets registrations whose directory is gone. Use `gsp restore --json` to list recoverable deletions and `gsp restore <branch> --non-interactive` to restore one. `--json` is supported only for listing candidates, worktrees, or recoverable deletions. Parse stdout as JSON only on exit 0; diagnostics go to stderr.',
+		'',
+		'Exit codes: 0 completed or nothing to do, 1 failed, 2 invalid arguments, 3 sync paused on conflicts, 4 cancelled with `--non-interactive`. On exit 3, resolve the conflicts, stage the resolved files, then run `gsp resume --non-interactive`. `sync` rebases and force-pushes with a lease; `post-pr` switches branches, deletes, sweeps and pulls. Run these only when authorized.',
+	].join('\n'),
+];
+
+const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+const NORMALIZED_PAST_NOTES = new Set(PAST_NOTES.map(normalize));
+
+/** What adding the block did to a file: `replaced` swaps a copy of a past gsp note for it. */
 export type AgentFileChange = 'created' | 'added' | 'updated' | 'replaced' | 'unchanged';
 
 const GSP_MENTION = /\bgsp\b|git-sweep-pro/;
 
-/**
- * The lines `[start, end)` of an older gsp note without markers: a
- * "Git cleanup" heading followed by paragraphs that all mention gsp, as
- * every note before 2.0 was, whether gsp wrote it or someone copied it. Stops
- * at the first paragraph that doesn't, so a person's own text stays.
- */
-function findUnmarkedNote(lines: readonly string[]): [number, number] | undefined {
-	const start = lines.findIndex((line) => /^#{1,6}\s+Git cleanup\s*$/i.test(line));
-	if (start < 0) {
-		return undefined;
-	}
-	let end = start + 1;
-	let cursor = start + 1;
-	while (cursor < lines.length) {
-		while (cursor < lines.length && lines[cursor].trim() === '') {
-			cursor++;
+const CLEANUP_HEADING = /^#{1,6}\s+Git cleanup\s*$/i;
+
+/** A span of lines, `[start, end)`. */
+type Span = readonly [number, number];
+
+/** The lines of a fenced code block, fences included: examples, never advice to act on. */
+function fencedLines(lines: readonly string[]): Set<number> {
+	const fenced = new Set<number>();
+	let fence: string | undefined;
+	lines.forEach((line, index) => {
+		const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+		if (fence === undefined && opening) {
+			fence = opening;
+			fenced.add(index);
+		} else if (fence !== undefined) {
+			fenced.add(index);
+			if (new RegExp(`^ {0,3}${fence[0] === '`' ? '`' : '~'}{${fence.length},}\\s*$`).test(line)) {
+				fence = undefined;
+			}
 		}
-		let paragraphEnd = cursor;
-		while (paragraphEnd < lines.length && lines[paragraphEnd].trim() !== '' && !/^#{1,6}\s/.test(lines[paragraphEnd])) {
-			paragraphEnd++;
-		}
-		const paragraph = lines.slice(cursor, paragraphEnd);
-		if (paragraph.length === 0 || !paragraph.every((line) => GSP_MENTION.test(line))) {
-			break;
-		}
-		end = paragraphEnd;
-		cursor = paragraphEnd;
-	}
-	return end > start + 1 ? [start, end] : undefined;
+	});
+	return fenced;
 }
+
+/** The lines outside code blocks that are exactly `marker`. */
+function markerLines(lines: readonly string[], fenced: ReadonlySet<number>, marker: string): number[] {
+	return lines.flatMap((line, index) => (line.trim() === marker && !fenced.has(index) ? [index] : []));
+}
+
+/** The "Git cleanup" sections outside code blocks: each heading up to the next heading of the same level or above, trailing blank lines left out. */
+function cleanupSections(lines: readonly string[], fenced: ReadonlySet<number>): Span[] {
+	return lines.flatMap((line, start): Span[] => {
+		if (fenced.has(start) || !CLEANUP_HEADING.test(line)) {
+			return [];
+		}
+		const level = /^#+/.exec(line)?.[0].length ?? 1;
+		let end = start + 1;
+		while (end < lines.length && !(!fenced.has(end) && /^(#{1,6})\s/.exec(lines[end]) && (/^#+/.exec(lines[end])?.[0].length ?? 7) <= level)) {
+			end++;
+		}
+		while (end > start + 1 && lines[end - 1].trim() === '') {
+			end--;
+		}
+		return [[start, end]];
+	});
+}
+
+/**
+ * True when the whole `section` is a past gsp note, word for word. One with
+ * a paragraph of someone's own added is not: replacing only the note would
+ * leave that paragraph under another heading.
+ */
+const isPastNote = (lines: readonly string[], section: Span) => NORMALIZED_PAST_NOTES.has(normalize(lines.slice(...section).join('\n')));
+
+/** Where the gsp notes of a file are. */
+type NoteLayout = {
+	/** The marked block, when its markers are balanced. */
+	readonly marked: Span | undefined;
+	/** The markers are there, but not as one start followed by one end. */
+	readonly unbalanced: boolean;
+	/** Copies of a past note, without markers. */
+	readonly past: readonly Span[];
+	/** Other "Git cleanup" sections that mention gsp: someone's own text, maybe an edited note. */
+	readonly others: readonly Span[];
+};
+
+function layoutOf(lines: readonly string[]): NoteLayout {
+	const fenced = fencedLines(lines);
+	const starts = markerLines(lines, fenced, START_MARKER);
+	const ends = markerLines(lines, fenced, END_MARKER);
+	const balanced = starts.length === 1 && ends.length === 1 && ends[0] > starts[0];
+	const marked: Span | undefined = balanced ? [starts[0], ends[0] + 1] : undefined;
+	const inMarked = (index: number) => marked !== undefined && index >= marked[0] && index < marked[1];
+	const sections = cleanupSections(lines, fenced).filter(([start]) => !inMarked(start));
+	const past: Span[] = [];
+	const others: Span[] = [];
+	for (const section of sections) {
+		if (isPastNote(lines, section)) {
+			past.push(section);
+		} else if (lines.slice(...section).some((line) => GSP_MENTION.test(line))) {
+			others.push(section);
+		}
+	}
+	return { marked, unbalanced: (starts.length > 0 || ends.length > 0) && !balanced, past, others };
+}
+
+/** The line ending most lines of `content` use. */
+function dominantEol(content: string): '\r\n' | '\n' {
+	const crlf = content.split('\r\n').length - 1;
+	const lf = content.split('\n').length - 1 - crlf;
+	return crlf > lf ? '\r\n' : '\n';
+}
+
+/** What {@link planAgentBlock} would write. */
+export type AgentBlockPlan = {
+	readonly content: string;
+	readonly change: Exclude<AgentFileChange, 'created'>;
+	/** 1-based lines, in the content written, of older "Git cleanup" sections left in place, for the person to review. */
+	readonly review: readonly number[];
+};
 
 /**
  * `content` with the gsp block: replaced in place when the file already has
- * one, or an older note without markers; appended after a blank line
- * otherwise. Keeps the file's line endings, and throws rather than guess
- * when the markers are unbalanced.
+ * one; otherwise in place of the first copy of a past gsp note; appended
+ * after a blank line when it has neither. Any other "Git cleanup" section is
+ * left in place and reported in `review`. Each line keeps its own ending;
+ * the block takes the file's dominant one. Throws rather than guess when the
+ * markers are unbalanced.
  */
-export function upsertAgentBlock(content: string): string {
-	const eol = content.includes('\r\n') ? '\r\n' : '\n';
-	const block = AGENT_BLOCK.replace(/\n/g, eol);
-	const starts = content.split(START_MARKER).length - 1;
-	const ends = content.split(END_MARKER).length - 1;
-	if (starts === 0 && ends === 0) {
-		const lines = content.split(eol);
-		const unmarked = findUnmarkedNote(lines);
-		if (unmarked) {
-			return [...lines.slice(0, unmarked[0]), ...block.split(eol), ...lines.slice(unmarked[1])].join(eol);
-		}
-		const separator = content.length === 0 ? '' : content.endsWith(eol) ? eol : eol + eol;
-		return content + separator + block + eol;
-	}
-	const start = content.indexOf(START_MARKER);
-	const end = content.indexOf(END_MARKER);
-	// Anything but one start marker followed by one end marker is ambiguous:
-	// replacing a guessed span could delete the user's own instructions.
-	if (starts !== 1 || ends !== 1 || end < start) {
+export function planAgentBlock(content: string): AgentBlockPlan {
+	const eol = dominantEol(content);
+	// Each line with its own ending, so that splicing leaves the others untouched.
+	const raw = content.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+	const lines = raw.map((line) => line.replace(/\r?\n$/, ''));
+	const layout = layoutOf(lines);
+	if (layout.unbalanced) {
+		// Replacing a guessed span could delete the user's own instructions.
 		throw new Error('its gsp markers are unbalanced. Remove them, then run gsp agents again.');
 	}
-	return content.slice(0, start) + block + content.slice(end + END_MARKER.length);
+	const target = layout.marked ?? layout.past[0];
+	// Lines of the file once written: those after the block shift by the lines it adds.
+	const shift = target ? AGENT_BLOCK.split('\n').length - (target[1] - target[0]) : 0;
+	const review = [...(layout.marked ? layout.past : layout.past.slice(1)), ...layout.others]
+		.map(([start]) => (target && start > target[0] ? start + shift : start) + 1)
+		.sort((a, b) => a - b);
+	const block = AGENT_BLOCK.replace(/\n/g, eol);
+	if (!target) {
+		const separator = content.length === 0 ? '' : content.endsWith('\n') ? eol : eol + eol;
+		return { content: content + separator + block + eol, change: 'added', review };
+	}
+	const [start, end] = target;
+	// The last line replaced keeps its line ending, or has none at the end of the file.
+	const ending = /\r?\n$/.exec(raw[end - 1])?.[0] ?? '';
+	const updated = [...raw.slice(0, start), block + ending, ...raw.slice(end)].join('');
+	const change = updated === content ? 'unchanged' : layout.marked ? 'updated' : 'replaced';
+	return { content: updated, change, review };
+}
+
+/** `content` with the gsp block (see {@link planAgentBlock}). */
+export function upsertAgentBlock(content: string): string {
+	return planAgentBlock(content).content;
 }
 
 /** Advice that contradicts gsp, found by {@link checkAgentAdvice}. */
-export type AdviceRule = 'outdated-note' | 'raw-branch-delete' | 'raw-worktree-remove' | 'raw-push-delete' | 'no-worktree-command' | 'old-list-json' | 'merged-flag' | 'yes-forces';
+export type AdviceRule =
+	| 'outdated-note'
+	| 'raw-branch-delete'
+	| 'raw-worktree-remove'
+	| 'raw-push-delete'
+	| 'no-worktree-command'
+	| 'old-list-json'
+	| 'merged-flag'
+	| 'yes-forces'
+	| 'post-pr-default'
+	| 'worktree-remove-force';
 
 export type AdviceFinding = {
 	/** As given on the command line, or the instruction file's name. */
@@ -128,22 +260,51 @@ export type AdviceFinding = {
 	readonly suggestion: string;
 };
 
-/** A line that warns against a command rather than recommending it. */
+/** Words that warn against a command rather than recommend it. */
 const PROHIBITION = /\b(don't|do not|never|avoid|instead of|rather than)\b/i;
 
-const ADVICE_RULES: readonly { readonly rule: AdviceRule; readonly pattern: RegExp; /** Recommends a raw Git command: only flagged on a line that neither names gsp nor warns against it. */
-	readonly rawGit?: boolean; readonly suggestion: string }[] = [
+/**
+ * The clause of `text` around `[from, to)`: up to the sentence or clause
+ * breaks on either side, so that "use gsp; for one branch, run git branch -D"
+ * is judged on its second half.
+ */
+function clauseAround(text: string, from: number, to: number): string {
+	const breaks = /[.;!?](?=\s)|\s[—–]\s|,\s(?:but|then|or)\s/g;
+	let start = 0;
+	let end = text.length;
+	for (let match = breaks.exec(text); match; match = breaks.exec(text)) {
+		if (match.index + match[0].length <= from) {
+			start = match.index + match[0].length;
+		} else if (match.index >= to) {
+			end = match.index;
+			break;
+		}
+	}
+	return text.slice(start, end);
+}
+
+type AdviceRuleSpec = {
+	readonly rule: AdviceRule;
+	readonly pattern: RegExp;
+	/** Also flags a line this matches. */
+	readonly also?: (text: string) => boolean;
+	/** Recommends a raw Git command: only flagged in a clause that neither names gsp nor warns against it. */
+	readonly rawGit?: boolean;
+	readonly suggestion: string;
+};
+
+const ADVICE_RULES: readonly AdviceRuleSpec[] = [
 	{
 		rule: 'raw-branch-delete',
 		pattern: /\bgit branch\b[^\n`]*\s(-D|-d|--delete)\b/,
 		rawGit: true,
-		suggestion: '`gsp clean <branch> --yes`; add `--force` only when the person agreed to lose unpushed work.',
+		suggestion: '`gsp clean <branch> --yes`; add `--force` only when the person agreed: `gsp restore` can bring the branch back.',
 	},
 	{
 		rule: 'raw-worktree-remove',
 		pattern: /\bgit worktree remove\b/,
 		rawGit: true,
-		suggestion: '`gsp worktree remove <path>`; add `--force` when it holds uncommitted work you can throw away.',
+		suggestion: '`gsp worktree remove <path>`; if it is kept, read why, and add `--discard-changes` only when what it lists is yours to throw away.',
 	},
 	{
 		rule: 'raw-push-delete',
@@ -152,14 +313,25 @@ const ADVICE_RULES: readonly { readonly rule: AdviceRule; readonly pattern: RegE
 		suggestion: '`gsp clean --remote` to read the plan, then `gsp clean --remote --yes`.',
 	},
 	{
+		rule: 'worktree-remove-force',
+		pattern: /\bgsp worktree remove\b[^\n]*\s(--force|-f)\b/,
+		suggestion: '`gsp worktree remove <path> --discard-changes`: since 2.0, `--force` only lifts the proof that a branch is merged, and `gsp worktree remove` rejects it.',
+	},
+	{
+		rule: 'post-pr-default',
+		pattern: /\bgsp post-pr\s+(main|master|trunk|develop)\b/,
+		suggestion: '`gsp post-pr --yes` from the merged branch\'s worktree, or `gsp post-pr <branch> --yes`: the branch named is the one to finish, not the one to go back to.',
+	},
+	{
 		rule: 'no-worktree-command',
 		pattern: /\bgsp\b[^.\n]{0,30}\b(has no|doesn't have|does not have|lacks|cannot|can't|can not|doesn't support|does not support)\b[^.\n]{0,30}\bworktrees?\b/i,
 		suggestion: 'gsp has worktree commands: `gsp worktree list --json`, `gsp worktree remove <path>`, `gsp worktree prune`.',
 	},
 	{
 		rule: 'old-list-json',
-		// The fields of the 1.x listing.
+		// The fields of the 1.x listing, in backticks or next to the command that printed them.
 		pattern: /`(checkedOut|stale)`/,
+		also: (text) => /\bgsp (list|sweep)\b[^\n]*--json\b/.test(text) && /\b(checkedOut|stale)\b/.test(text),
 		suggestion: '`gsp clean --json`: each branch has an `action`, a `reason` and a `hint`, and `next` is the command to run next.',
 	},
 	{
@@ -174,52 +346,67 @@ const ADVICE_RULES: readonly { readonly rule: AdviceRule; readonly pattern: RegE
 	},
 ];
 
+/** True when `spec` flags `text`. */
+function flags(spec: AdviceRuleSpec, text: string): boolean {
+	const match = spec.pattern.exec(text);
+	if (!match) {
+		return spec.also?.(text) ?? false;
+	}
+	if (!spec.rawGit) {
+		return true;
+	}
+	// A clause that names gsp describes it, or warns against raw Git: not the advice this looks for.
+	const clause = clauseAround(text, match.index, match.index + match[0].length);
+	return !PROHIBITION.test(clause) && !GSP_MENTION.test(clause);
+}
+
 /**
  * Lines of `content` that tell an agent to do what gsp does with raw Git,
- * or describe gsp as it no longer is. The current gsp block is skipped; an
- * outdated one, marked or not, is reported once, as `gsp agents` replaces it.
- * `writable` tells whether `gsp agents` can rewrite `file` (an instruction
- * file at the repository's root), to suggest it. Read-only and heuristic.
+ * or describe gsp as it no longer is. Code blocks and the current gsp block
+ * are skipped. An outdated marked block, or a copy of a past note, is
+ * reported once, as `gsp agents` replaces it; another copy, or a "Git
+ * cleanup" section of someone's own that mentions gsp, is reported for review,
+ * as `gsp agents` leaves it in place. `writable` tells whether `gsp agents`
+ * can rewrite `file` (an instruction file at the repository's root), to
+ * suggest it. Read-only and heuristic.
  */
 export function checkAgentAdvice(file: string, content: string, writable: boolean): AdviceFinding[] {
 	const lines = content.split(/\r?\n/);
+	const fenced = fencedLines(lines);
 	const findings: AdviceFinding[] = [];
-	const skipped = new Set<number>();
-	const outdated = (from: number, to: number) => {
+	const skipped = new Set<number>(fenced);
+	const note = (span: Span, suggestion: string, skip: boolean) => {
+		const [from, to] = span;
 		// Shown by its heading rather than its marker.
-		const shown = lines[from] === START_MARKER && from + 1 < to ? from + 1 : from;
-		findings.push({ file, line: shown + 1, text: lines[shown], rule: 'outdated-note', suggestion: writable
-				? `Run \`gsp agents ${path.basename(file)}\` to replace this gsp note with the current one.`
-				: 'Replace this gsp note with the current one, from the "For coding agents" section of the gsp README.',
-		});
-		for (let index = from; index < to; index++) {
+		const shown = lines[from].trim() === START_MARKER && from + 1 < to ? from + 1 : from;
+		findings.push({ file, line: shown + 1, text: lines[shown], rule: 'outdated-note', suggestion });
+		for (let index = from; skip && index < to; index++) {
 			skipped.add(index);
 		}
 	};
-	const start = lines.indexOf(START_MARKER);
-	const end = lines.indexOf(END_MARKER);
-	if (start >= 0 && end > start) {
-		const current = lines.slice(start, end + 1).join('\n') === AGENT_BLOCK;
-		if (current) {
-			for (let index = start; index <= end; index++) {
-				skipped.add(index);
-			}
-		} else {
-			outdated(start, end + 1);
+	const replace = writable
+		? `Run \`gsp agents ${path.basename(file)}\` to replace this gsp note with the current one.`
+		: 'Replace this gsp note with the current one, from the "For coding agents" section of the gsp README.';
+	const layout = layoutOf(lines);
+	const { marked } = layout;
+	if (marked && lines.slice(...marked).map((line) => line.trimEnd()).join('\n') === AGENT_BLOCK) {
+		for (let index = marked[0]; index < marked[1]; index++) {
+			skipped.add(index);
 		}
-	} else {
-		const unmarked = findUnmarkedNote(lines);
-		if (unmarked) {
-			outdated(...unmarked);
-		}
+	} else if (marked) {
+		note(marked, replace, true);
+	}
+	layout.past.forEach((span, index) =>
+		note(span, index === 0 && !marked ? replace : 'Remove this older copy of the gsp note: the current one covers it, and `gsp agents` replaces only one.', true)
+	);
+	for (const span of layout.others) {
+		note(span, 'Review this section: it looks like an older gsp note, edited since. `gsp agents` leaves it in place; keep what is yours and remove what the gsp note covers.', false);
 	}
 	lines.forEach((text, index) => {
 		if (skipped.has(index)) {
 			return;
 		}
-		// A line that names gsp describes it, or warns against raw Git: not the advice this looks for.
-		const rawAdvice = !PROHIBITION.test(text) && !GSP_MENTION.test(text);
-		const rule = ADVICE_RULES.find((candidate) => candidate.pattern.test(text) && (!candidate.rawGit || rawAdvice));
+		const rule = ADVICE_RULES.find((candidate) => flags(candidate, text));
 		if (rule) {
 			findings.push({ file, line: index + 1, text, rule: rule.rule, suggestion: rule.suggestion });
 		}
@@ -227,43 +414,60 @@ export function checkAgentAdvice(file: string, content: string, writable: boolea
 	return findings.sort((a, b) => a.line - b.line);
 }
 
+/** True when `target` is `root` or inside it. */
+function isWithin(root: string, target: string): boolean {
+	const relative = path.relative(root, target);
+	return !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
 /**
- * The file to edit for `file`, or `undefined` when it does not exist yet. A
- * symbolic link is followed only within the repository (e.g. CLAUDE.md
- * linked to AGENTS.md): gsp never writes outside it.
+ * The file to edit for `file`, and whether it exists yet. A symbolic link
+ * is followed only within the repository (e.g. CLAUDE.md linked to
+ * AGENTS.md): gsp never writes outside it. A link to a file that does not
+ * exist yet creates that file, when it would be in the repository.
  */
-function resolveAgentFile(root: string, file: AgentFile): string | undefined {
+function resolveAgentFile(root: string, file: AgentFile): { readonly path: string; readonly exists: boolean } {
 	const filePath = path.join(root, file);
-	if (!fs.lstatSync(filePath, { throwIfNoEntry: false })) {
-		return undefined;
+	const link = fs.lstatSync(filePath, { throwIfNoEntry: false });
+	if (!link) {
+		return { path: filePath, exists: false };
+	}
+	const realRoot = fs.realpathSync(root);
+	if (link.isSymbolicLink() && !fs.existsSync(filePath)) {
+		const linked = path.resolve(path.dirname(filePath), fs.readlinkSync(filePath));
+		const folder = path.dirname(linked);
+		const parent = fs.statSync(folder, { throwIfNoEntry: false })?.isDirectory() ? fs.realpathSync(folder) : undefined;
+		if (!parent) {
+			throw new Error(`it links to ${linked}, whose folder does not exist. Create it, or replace the link with a file.`);
+		}
+		const target = path.join(parent, path.basename(linked));
+		if (!isWithin(realRoot, target)) {
+			throw new Error(`it links to ${linked}, which does not exist and is outside the repository. Replace the link with a file.`);
+		}
+		return { path: target, exists: false };
 	}
 	const target = fs.realpathSync(filePath);
-	const relative = path.relative(fs.realpathSync(root), target);
-	if (relative.startsWith('..') || path.isAbsolute(relative)) {
+	if (!isWithin(realRoot, target)) {
 		throw new Error(`it links to ${target}, outside the repository.`);
 	}
 	if (!fs.statSync(target).isFile()) {
 		throw new Error('it is not a file.');
 	}
-	return target;
+	return { path: target, exists: true };
 }
 
+/** What {@link writeAgentBlock} did, and the older sections it left for the person to review. */
+export type AgentFileWrite = { readonly change: AgentFileChange; readonly review: readonly number[] };
+
 /** Adds the gsp block to `file` in `root`, creating the file if needed. */
-export function writeAgentBlock(root: string, file: AgentFile): AgentFileChange {
+export function writeAgentBlock(root: string, file: AgentFile): AgentFileWrite {
 	const target = resolveAgentFile(root, file);
-	const content = target === undefined ? undefined : fs.readFileSync(target, 'utf8');
-	const updated = upsertAgentBlock(content ?? '');
-	if (updated === content) {
-		return 'unchanged';
+	const content = target.exists ? fs.readFileSync(target.path, 'utf8') : '';
+	const plan = planAgentBlock(content);
+	if (plan.change !== 'unchanged') {
+		fs.writeFileSync(target.path, plan.content);
 	}
-	fs.writeFileSync(target ?? path.join(root, file), updated);
-	if (content === undefined) {
-		return 'created';
-	}
-	if (content.includes(START_MARKER)) {
-		return 'updated';
-	}
-	return findUnmarkedNote(content.split(/\r?\n/)) ? 'replaced' : 'added';
+	return { change: target.exists ? plan.change : 'created', review: plan.review };
 }
 
 const CHANGE_MESSAGES: Record<AgentFileChange, (file: AgentFile) => string> = {
@@ -273,6 +477,16 @@ const CHANGE_MESSAGES: Record<AgentFileChange, (file: AgentFile) => string> = {
 	replaced: (file) => `Replaced the older gsp note in ${file} with the current instructions.`,
 	unchanged: (file) => `${file} already has the gsp instructions.`,
 };
+
+/** The older sections left in `file`, for the person to review, or nothing. */
+function describeReview(file: AgentFile, review: readonly number[]): string {
+	if (review.length === 0) {
+		return '';
+	}
+	const where = review.length === 1 ? `line ${review[0]}` : `lines ${review.slice(0, -1).join(', ')} and ${review.at(-1)}`;
+	const them = review.length === 1 ? 'it' : 'them';
+	return ` ${file} still has an older "Git cleanup" section at ${where}, left as it is: review ${them}, and remove what the gsp instructions now cover.`;
+}
 
 /**
  * Tells coding agents to use gsp: adds a short, delimited block to the
@@ -299,7 +513,8 @@ export async function runAgentsWorkflow(context: WorkflowContext, requested: rea
 	const messages: string[] = [];
 	for (const file of new Set(files)) {
 		try {
-			messages.push(CHANGE_MESSAGES[writeAgentBlock(root, file)](file));
+			const { change, review } = writeAgentBlock(root, file);
+			messages.push(CHANGE_MESSAGES[change](file) + describeReview(file, review));
 		} catch (error) {
 			ui.showErrorMessage(`Unable to write ${file}: ${toErrorMessage(error)}`);
 			return 'failed';

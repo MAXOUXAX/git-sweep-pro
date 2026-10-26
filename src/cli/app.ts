@@ -593,18 +593,24 @@ async function runAgentsCheck(options: CliOptions, dir: string, frontend: Fronte
 	}
 	// gsp agents only writes the instruction files at the repository's root.
 	const writable = (file: string) => isAgentFile(path.basename(file)) && absolute(file) === path.join(root, path.basename(file));
-	const findings = files.flatMap((file) => checkAgentAdvice(file, fs.readFileSync(absolute(file), 'utf8'), writable(file)));
+	// A file read twice, as CLAUDE.md linked to AGENTS.md, is reported once.
+	const seen = new Set<string>();
+	const unique = files.filter((file) => {
+		const real = fs.realpathSync(absolute(file));
+		return !seen.has(real) && Boolean(seen.add(real));
+	});
+	const findings = unique.flatMap((file) => checkAgentAdvice(file, fs.readFileSync(absolute(file), 'utf8'), writable(file)));
 	if (options.json) {
-		printJson(io, options.rpc, { schema: CLEAN_SCHEMA, command: 'agents --check', files, findings } satisfies AgentsCheckDocument);
+		printJson(io, options.rpc, { schema: CLEAN_SCHEMA, command: 'agents --check', files: unique, findings } satisfies AgentsCheckDocument);
 	} else {
 		findings.forEach((finding) => io.stdout(`${finding.file}:${finding.line}: ${finding.text.trim()}\n  → ${finding.suggestion}\n`));
 	}
 	if (files.length === 0) {
 		io.stderr(`No ${AGENT_FILE_NAMES.join(' or ')} in ${root}. Name the files to check: gsp agents --check <file>...\n`);
 	} else if (findings.length === 0) {
-		io.stderr(`No outdated gsp advice in ${files.join(', ')}.\n`);
+		io.stderr(`No outdated gsp advice in ${unique.join(', ')}.\n`);
 	} else {
-		io.stderr(`${findings.length} ${findings.length === 1 ? 'line contradicts' : 'lines contradict'} gsp. Update ${findings.length === 1 ? 'it' : 'them'} as suggested.\n`);
+		io.stderr(`${findings.length} outdated ${findings.length === 1 ? 'line' : 'lines'}. Update ${findings.length === 1 ? 'it' : 'them'} as suggested.\n`);
 	}
 	// Like a plan that was not applied: something is left for the person to do.
 	return findings.length > 0 ? { kind: 'clean', outcome: 'not-applied' } : { kind: 'workflow', outcome: 'ok' };
