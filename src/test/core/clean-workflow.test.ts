@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { decideActions, type CleanBranch, type PlannedBranch, type RemoteCheck } from '../../core/clean-plan';
+import { decideActions, formatSummary, type CleanBranch, type PlannedBranch, type RemoteCheck } from '../../core/clean-plan';
 import { holdToBase, holdToPlan, runCleanWorkflow, type CleanOptions } from '../../core/clean-workflow';
 import { gitFailureReason } from '../../core/errors';
 import { isRegenerable } from '../../core/ignored-files';
@@ -135,6 +135,24 @@ suite('clean workflow (real git)', function () {
 		assert.strictEqual(outcome, 'not-applied');
 		assert.ok(branchExists(fx.repo, 'feature/x'));
 		assert.strictEqual(appendedLines.filter((line) => line.startsWith('Could not reach the remote')).length, 1);
+	});
+
+	test('when the fetch fails, a deletion that only ls-remote proved is reported as fetch-failed', async () => {
+		// Deleted on the remote, not pruned here: only ls-remote sees it gone. Its commit is on another remote branch.
+		git(['checkout', '-q', '-b', 'feature/x'], fx.repo);
+		commitFile(fx.repo, 'x.txt', 'x\n', 'x');
+		git(['push', '-q', '-u', 'origin', 'feature/x'], fx.repo);
+		git(['push', '-q', 'origin', 'feature/x:feature/copy'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['branch', '-q', '-D', 'feature/x'], fx.remote);
+
+		const { context } = contextFor({ git: { 'fetch --prune --multiple origin': new Error('fatal: unable to access the remote') } });
+		const { report, outcome } = await runCleanWorkflow(context, APPLY);
+		const branch = report.branches.find((entry) => entry.name === 'feature/x');
+		assert.deepStrictEqual([branch?.action, branch?.reason, branch?.hint], ['skip', 'fetch-failed', 'gsp clean feature/x --yes']);
+		assert.strictEqual(outcome, 'not-applied');
+		assert.strictEqual(formatSummary(report), 'Nothing deleted · 1 skipped (1 fetch failed)');
+		assert.ok(branchExists(fx.repo, 'feature/x'));
 	});
 
 	test('a plan reading ls-remote only turns branches alive for their unmerged commits into upstream-gone', async () => {

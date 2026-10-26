@@ -311,7 +311,9 @@ const skipped = (branch: CleanBranch, reason: SkipReason, hint: string | null): 
  * A branch the plan deleted but that is now kept is skipped as
  * `plan-changed`; one that is now skipped keeps its own reason. When the
  * fetch failed, a deletion that only stale remote-tracking refs prove is
- * skipped as `fetch-failed`.
+ * skipped as `fetch-failed`, and so is a planned deletion that only
+ * `git ls-remote` proved (its upstream gone) and the failed fetch could not
+ * confirm.
  *
  * With `heldToPlan` (a person could pick from the plan), only branches approved
  * then are deleted: one deleted now but not approved is skipped as
@@ -329,7 +331,8 @@ export function holdToPlan(planned: readonly CleanBranch[], current: readonly Cl
 			return previous?.reason === 'not-selected' ? skipped(branch, 'not-selected', previous.hint) : skipped(branch, 'plan-changed', replan(branch));
 		}
 		if (approved && branch.action === 'keep') {
-			return skipped(branch, 'plan-changed', replan(branch));
+			// Proven by ls-remote, which the failed fetch could not confirm: the remote is the cause, not the branch.
+			return stale && previous.verdictReason === 'upstream-gone' ? skipped(branch, 'fetch-failed', previous.hint) : skipped(branch, 'plan-changed', replan(branch));
 		}
 		if (branch.action === 'delete' && stale && branch.verdictReason === 'upstream-gone' && !branch.needsForce) {
 			// Its hint, `gsp clean <branch> --yes`, retries once the remote can be reached.

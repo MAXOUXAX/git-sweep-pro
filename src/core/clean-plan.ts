@@ -487,24 +487,37 @@ function describeReasons(reasons: CleanSummary['reasons']): string {
 	return parts.length > 0 ? ` (${parts.join(', ')})` : '';
 }
 
+/** Skips of planned deletions that running `gsp clean` again may carry out, as the summary names them. */
+const RERUN_LABEL: Partial<Record<CleanBranch['reason'], string>> = {
+	'plan-changed': 'changed since the plan',
+	'fetch-failed': 'fetch failed',
+	'worktree-changed': 'worktree changed',
+};
+
 /** The one summary line: e.g. "3 deleted (2 squash-merged, 1 empty) · 2 skipped · restore with gsp restore a b c". */
 export function formatSummary(report: CleanReport): string {
 	const { summary, mode } = report;
-	if (summary.delete === 0 && summary.needsForce === 0 && report.worktreesPruned.length === 0) {
+	const rerun = Object.entries(RERUN_LABEL)
+		.map(([reason, label]) => [report.branches.filter((branch) => branch.reason === reason).length, label] as const)
+		.filter(([count]) => count > 0);
+	if (summary.delete === 0 && summary.needsForce === 0 && rerun.length === 0 && report.worktreesPruned.length === 0) {
 		return summary.skipped > 0 ? `Nothing to clean · ${summary.skipped} skipped.` : 'Nothing to clean.';
 	}
 	const parts: string[] = [];
 	if (mode === 'plan') {
 		parts.push(`${summary.delete} to delete${describeReasons(summary.reasons)}`);
 	} else {
-		parts.push(`${summary.deleted} deleted${describeReasons(summary.reasons)}`);
+		parts.push(summary.deleted > 0 ? `${summary.deleted} deleted${describeReasons(summary.reasons)}` : 'Nothing deleted');
 		if (summary.failed > 0) {
 			parts.push(`${summary.failed} failed`);
 		}
 	}
 	if (summary.skipped > 0) {
-		const force = summary.needsForce > 0 ? ` (${summary.needsForce} ${summary.needsForce === 1 ? 'needs' : 'need'} --force)` : '';
-		parts.push(`${summary.skipped} skipped${force}`);
+		const why = [
+			...(summary.needsForce > 0 ? [`${summary.needsForce} ${summary.needsForce === 1 ? 'needs' : 'need'} --force`] : []),
+			...rerun.map(([count, label]) => `${count} ${label}`),
+		];
+		parts.push(`${summary.skipped} skipped${why.length > 0 ? ` (${why.join(', ')})` : ''}`);
 	}
 	if (report.worktreesPruned.length > 0) {
 		parts.push(`${plural(report.worktreesPruned.length, 'worktree registration')} ${mode === 'plan' ? 'to prune' : 'pruned'}`);
