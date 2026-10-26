@@ -466,6 +466,10 @@ function describeSkip(branch: CleanBranch): string {
 		case 'ignored-files':
 			return `removing worktree ${worktree} would delete ${branch.worktree?.ignoredFiles ? describeIgnored(branch.worktree.ignoredFiles) : 'ignored files'}, needs --force`;
 		case 'needs-force':
+			// post-pr hints at what may prove it first (fetching, pushing, another base): the label says no more than the hint.
+			if (branch.hint && !branch.hint.split(' ').includes('--force')) {
+				return 'not proven merged yet';
+			}
 			// The verdict, shown next to it, says which commits are found nowhere else.
 			return branch.verdict === 'alive' ? 'named, but not merged: needs --force' : 'needs --force';
 		case 'tracked-by-kept-branch':

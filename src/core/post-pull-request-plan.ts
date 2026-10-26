@@ -91,6 +91,31 @@ function cmd(...args: string[]): string {
 	return args.map(quoteShellArg).join(' ');
 }
 
+/** The options of the run that the commands gsp suggests keep. */
+export type PostPrScope = {
+	/** `-C <path>`, as given. */
+	readonly cwd?: string;
+	readonly into?: string;
+	readonly protectedPatterns: readonly string[];
+	readonly github: boolean;
+	readonly fetch: boolean;
+};
+
+/** `gsp post-pr`, on `branch` when given, with the options of the run, then `flags`. */
+export function postPrCommand(scope: PostPrScope, branch: string | undefined, ...flags: string[]): string {
+	return cmd(
+		'gsp',
+		...(scope.cwd === undefined ? [] : ['-C', scope.cwd]),
+		'post-pr',
+		...(branch === undefined ? [] : [branch]),
+		...(scope.into === undefined ? [] : ['--into', scope.into]),
+		...scope.protectedPatterns.flatMap((pattern) => ['--protect', pattern]),
+		...(scope.github ? [] : ['--no-github']),
+		...(scope.fetch ? [] : ['--no-fetch']),
+		...flags
+	);
+}
+
 export type DecideTargetOptions = {
 	/** `--force`: a branch that is not merged, or holds unpushed commits, is deleted too. */
 	readonly force: boolean;
@@ -100,6 +125,12 @@ export type DecideTargetOptions = {
 	readonly mainCheckoutDirty: boolean;
 	/** The default branch has commits on its remote that are not fetched yet: the merge may be among them. */
 	readonly remoteAhead: boolean;
+	/** The options of the run, kept by the hints. */
+	readonly scope: PostPrScope;
+	/** Another branch known to hold its work: the base of its merged pull request, or a remote branch that contains its tip. */
+	readonly mergedElsewhere?: string;
+	/** The remote its unpushed commits go to. */
+	readonly pushRemote?: string;
 };
 
 /**
@@ -107,7 +138,8 @@ export type DecideTargetOptions = {
  * for a branch named explicitly: deleted only when proven merged, unless
  * `--force`. The worktree gsp runs in is no obstacle, since post-pr leaves
  * it; nor is the main checkout, which it switches to the default branch
- * first, unless it has uncommitted changes. Hints rerun post-pr.
+ * first, unless it has uncommitted changes. Hints rerun post-pr, and
+ * suggest `--force` only when nothing else can prove the branch merged.
  */
 export function decideTarget(branch: PlannedBranch, options: DecideTargetOptions): CleanBranch {
 	const worktree = branch.worktree && !branch.worktree.prunable ? branch.worktree : null;
@@ -116,18 +148,33 @@ export function decideTarget(branch: PlannedBranch, options: DecideTargetOptions
 		[{ ...branch, current: false, worktree: worktree && inMain ? { ...worktree, isMain: false, dirty: options.mainCheckoutDirty } : branch.worktree }],
 		{ force: options.force, named: new Set([branch.name]), defaultBranch: options.into }
 	);
-	const again = (...flags: string[]) => cmd('gsp', 'post-pr', branch.name, '--yes', ...flags);
+	const again = (...flags: string[]) => postPrCommand(options.scope, branch.name, '--yes', ...flags);
 	// The main checkout is switched, never removed.
 	const shown = inMain ? (decided.action === 'delete' || !decided.worktree ? null : { ...decided.worktree, isMain: true }) : decided.worktree;
 	if (decided.action === 'delete') {
 		return { ...decided, worktree: shown, hint: again(...(decided.needsForce ? ['--force'] : [])) };
 	}
 	if (decided.reason === 'needs-force') {
-		// Fetching may prove the merge: suggest that before forcing.
-		return { ...decided, worktree: shown, hint: options.remoteAhead ? again() : again('--force') };
+		return { ...decided, worktree: shown, hint: proveFirst(branch, options) ?? again('--force') };
 	}
 	// Hints that rerun gsp clean on this branch rerun post-pr instead.
 	return { ...decided, worktree: shown, hint: decided.hint?.split(cmd('gsp', 'clean', branch.name, '--yes')).join(again()) ?? null };
+}
+
+/** What may still prove a branch merged without `--force`, as a command, or undefined when nothing can. */
+function proveFirst(branch: PlannedBranch, options: DecideTargetOptions): string | undefined {
+	// Commits found nowhere else are lost on deletion: they go to the remote first.
+	if (branch.unpushedCommits > 0) {
+		return options.pushRemote === undefined ? undefined : cmd('git', 'push', '-u', options.pushRemote, branch.name);
+	}
+	// Fetching may prove the merge.
+	if (options.remoteAhead) {
+		return postPrCommand(options.scope, branch.name, '--yes');
+	}
+	if (options.mergedElsewhere !== undefined) {
+		return postPrCommand({ ...options.scope, into: options.mergedElsewhere }, branch.name, '--yes');
+	}
+	return undefined;
 }
 
 const short = (sha: string | null) => sha?.slice(0, 7) ?? '';
@@ -222,16 +269,6 @@ export function formatPostPrLines(report: PostPrReport): string[] {
 /** The `--json` document of `gsp post-pr`: the report, and the command to run next (see {@link postPrNextCommand}). */
 export type PostPrDocument = PostPrReport & { readonly next: string | null };
 
-/** The options of the run that the next command keeps. */
-export type PostPrScope = {
-	/** `-C <path>`, as given. */
-	readonly cwd?: string;
-	readonly into?: string;
-	readonly protectedPatterns: readonly string[];
-	readonly github: boolean;
-	readonly fetch: boolean;
-};
-
 /**
  * The command to run next, or null when nothing is left that gsp can do on
  * its own: in a plan, the one that applies it, when applying would change
@@ -241,18 +278,7 @@ export type PostPrScope = {
  */
 export function postPrNextCommand(report: PostPrReport, scope: PostPrScope): string | null {
 	const target = isGone(report.branch) ? null : report.branch;
-	const rerun = (...flags: string[]) =>
-		cmd(
-			'gsp',
-			...(scope.cwd === undefined ? [] : ['-C', scope.cwd]),
-			'post-pr',
-			...(report.branch ? [report.branch.name] : []),
-			...(scope.into === undefined ? [] : ['--into', scope.into]),
-			...scope.protectedPatterns.flatMap((pattern) => ['--protect', pattern]),
-			...(scope.github ? [] : ['--no-github']),
-			...(scope.fetch ? [] : ['--no-fetch']),
-			...flags
-		);
+	const rerun = (...flags: string[]) => postPrCommand(scope, report.branch?.name, ...flags);
 	if (report.mode === 'plan') {
 		return wouldChange(report) ? rerun('--yes', ...(target?.action === 'delete' && target.needsForce ? ['--force'] : [])) : null;
 	}

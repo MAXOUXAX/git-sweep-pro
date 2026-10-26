@@ -302,6 +302,41 @@ suite('cli post-pr (real git)', function () {
 		assert.strictEqual(git(['reflog', '-1', '--format=%gs', 'main'], fx.repo).trim(), 'gsp post-pr');
 	});
 
+	/** The current branch of the main checkout, squash-merged on the remote. */
+	function mergedCurrentBranch(name: string): void {
+		git(['checkout', '-q', '-b', name], fx.repo);
+		commitFile(fx.repo, 'x.txt', 'x\n', 'work');
+		git(['push', '-q', '-u', 'origin', name], fx.repo);
+		squashMergeOnRemote(name);
+	}
+
+	test('a branch merged into another remote branch hints at --into, never --force', async () => {
+		git(['checkout', '-q', '-b', 'feature/x'], fx.repo);
+		commitFile(fx.repo, 'x.txt', 'x\n', 'work');
+		git(['push', '-q', 'origin', 'feature/x:develop'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--no-github', '--json'], io), EXIT.notApplied, io.err.join(''));
+		const report = json(io.out);
+		assert.deepStrictEqual([report.branch?.reason, report.branch?.hint], ['needs-force', 'gsp post-pr feature/x --into develop --no-github --yes']);
+	});
+
+	test('unpushed commits on top of a merged branch: push them first', async () => {
+		mergedCurrentBranch('feature/x');
+		commitFile(fx.repo, 'y.txt', 'y\n', 'more work');
+		git(['fetch', '-q', '--prune'], fx.repo);
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', '--no-github', '--json'], io), EXIT.notApplied, io.err.join(''));
+		const report = json(io.out);
+		assert.deepStrictEqual([report.branch?.reason, report.branch?.hint], ['needs-force', 'git push -u origin feature/x']);
+
+		const text = createFakeIo(fx.repo);
+		await runCli(['post-pr', '--no-github'], text);
+		assert.ok(text.out.join('').includes('feature/x  not proven merged yet ('), text.out.join(''));
+	});
+
 	test('--into compares with another branch, which stays protected like the default one', async () => {
 		git(['checkout', '-q', '-b', 'develop'], fx.repo);
 		git(['push', '-q', '-u', 'origin', 'develop'], fx.repo);

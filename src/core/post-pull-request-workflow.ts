@@ -16,7 +16,16 @@ import {
 import { canRecordDeletions, createDeletionRecorder } from './deletion-log';
 import { toErrorMessage } from './errors';
 import { quoteShellArg, type RunGit } from './git-command';
-import { decideTarget, hasPendingChanges, isGone, type DefaultBranchUpdate, type PostPrReport } from './post-pull-request-plan';
+import type { RunGh } from './github-signal';
+import {
+	decideTarget,
+	hasPendingChanges,
+	isGone,
+	postPrCommand,
+	type DefaultBranchUpdate,
+	type PostPrReport,
+	type PostPrScope,
+} from './post-pull-request-plan';
 import { canonical, listWorktrees, type Worktree } from './worktrees';
 
 export type PostPrOptions = Pick<CleanOptions, 'dryRun' | 'yes' | 'force' | 'fetch' | 'github' | 'protectedPatterns' | 'canPrompt' | 'confirm'> & {
@@ -24,6 +33,8 @@ export type PostPrOptions = Pick<CleanOptions, 'dryRun' | 'yes' | 'force' | 'fet
 	readonly branch: string | undefined;
 	/** The branch it was merged into; the default branch when undefined. */
 	readonly into: string | undefined;
+	/** `-C <path>`, as given: the commands gsp suggests keep it. */
+	readonly cwd?: string;
 };
 
 export type PostPrContext = CleanContext & {
@@ -171,6 +182,61 @@ function confirmMessage(target: CleanBranch | null, others: number, undo: string
 	return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}? ${undo}`;
 }
 
+type MergedPullRequest = { readonly number: number; readonly baseRefName: string; readonly headRefOid: string };
+
+/** The merged pull requests whose head branch is `branch`, as GitHub lists them; none without `gh` or when it fails. */
+async function mergedPullRequestsOf(gh: RunGh | undefined, branch: string): Promise<readonly MergedPullRequest[]> {
+	if (!gh) {
+		return [];
+	}
+	try {
+		const { stdout } = await gh(['pr', 'list', '--head', branch, '--state', 'merged', '--json', 'number,baseRefName,headRefOid']);
+		return JSON.parse(stdout) as MergedPullRequest[];
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Another branch that holds the work of a branch not proven merged into
+ * `intoRef`: the base of its merged pull request, matched by its tip, else a
+ * branch of `remote` whose tip contains it.
+ */
+async function findMergedElsewhere(
+	context: PostPrContext,
+	branch: PlannedBranch,
+	into: string,
+	intoRef: string,
+	remote: string | null
+): Promise<string | undefined> {
+	const pullRequest = (await mergedPullRequestsOf(context.gh, branch.name)).find(
+		(candidate) => candidate.headRefOid === branch.tip && candidate.baseRefName !== into
+	);
+	if (pullRequest) {
+		return pullRequest.baseRefName;
+	}
+	if (!remote) {
+		return undefined;
+	}
+	const prefix = `refs/remotes/${remote}/`;
+	const { stdout } = await context.git(['for-each-ref', '--contains', branch.tip, '--format=%(refname)', `refs/remotes/${remote}`]);
+	const own = new Set([intoRef, `${prefix}HEAD`, `${prefix}${branch.name}`, ...(branch.upstream ? [`refs/remotes/${branch.upstream}`] : [])]);
+	return stdout
+		.split('\n')
+		.find((ref) => ref.startsWith(prefix) && !own.has(ref))
+		?.slice(prefix.length);
+}
+
+/** The remote a branch's unpushed commits go to: its own, else `fallback`. */
+async function pushRemoteOf(git: RunGit, branch: string, fallback: string | null): Promise<string | undefined> {
+	const configured = await git(['config', '--get', `branch.${branch}.remote`]).then(
+		(result) => result.stdout.trim(),
+		() => ''
+	);
+	// "." is the repository itself: nothing to push to.
+	return configured && configured !== '.' ? configured : (fallback ?? undefined);
+}
+
 /**
  * `gsp post-pr`: once a pull request is merged, deletes its branch (and the
  * linked worktree it is checked out in), fast-forwards the default branch,
@@ -215,6 +281,14 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	const intoRef = into === base?.name ? base.ref : await resolveInto(git, into, base?.remote ?? 'origin');
 	const intoRemote = /^refs\/remotes\/([^/]+)\//.exec(intoRef)?.[1];
 	const upstreamRef = intoRemote ? intoRef : null;
+	const scope: PostPrScope = {
+		...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+		...(options.into === undefined ? {} : { into: options.into }),
+		protectedPatterns: options.protectedPatterns,
+		github: options.github,
+		fetch: options.fetch,
+	};
+
 
 	let requested = options.branch;
 	if (requested === into) {
@@ -247,15 +321,24 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		return (await inspectWorktrees(git, result.branches, named, ignored)).find((branch) => branch.name === targetName);
 	};
 	const decide = async (branch: PlannedBranch | undefined, remoteAhead: boolean): Promise<CleanBranch | null> => {
-		const worktree = branch?.worktree && !branch.worktree.prunable ? branch.worktree : null;
-		return branch
-			? decideTarget(branch, {
-					force: options.force,
-					into,
-					mainCheckoutDirty: worktree?.isMain ? await hasTrackedChanges(git, worktree.path) : false,
-					remoteAhead,
-				})
-			: null;
+		if (!branch) {
+			return null;
+		}
+		const worktree = branch.worktree && !branch.worktree.prunable ? branch.worktree : null;
+		// Only for a branch that is not proven merged: what may prove it without --force.
+		const unproven = !options.force && branch.verdict === 'alive';
+		const pushRemote = branch.unpushedCommits > 0 ? await pushRemoteOf(git, branch.name, intoRemote ?? null) : undefined;
+		const mergedElsewhere =
+			unproven && branch.unpushedCommits === 0 && !remoteAhead ? await findMergedElsewhere(context, branch, into, intoRef, intoRemote ?? null) : undefined;
+		return decideTarget(branch, {
+			force: options.force,
+			into,
+			mainCheckoutDirty: worktree?.isMain ? await hasTrackedChanges(git, worktree.path) : false,
+			remoteAhead,
+			scope,
+			...(mergedElsewhere === undefined ? {} : { mergedElsewhere }),
+			...(pushRemote === undefined ? {} : { pushRemote }),
+		});
 	};
 
 	const remoteAhead =
@@ -332,8 +415,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	target = fresh && holdToPlan([fresh], [fresh], remote)[0];
 	others = holdToPlan(others, decideOthers(refreshed.planned), remote, !options.yes);
 	// Every proof compares with the default branch: when the fetch changed it, nothing is deleted.
-	const rerun = targetName ?? gone;
-	const review = ['gsp', 'post-pr', ...(rerun ? [rerun] : []), '--dry-run'].map(quoteShellArg).join(' ');
+	const review = postPrCommand(scope, targetName ?? gone, '--dry-run');
 	const held = holdToBase([...(target ? [target] : []), ...others], base, analysis.checks.base, review);
 	[target, others] = target ? [held.branches[0], held.branches.slice(1)] : [null, held.branches];
 	if (held.message) {

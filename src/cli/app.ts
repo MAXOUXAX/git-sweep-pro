@@ -356,6 +356,7 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 			{
 				branch: options.positionals[0],
 				into: options.into,
+				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
 				dryRun: options.mode === 'dryRun',
 				yes: options.yes,
 				force: options.mode === 'forceDelete',

@@ -45,7 +45,9 @@ const worktree = (overrides: Partial<NonNullable<BranchAnalysis['worktree']>> = 
 	...overrides,
 });
 
-const OPTIONS: DecideTargetOptions = { force: false, into: 'main', mainCheckoutDirty: false, remoteAhead: false };
+const SCOPE: PostPrScope = { protectedPatterns: [], github: true, fetch: true };
+
+const OPTIONS: DecideTargetOptions = { force: false, into: 'main', mainCheckoutDirty: false, remoteAhead: false, scope: SCOPE };
 
 const update = (overrides: Partial<DefaultBranchUpdate> = {}): DefaultBranchUpdate => ({
 	name: 'main',
@@ -114,6 +116,36 @@ suite('post-pr plan', () => {
 		assert.deepStrictEqual([forced.action, forced.hint], ['delete', 'gsp post-pr feature/x --yes --force']);
 	});
 
+	test('before --force, hints at what may still prove the branch merged', () => {
+		const alive = branch({ verdict: 'alive', reason: 'unmerged-commits', evidence: { method: 'unique-commits', base: BASE, commits: 2 } });
+		assert.strictEqual(decideTarget(alive, { ...OPTIONS, mergedElsewhere: 'develop' }).hint, 'gsp post-pr feature/x --into develop --yes');
+		const scoped = { ...OPTIONS, scope: { ...SCOPE, cwd: '/my repo', into: 'main', github: false } };
+		assert.strictEqual(
+			decideTarget(alive, { ...scoped, mergedElsewhere: 'develop' }).hint,
+			"gsp -C '/my repo' post-pr feature/x --into develop --no-github --yes"
+		);
+		assert.strictEqual(decideTarget(alive, scoped).hint, "gsp -C '/my repo' post-pr feature/x --into main --no-github --yes --force");
+
+		// Unpushed commits on top of a merged tip go to the remote first, even when the remote has new commits.
+		const unpushed = branch({ unpushedCommits: 1 });
+		const pushFirst = decideTarget(unpushed, { ...OPTIONS, remoteAhead: true, mergedElsewhere: 'develop', pushRemote: 'origin' });
+		assert.deepStrictEqual([pushFirst.reason, pushFirst.hint], ['needs-force', 'git push -u origin feature/x']);
+		assert.strictEqual(decideTarget(unpushed, OPTIONS).hint, 'gsp post-pr feature/x --yes --force');
+	});
+
+	test('the skip label matches the hint: "needs --force" only when the hint does', () => {
+		const alive = branch({ verdict: 'alive', reason: 'unmerged-commits', evidence: { method: 'unique-commits', base: BASE, commits: 2 } });
+		const line = (options: DecideTargetOptions) => formatPostPrLines(report({ branch: decideTarget(alive, options) }))[0];
+		assert.strictEqual(
+			line({ ...OPTIONS, remoteAhead: true }),
+			'skip    feature/x  not proven merged yet (2 commits not merged into origin/main) → gsp post-pr feature/x --yes'
+		);
+		assert.strictEqual(
+			line(OPTIONS),
+			'skip    feature/x  named, but not merged: needs --force (2 commits not merged into origin/main) → gsp post-pr feature/x --yes --force'
+		);
+	});
+
 	test('rules --force never lifts still apply', () => {
 		const locked = decideTarget(branch({ worktree: worktree({ locked: true }) }), { ...OPTIONS, force: true });
 		assert.deepStrictEqual([locked.action, locked.reason], ['skip', 'locked-worktree']);
@@ -160,7 +192,7 @@ suite('post-pr plan', () => {
 	});
 
 	test('next steps: undo, where to continue, and how to apply a plan', () => {
-		const scope: PostPrScope = { protectedPatterns: [], github: true, fetch: true };
+		const scope = SCOPE;
 		const steps = (report: PostPrReport) => formatNextSteps(report, postPrNextCommand(report, scope));
 		const deleted = { ...decideTarget(branch(), OPTIONS), result: 'deleted' as const };
 		assert.deepStrictEqual(steps(report({ branch: deleted, restore: 'gsp restore feature/x', nextCwd: '/my repo' })), [
@@ -179,12 +211,12 @@ suite('post-pr plan', () => {
 
 	test('a plan gives a next command exactly when applying it would change something, and then exits 5', () => {
 		const remoteAhead = report({ mode: 'plan', defaultBranch: update({ updated: false, reason: 'up-to-date', remoteAhead: true }) });
-		assert.strictEqual(postPrNextCommand(remoteAhead, { protectedPatterns: [], github: true, fetch: true }), 'gsp post-pr --yes');
+		assert.strictEqual(postPrNextCommand(remoteAhead, SCOPE), 'gsp post-pr --yes');
 		assert.ok(hasPendingChanges(remoteAhead));
 		// A kept merged branch is not finished: 5, though only its own hint can lift it.
 		const alive = branch({ verdict: 'alive', reason: 'unmerged-commits', evidence: { method: 'unique-commits', base: BASE, commits: 2 } });
 		const kept = report({ mode: 'plan', branch: decideTarget(alive, OPTIONS) });
-		assert.strictEqual(postPrNextCommand(kept, { protectedPatterns: [], github: true, fetch: true }), null);
+		assert.strictEqual(postPrNextCommand(kept, SCOPE), null);
 		assert.ok(hasPendingChanges(kept));
 	});
 
