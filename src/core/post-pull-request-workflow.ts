@@ -21,7 +21,7 @@ import type { RunGh } from './github-signal';
 import {
 	decideTarget,
 	hasPendingChanges,
-	isGone,
+	hasNoLocalBranch,
 	postPrCommand,
 	type DefaultBranchUpdate,
 	type PostPrReport,
@@ -273,8 +273,8 @@ function suggest(name: string, branches: readonly string[]): string {
 type Positional = {
 	/** The branch to finish, when the positional names one that exists. */
 	readonly requested?: string;
-	/** The positional names a branch that is already deleted. */
-	readonly gone?: string;
+	/** The positional names a branch that has no local branch, but that something knows. */
+	readonly noLocal?: string;
 };
 
 type PositionalFacts = {
@@ -333,7 +333,7 @@ async function readPositional(context: PostPrContext, options: PostPrOptions, fa
 	if (!known) {
 		throw new PostPrUsageError(`No branch named "${name}".${suggest(name, facts.localBranches)}`, 'unknown-branch');
 	}
-	return { gone: name };
+	return { noLocal: name };
 }
 
 /**
@@ -382,7 +382,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		fetch: options.fetch,
 	};
 
-	const { requested, gone } = await readPositional(context, options, {
+	const { requested, noLocal } = await readPositional(context, options, {
 		name: options.branch,
 		current,
 		into,
@@ -391,7 +391,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		plan,
 		localBranches,
 	});
-	const targetName = gone ? undefined : (requested ?? (current !== 'HEAD' && current !== into ? current : undefined));
+	const targetName = noLocal ? undefined : (requested ?? (current !== 'HEAD' && current !== into ? current : undefined));
 
 	/** The branch to finish, compared with --into; the detected default branch stays protected. */
 	const analyseTarget = async (
@@ -476,7 +476,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 			schema: CLEAN_SCHEMA,
 			command: 'post-pr',
 			mode,
-			branch: gone ? { name: gone, action: 'gone' } : target,
+			branch: noLocal ? { name: noLocal, action: 'no-local-branch' } : target,
 			worktree: { path: worktree?.path ?? null, removed, switched: mode === 'plan' ? target?.action === 'delete' && inMain() : switched },
 			defaultBranch,
 			clean: buildReport(mode, analysis, remote, others, worktreesPruned, cleanRecorder.recorded),
@@ -514,7 +514,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	target = fresh && holdToPlan([fresh], [fresh], remote)[0];
 	others = holdToPlan(others, decideOthers(refreshed.planned), remote, !options.yes);
 	// Every proof compares with the default branch: when the fetch changed it, nothing is deleted.
-	const review = postPrCommand(scope, targetName ?? gone, '--dry-run');
+	const review = postPrCommand(scope, targetName ?? noLocal, '--dry-run');
 	const held = holdToBase([...(target ? [target] : []), ...others], base, analysis.checks.base, review);
 	[target, others] = target ? [held.branches[0], held.branches.slice(1)] : [null, held.branches];
 	if (held.message) {
@@ -554,7 +554,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 /** How a run ended, from its report. */
 function runOutcome(report: PostPrReport): CleanOutcome {
 	const failed =
-		(report.branch !== null && !isGone(report.branch) && (report.branch.result === 'failed' || report.branch.result === 'worktree-removed')) ||
+		(report.branch !== null && !hasNoLocalBranch(report.branch) && (report.branch.result === 'failed' || report.branch.result === 'worktree-removed')) ||
 		report.defaultBranch.reason === 'failed' ||
 		appliedOutcome(report.clean.branches) === 'failed';
 	if (failed) {
@@ -563,6 +563,6 @@ function runOutcome(report: PostPrReport): CleanOutcome {
 	if (report.mode === 'plan') {
 		return hasPendingChanges(report) ? 'not-applied' : 'done';
 	}
-	const targetKept = report.branch !== null && !isGone(report.branch) && report.branch.result !== 'deleted';
+	const targetKept = report.branch !== null && !hasNoLocalBranch(report.branch) && report.branch.result !== 'deleted';
 	return targetKept || hasPendingDeletions(report.clean.branches) ? 'not-applied' : 'done';
 }

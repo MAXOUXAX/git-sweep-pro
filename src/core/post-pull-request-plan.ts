@@ -62,10 +62,13 @@ export type PostPrWorktree = {
 	readonly switched: boolean;
 };
 
-/** The merged branch, named on the command line, when it no longer exists: `gh pr merge --delete-branch` deletes it, for one. */
-export type GoneBranch = { readonly name: string; readonly action: 'gone' };
+/**
+ * The merged branch, named on the command line, when it has no local branch but a remote branch, a merged pull
+ * request or the deletion log knows it: `gh pr merge --delete-branch` deletes it, for one.
+ */
+export type NoLocalBranch = { readonly name: string; readonly action: 'no-local-branch' };
 
-export const isGone = (branch: PostPrReport['branch']): branch is GoneBranch => branch?.action === 'gone';
+export const hasNoLocalBranch = (branch: PostPrReport['branch']): branch is NoLocalBranch => branch?.action === 'no-local-branch';
 
 /** The `--json` document of `gsp post-pr`. */
 export type PostPrReport = {
@@ -73,10 +76,10 @@ export type PostPrReport = {
 	readonly command: 'post-pr';
 	readonly mode: CleanMode;
 	/**
-	 * The merged branch, as `gsp clean` reports a branch; `{ name, action: "gone" }` when the branch named is
-	 * already deleted; null when there is none to finish (e.g. run on the default branch).
+	 * The merged branch, as `gsp clean` reports a branch; `{ name, action: "no-local-branch" }` when the branch
+	 * named has no local branch; null when there is none to finish (e.g. run on the default branch).
 	 */
-	readonly branch: CleanBranch | GoneBranch | null;
+	readonly branch: CleanBranch | NoLocalBranch | null;
 	readonly worktree: PostPrWorktree;
 	readonly defaultBranch: DefaultBranchUpdate;
 	/** The clean step that follows, run with proof-only rules (`gsp clean --yes`). */
@@ -206,7 +209,7 @@ export function formatDefaultBranch(update: DefaultBranchUpdate): string | undef
 
 /** Plan mode: whether applying the plan would change something. */
 function wouldChange(report: PostPrReport): boolean {
-	const target = isGone(report.branch) ? null : report.branch;
+	const target = hasNoLocalBranch(report.branch) ? null : report.branch;
 	return (
 		target?.action === 'delete' ||
 		report.defaultBranch.reason === 'not-applied' ||
@@ -224,7 +227,7 @@ function wouldChange(report: PostPrReport): boolean {
 export function hasPendingChanges(report: PostPrReport): boolean {
 	return (
 		(report.mode === 'plan' && wouldChange(report)) ||
-		(report.branch !== null && !isGone(report.branch) && report.branch.result !== 'deleted') ||
+		(report.branch !== null && !hasNoLocalBranch(report.branch) && report.branch.result !== 'deleted') ||
 		report.clean.branches.some((branch) => (branch.action === 'delete' && branch.result === undefined) || branch.reason === 'needs-force')
 	);
 }
@@ -235,8 +238,8 @@ export function hasPendingChanges(report: PostPrReport): boolean {
  */
 export function formatPostPrLines(report: PostPrReport): string[] {
 	const lines: string[] = [];
-	if (isGone(report.branch)) {
-		lines.push(`${report.branch.name} is already deleted.`);
+	if (hasNoLocalBranch(report.branch)) {
+		lines.push(`${report.branch.name} has no local branch; nothing to delete here.`);
 	} else if (report.branch) {
 		lines.push(...formatBranchLines({ branches: [report.branch], mode: report.mode }));
 		if (report.worktree.switched && report.worktree.path) {
@@ -277,7 +280,7 @@ export type PostPrDocument = PostPrReport & { readonly next: string | null };
  * merged branch that only `--force` deletes is left to its own hint.
  */
 export function postPrNextCommand(report: PostPrReport, scope: PostPrScope): string | null {
-	const target = isGone(report.branch) ? null : report.branch;
+	const target = hasNoLocalBranch(report.branch) ? null : report.branch;
 	const rerun = (...flags: string[]) => postPrCommand(scope, report.branch?.name, ...flags);
 	if (report.mode === 'plan') {
 		return wouldChange(report) ? rerun('--yes', ...(target?.action === 'delete' && target.needsForce ? ['--force'] : [])) : null;
@@ -287,7 +290,7 @@ export function postPrNextCommand(report: PostPrReport, scope: PostPrScope): str
 
 /** How many deletions were held back while applying, as things changed meanwhile. */
 function heldBack(report: PostPrReport): number {
-	const branches = [...(report.branch && !isGone(report.branch) ? [report.branch] : []), ...report.clean.branches];
+	const branches = [...(report.branch && !hasNoLocalBranch(report.branch) ? [report.branch] : []), ...report.clean.branches];
 	return branches.filter((branch) => RERUN_LIFTS.has(branch.reason)).length;
 }
 

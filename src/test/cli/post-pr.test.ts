@@ -493,35 +493,35 @@ suite('cli post-pr (real git)', function () {
 		git(['branch', '-q', '-D', name], fx.repo);
 	}
 
-	test('a branch that is already deleted: says so, updates main and cleans', async () => {
+	test('a branch with no local branch: says so, updates main and cleans', async () => {
 		mergeAndDeleteBranch('feature/x');
 		makeGoneBranch(fx.repo, 'feature/old');
 
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--yes'], io), EXIT.ok, io.err.join(''));
 		const out = io.out.join('');
-		assert.ok(out.startsWith('feature/x is already deleted.\n'), out);
+		assert.ok(out.startsWith('feature/x has no local branch; nothing to delete here.\n'), out);
 		assert.match(out, /^main: fast-forwarded to origin\/main /m);
 		assert.ok(out.includes('Other branches: 1 deleted'), out);
 		assert.strictEqual(tip('main'), tip('origin/main'));
 		assert.ok(!branchExists(fx.repo, 'feature/old'));
 	});
 
-	test('a branch that is already deleted, in JSON', async () => {
+	test('a branch with no local branch, in JSON', async () => {
 		mergeAndDeleteBranch('feature/x');
 		git(['fetch', '-q'], fx.repo);
 
 		const plan = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--json'], plan), EXIT.notApplied, plan.err.join(''));
 		const planned = JSON.parse(plan.out.join('')) as PostPrDocument;
-		assert.deepStrictEqual(planned.branch, { name: 'feature/x', action: 'gone' });
+		assert.deepStrictEqual(planned.branch, { name: 'feature/x', action: 'no-local-branch' });
 		assert.strictEqual(planned.defaultBranch.reason, 'not-applied');
 		assert.strictEqual(planned.next, 'gsp post-pr feature/x --yes');
 
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
 		const report = JSON.parse(io.out.join('')) as PostPrDocument;
-		assert.deepStrictEqual(report.branch, { name: 'feature/x', action: 'gone' });
+		assert.deepStrictEqual(report.branch, { name: 'feature/x', action: 'no-local-branch' });
 		assert.strictEqual(report.next, null);
 		assert.deepStrictEqual(report.worktree, { path: null, removed: false, switched: false });
 		assert.strictEqual(report.defaultBranch.updated, true);

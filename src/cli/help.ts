@@ -128,7 +128,7 @@ would.
 branch, with the rules of "gsp clean". Otherwise nothing is changed on it,
 gsp says why and what may prove it (fetching, pushing, --into), and exits
 with 5; the same when its worktree has uncommitted changes. A <branch> that
-no longer exists is reported as already deleted, and the rest goes on, when
+has no local branch is reported as such, and the rest goes on, when
 gsp deleted it, a remote branch of that name is still listed, or GitHub
 shows its pull request merged (gh pr merge --delete-branch deletes it).
 Any other missing <branch> is an error (exit 2).

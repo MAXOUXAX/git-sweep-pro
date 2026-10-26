@@ -234,7 +234,7 @@ suite('post-pr plan', () => {
 		assert.deepStrictEqual(formatNextSteps(applied, 'gsp post-pr feature/x --dry-run'), [
 			'1 not deleted, as things changed while applying. Review them with: gsp post-pr feature/x --dry-run',
 		]);
-		assert.strictEqual(postPrNextCommand(report({ branch: { name: 'feature/x', action: 'gone' } }), scope), null);
+		assert.strictEqual(postPrNextCommand(report({ branch: { name: 'feature/x', action: 'no-local-branch' } }), scope), null);
 	});
 
 });
