@@ -135,9 +135,9 @@ suite('clean plan', () => {
 		const ignoredFiles = { count: 4, sample: ['.env', 'notes.md', 'secrets/', 'x.db'] };
 		const held = branch('feature/env', { worktree: { ...worktree({ path: '/wt/env' }), ignoredFiles } });
 		const unforced = decide([held]);
-		assert.deepStrictEqual(actions(unforced), { 'feature/env': ['skip', 'ignored-files', 'gsp clean feature/env --yes --force'] });
+		assert.deepStrictEqual(actions(unforced), { 'feature/env': ['skip', 'ignored-files', 'move what you need out of /wt/env, then: gsp clean feature/env --yes --force'] });
 		assert.deepStrictEqual(formatBranchLines(report(unforced, 'plan')), [
-			'skip    feature/env  removing worktree /wt/env would delete 4 ignored files (.env, notes.md, secrets/, …), needs --force (squash-merged into origin/main) → gsp clean feature/env --yes --force',
+			'skip    feature/env  removing worktree /wt/env would delete 4 ignored files (.env, notes.md, secrets/, …), needs --force (squash-merged into origin/main) → move what you need out of /wt/env, then: gsp clean feature/env --yes --force',
 		]);
 		assert.strictEqual(hasPendingDeletions(unforced), true, '--force would delete it: exit 5');
 		assert.strictEqual(summarize(unforced, 'plan').needsForce, 1);

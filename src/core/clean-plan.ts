@@ -202,7 +202,11 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 		};
 	}
 	if (worktree?.ignoredFiles && worktree.ignoredFiles.count > 0 && !options.force) {
-		return { reason: 'ignored-files', hint: cmd('gsp', 'clean', branch.name, '--yes', '--force') };
+		// Removing the worktree deletes them for good: save what matters first.
+		return {
+			reason: 'ignored-files',
+			hint: `move what you need out of ${quoteShellArg(worktree.path)}, then: ${cmd('gsp', 'clean', branch.name, '--yes', '--force')}`,
+		};
 	}
 	return undefined;
 }
