@@ -225,6 +225,21 @@ suite('post-pr plan', () => {
 		assert.ok(hasPendingChanges(kept));
 	});
 
+	test('a kept merged branch gives the step of its hint that loses nothing as next, never one that needs approval', () => {
+		const dirty = decideTarget(branch({ worktree: worktree({ dirty: true }) }), OPTIONS);
+		for (const mode of ['plan', 'apply'] as const) {
+			const kept = report({ mode, branch: dirty });
+			assert.strictEqual(postPrNextCommand(kept, SCOPE), 'git -C /wt stash --include-untracked && gsp post-pr feature/x --yes');
+			assert.deepStrictEqual(formatNextSteps(kept, postPrNextCommand(kept, SCOPE)), [], 'the branch line already gives the hint');
+		}
+		const unpushed = decideTarget(branch({ unpushedCommits: 1 }), { ...OPTIONS, pushRemote: 'origin' });
+		assert.strictEqual(postPrNextCommand(report({ branch: unpushed }), SCOPE), 'git push -u origin feature/x');
+		const ignored = decideTarget(branch({ worktree: { ...worktree(), ignoredFiles: { count: 1, sample: ['.env'] } } }), OPTIONS);
+		assert.strictEqual(postPrNextCommand(report({ branch: ignored }), SCOPE), null);
+		const locked = decideTarget(branch({ worktree: worktree({ locked: true }) }), OPTIONS);
+		assert.strictEqual(postPrNextCommand(report({ branch: locked }), SCOPE), null);
+	});
+
 	test('the next command keeps the options of the run, and plans again what changed while applying', () => {
 		const scope: PostPrScope = { cwd: '/my repo', into: 'develop', protectedPatterns: ['release/*'], github: false, fetch: false };
 		const planned = report({ mode: 'plan', branch: decideTarget(branch(), OPTIONS) });
