@@ -30,6 +30,7 @@ Settled by Maxence on 2026-10-26.
 - `post-pr` exits 5 whenever the merged branch it was asked to finish is kept (dirty, ignored files, mid-rebase, not proven): for post-pr, 5 means "not finished". Its positional never lifts protection; a protected name there is read as the old `gsp post-pr <default>` form.
 - `--remote` fails closed on hosts it can't classify: unless the remote is known not to be GitHub (local path, `file://`, gitlab.com, bitbucket.org) or `git config git-sweep-pro.forge none` says so, an unresolvable GitHub status skips deletions as `github-unavailable`. URLs are resolved with `insteadOf` and SSH aliases. `--remote` refuses a remote whose push URL points to another repository than its fetch URL (same host and full path, after rewrites and SSH aliases).
 - `post-pr --clean <branch>` (repeatable) limits its clean step to the named branches and `--no-clean` skips it, so its `next` and hints name exactly what they delete, like `gsp clean`'s apply command.
+- An ignored symlink counts as regenerable only when it is named like a regenerable folder or file (e.g. a linked `node_modules`); any other ignored symlink keeps the worktree.
 - The extension offers `--remote` and the worktree list in 2.0.
 
 ## Release workflow for 2.0
