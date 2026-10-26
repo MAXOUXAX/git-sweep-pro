@@ -232,7 +232,7 @@ function pickItems(branches: readonly CleanBranch[]): PickItem[] {
 		});
 }
 
-function buildReport(
+export function buildReport(
 	mode: CleanMode,
 	analysis: BranchAnalysisResult,
 	remote: RemoteCheck,
@@ -251,25 +251,29 @@ function buildReport(
 	};
 }
 
-/**
- * `gsp clean`: classifies the local branches (see `analyzeBranches`) and
- * deletes the dead ones and their clean linked worktrees.
- *
- * Planning writes nothing: no fetch, no prune, no ref, config or object
- * write; deleted upstreams are found with `git ls-remote`. Applying fetches
- * with --prune, prunes the worktree registrations whose directory is gone,
- * analyses again, then deletes. The plan is applied with `yes`, or after the
- * picker when someone can answer it; otherwise it is only reported.
- */
-export async function runCleanWorkflow(context: CleanContext, options: CleanOptions): Promise<CleanRun> {
-	const { git, ui, output } = context;
-	const locals = (await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).stdout.split('\n').filter(Boolean);
-	const missing = options.patterns.filter((pattern) => !isBranchGlob(pattern) && !locals.includes(pattern));
-	if (missing.length > 0) {
-		throw new UnknownBranchError(missing);
-	}
+/** What `gsp clean` and `gsp post-pr` read before deciding anything. */
+export type BranchInspection = {
+	readonly mode: CleanMode;
+	readonly remote: RemoteCheck;
+	/** Worktree registrations whose directory is gone: pruned (apply) or that would be (plan). */
+	readonly worktreesPruned: readonly string[];
+	readonly analysis: BranchAnalysisResult;
+};
 
-	const apply = !options.dryRun && (options.yes || options.canPrompt);
+export type InspectOptions = Pick<CleanOptions, 'patterns' | 'fetch' | 'github' | 'protectedPatterns'> & {
+	/** Fetch and prune first, so the plan can be applied; otherwise read only. */
+	readonly apply: boolean;
+};
+
+/**
+ * Reads the remotes and analyses the local branches. Planning writes nothing:
+ * no fetch, no prune, no ref, config or object write; deleted upstreams are
+ * found with `git ls-remote`. Applying fetches with --prune and prunes the
+ * worktree registrations whose directory is gone before analysing.
+ */
+export async function inspectBranches(context: CleanContext, options: InspectOptions): Promise<BranchInspection> {
+	const { git, ui, output } = context;
+	const { apply } = options;
 	const mode: CleanMode = apply ? 'apply' : 'plan';
 	const upstreams = await readUpstreams(git);
 	const remotes = await remotesToCheck(git, upstreams);
@@ -303,6 +307,49 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	if (remote.source === 'local-refs' && remote.reason === 'unreachable') {
 		output.appendLine(`Could not reach the remote (${remote.detail ?? 'unknown error'}); using the local remote-tracking refs.`);
 	}
+	return { mode, remote, worktreesPruned, analysis };
+}
+
+/** Deletes every branch planned for deletion, in order, and records each deletion. */
+export async function applyDeletions(git: RunGit, branches: readonly CleanBranch[], recorder: DeletionRecorder): Promise<CleanBranch[]> {
+	const applied: CleanBranch[] = [];
+	for (const branch of branches) {
+		if (branch.action !== 'delete') {
+			applied.push(branch);
+			continue;
+		}
+		const { result, error } = await deleteBranch(git, branch, recorder);
+		applied.push({ ...branch, result, hint: result === 'deleted' ? null : branch.hint, ...(error ? { error } : {}) });
+	}
+	return applied;
+}
+
+/** How applying `branches` ended. */
+export function appliedOutcome(branches: readonly CleanBranch[]): CleanOutcome {
+	if (branches.some((branch) => branch.result === 'failed' || branch.result === 'worktree-removed')) {
+		return 'failed';
+	}
+	return hasPendingDeletions(branches) ? 'not-applied' : 'done';
+}
+
+/**
+ * `gsp clean`: classifies the local branches (see `analyzeBranches`) and
+ * deletes the dead ones and their clean linked worktrees.
+ *
+ * See {@link inspectBranches} for what planning and applying read and write.
+ * The plan is applied with `yes`, or after the picker when someone can answer
+ * it; otherwise it is only reported.
+ */
+export async function runCleanWorkflow(context: CleanContext, options: CleanOptions): Promise<CleanRun> {
+	const { git, ui, output } = context;
+	const locals = (await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).stdout.split('\n').filter(Boolean);
+	const missing = options.patterns.filter((pattern) => !isBranchGlob(pattern) && !locals.includes(pattern));
+	if (missing.length > 0) {
+		throw new UnknownBranchError(missing);
+	}
+
+	const apply = !options.dryRun && (options.yes || options.canPrompt);
+	const { mode, remote, worktreesPruned, analysis } = await inspectBranches(context, { ...options, apply });
 
 	const decideOptions = {
 		force: options.force,
@@ -344,17 +391,6 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	}
 
 	const recorder = createDeletionRecorder(context.deletionLog, 'sweep', output.appendLine);
-	const applied: CleanBranch[] = [];
-	for (const branch of branches) {
-		if (branch.action !== 'delete') {
-			applied.push(branch);
-			continue;
-		}
-		const { result, error } = await deleteBranch(git, branch, recorder);
-		applied.push({ ...branch, result, hint: result === 'deleted' ? null : branch.hint, ...(error ? { error } : {}) });
-	}
-	branches = applied;
-	const failed = applied.some((branch) => branch.result === 'failed' || branch.result === 'worktree-removed');
-	const pending = hasPendingDeletions(applied);
-	return report(failed ? 'failed' : pending ? 'not-applied' : 'done', recorder.recorded);
+	branches = await applyDeletions(git, branches, recorder);
+	return report(appliedOutcome(branches), recorder.recorded);
 }
