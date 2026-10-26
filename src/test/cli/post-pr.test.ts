@@ -290,18 +290,6 @@ suite('cli post-pr (real git)', function () {
 		assert.ok(!branchExists(fx.repo, 'feature/x'));
 	});
 
-	test('the default branch checked out nowhere is moved as a ref, with a reflog message', async () => {
-		const wt = addFeatureWorktree('feature/x');
-		squashMergeOnRemote('feature/x');
-		git(['checkout', '-q', '--detach'], fx.repo);
-
-		const io = createFakeIo(wt);
-		assert.strictEqual(await runCli(['post-pr', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
-		assert.strictEqual(json(io.out).defaultBranch.where, null);
-		assert.strictEqual(tip('main'), tip('origin/main'));
-		assert.strictEqual(git(['reflog', '-1', '--format=%gs', 'main'], fx.repo).trim(), 'gsp post-pr');
-	});
-
 	/** The current branch of the main checkout, squash-merged on the remote. */
 	function mergedCurrentBranch(name: string): void {
 		git(['checkout', '-q', '-b', name], fx.repo);
@@ -309,6 +297,67 @@ suite('cli post-pr (real git)', function () {
 		git(['push', '-q', '-u', 'origin', name], fx.repo);
 		squashMergeOnRemote(name);
 	}
+
+	test('the positional never lifts protection: a protected branch is read as the old form', async () => {
+		git(['branch', 'develop', 'origin/main'], fx.repo);
+		mergedCurrentBranch('feature/x');
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', 'develop', '--protect', 'develop', '--yes'], io), EXIT.ok, io.err.join(''));
+		assert.ok(io.err.join('').includes('develop is protected, so "gsp post-pr develop" is read as the deprecated'), io.err.join(''));
+		assert.ok(branchExists(fx.repo, 'develop'), 'develop is never deleted');
+		assert.ok(!branchExists(fx.repo, 'feature/x'));
+	});
+
+	test('from a linked worktree, the branch of the main checkout is read as the old form', async () => {
+		git(['checkout', '-q', '-b', 'develop'], fx.repo);
+		const wt = addFeatureWorktree('feature/x');
+		squashMergeOnRemote('feature/x');
+
+		const io = createFakeIo(wt);
+		assert.strictEqual(await runCli(['post-pr', 'develop', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
+		assert.ok(io.err.join('').includes('develop is checked out in the main checkout'), io.err.join(''));
+		assert.strictEqual(json(io.out).branch?.name, 'feature/x');
+		assert.ok(branchExists(fx.repo, 'develop'));
+		assert.strictEqual(headOf(fx.repo), 'develop');
+	});
+
+	test('a protected positional with no current branch to finish is a usage error pointing to --into', async () => {
+		git(['branch', 'develop', 'origin/main'], fx.repo);
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', 'develop', '--protect', 'develop', '--yes', '--json'], io), EXIT.usage);
+		const { error } = JSON.parse(io.out.join('')) as { error: { message: string; code: string } };
+		assert.strictEqual(error.code, 'usage');
+		assert.ok(error.message.includes('"gsp post-pr <branch> --into develop"'), error.message);
+		assert.ok(branchExists(fx.repo, 'develop'));
+	});
+
+	test('without origin/HEAD, "post-pr origin/main" is the old form too', async () => {
+		mergedCurrentBranch('feature/x');
+		git(['remote', 'set-head', 'origin', '--delete'], fx.repo);
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', 'origin/main', '--yes'], io), EXIT.ok, io.err.join(''));
+		assert.ok(io.err.join('').includes('"gsp post-pr origin/main" is deprecated'), io.err.join(''));
+		assert.strictEqual(headOf(fx.repo), 'main');
+		assert.ok(!branchExists(fx.repo, 'feature/x'));
+	});
+
+	test('a branch nobody knows is a typo: usage error, with the close branches', async () => {
+		git(['branch', 'feature/x'], fx.repo);
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', 'feture/x', '--no-github', '--json'], io), EXIT.usage);
+		assert.deepStrictEqual(JSON.parse(io.out.join('')), {
+			schema: 2,
+			error: { message: 'No branch named "feture/x". Did you mean feature/x?', code: 'unknown-branch' },
+		});
+
+		const into = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--into', 'nope', '--no-github', '--json'], into), EXIT.usage);
+		assert.strictEqual((JSON.parse(into.out.join('')) as { error: { code: string } }).error.code, 'unknown-branch');
+	});
 
 	test('a branch merged into another remote branch hints at --into, never --force', async () => {
 		git(['checkout', '-q', '-b', 'feature/x'], fx.repo);
@@ -335,6 +384,18 @@ suite('cli post-pr (real git)', function () {
 		const text = createFakeIo(fx.repo);
 		await runCli(['post-pr', '--no-github'], text);
 		assert.ok(text.out.join('').includes('feature/x  not proven merged yet ('), text.out.join(''));
+	});
+
+	test('the default branch checked out nowhere is moved as a ref, with a reflog message', async () => {
+		const wt = addFeatureWorktree('feature/x');
+		squashMergeOnRemote('feature/x');
+		git(['checkout', '-q', '--detach'], fx.repo);
+
+		const io = createFakeIo(wt);
+		assert.strictEqual(await runCli(['post-pr', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
+		assert.strictEqual(json(io.out).defaultBranch.where, null);
+		assert.strictEqual(tip('main'), tip('origin/main'));
+		assert.strictEqual(git(['reflog', '-1', '--format=%gs', 'main'], fx.repo).trim(), 'gsp post-pr');
 	});
 
 	test('--into compares with another branch, which stays protected like the default one', async () => {

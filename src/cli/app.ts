@@ -372,7 +372,7 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 	} catch (error) {
 		if (error instanceof PostPrUsageError) {
 			if (options.json) {
-				printJsonError(io, error.message, 'usage');
+				printJsonError(io, error.message, error.code);
 			}
 			io.stderr(`error: ${error.message}\n`);
 			return EXIT.usage;

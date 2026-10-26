@@ -9,6 +9,7 @@ import {
 	planBranches,
 	inspectWorktrees,
 	refreshBranches,
+	type BranchPlan,
 	type CleanContext,
 	type CleanOptions,
 	type CleanOutcome,
@@ -44,8 +45,16 @@ export type PostPrContext = CleanContext & {
 
 export type PostPrRun = { readonly report: PostPrReport; readonly outcome: CleanOutcome };
 
-/** Arguments that name no branch: the CLI reports them as a usage error. */
-export class PostPrUsageError extends Error {}
+/** Arguments that name no branch, or none post-pr can finish: the CLI reports them as a usage error. */
+export class PostPrUsageError extends Error {
+	/** `unknown-branch`: the branch named does not exist, and nothing knows it did. */
+	readonly code: 'usage' | 'unknown-branch';
+
+	constructor(message: string, code: 'usage' | 'unknown-branch' = 'usage') {
+		super(message);
+		this.code = code;
+	}
+}
 
 function firstLine(message: string): string {
 	return message.split('\n').find((line) => line.trim())?.trim() ?? message;
@@ -78,7 +87,7 @@ async function resolveInto(git: RunGit, into: string, remote: string | null): Pr
 	const tips = await readTips(git, candidates);
 	const ref = candidates.find((candidate) => tips.has(candidate));
 	if (!ref) {
-		throw new PostPrUsageError(`No branch named "${into}" to merge into.`);
+		throw new PostPrUsageError(`No branch named "${into}" to merge into.`, 'unknown-branch');
 	}
 	return ref;
 }
@@ -237,6 +246,100 @@ async function pushRemoteOf(git: RunGit, branch: string, fallback: string | null
 	return configured && configured !== '.' ? configured : (fallback ?? undefined);
 }
 
+/** Levenshtein distance, to suggest the branch a typo meant. */
+function editDistance(a: string, b: string): number {
+	let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+	for (let i = 1; i <= a.length; i++) {
+		const row = [i];
+		for (let j = 1; j <= b.length; j++) {
+			row.push(Math.min(previous[j] + 1, row[j - 1] + 1, previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)));
+		}
+		previous = row;
+	}
+	return previous[b.length];
+}
+
+/** " Did you mean …?" with the closest local branches, or "" when none is close. */
+function suggest(name: string, branches: readonly string[]): string {
+	const close = branches
+		.map((branch) => ({ branch, distance: editDistance(name, branch) }))
+		.filter(({ distance }) => distance <= Math.max(2, Math.floor(name.length / 4)))
+		.sort((a, b) => a.distance - b.distance)
+		.slice(0, 3)
+		.map(({ branch }) => branch);
+	return close.length === 0 ? '' : ` Did you mean ${close.join(' or ')}?`;
+}
+
+type Positional = {
+	/** The branch to finish, when the positional names one that exists. */
+	readonly requested?: string;
+	/** The positional names a branch that is already deleted. */
+	readonly gone?: string;
+};
+
+type PositionalFacts = {
+	readonly name: string | undefined;
+	readonly current: string;
+	readonly into: string;
+	readonly intoRemote: string | undefined;
+	readonly base: { readonly name: string; readonly remote: string | null } | null;
+	readonly plan: BranchPlan;
+	readonly localBranches: readonly string[];
+	/** The branch checked out in the main checkout, when gsp runs in another worktree. */
+	readonly mainCheckoutBranch: string | undefined;
+};
+
+/**
+ * What the branch named on the command line asks for. The positional never
+ * lifts protection: the old form named the branch to go back to
+ * (`gsp post-pr main`), so the default branch, a protected branch, or the
+ * branch of the main checkout when gsp runs elsewhere is read as that form,
+ * and the current branch is finished. A branch missing locally is already
+ * deleted only when something knows it existed: otherwise it is a typo.
+ */
+async function readPositional(context: PostPrContext, options: PostPrOptions, facts: PositionalFacts): Promise<Positional> {
+	const { name, current, into, intoRemote, base, plan } = facts;
+	if (name === undefined) {
+		return {};
+	}
+	const deprecated = (reason: string) => {
+		context.output.appendLine(`note: ${reason}. Finishing the current branch.`);
+		return {};
+	};
+	const defaultForms = new Set([
+		into,
+		...(intoRemote ? [`${intoRemote}/${into}`] : []),
+		...(base ? [base.name, ...(base.remote ? [`${base.remote}/${base.name}`] : [])] : []),
+	]);
+	if (defaultForms.has(name)) {
+		return deprecated(`"gsp post-pr ${name}" is deprecated: run "gsp post-pr" from the merged branch, or "gsp post-pr <branch>"`);
+	}
+	const protection = (branch: string) => plan.planned.find((planned) => planned.name === branch)?.protected ?? null;
+	const canFinishCurrent = current !== 'HEAD' && current !== name && !defaultForms.has(current) && protection(current) === null;
+	const oldForm = `so "gsp post-pr ${name}" is read as the deprecated "gsp post-pr <default branch>"`;
+	if (protection(name)) {
+		if (canFinishCurrent) {
+			return deprecated(`${name} is protected, ${oldForm}. If the pull request was merged into ${name}, run "gsp post-pr --into ${name}"`);
+		}
+		throw new PostPrUsageError(`${name} is protected: gsp post-pr never deletes it. To finish a branch merged into ${name}, run "gsp post-pr <branch> --into ${name}".`);
+	}
+	if (name === facts.mainCheckoutBranch && canFinishCurrent) {
+		return deprecated(`${name} is checked out in the main checkout, ${oldForm}. To finish ${name}, run gsp post-pr from the main checkout`);
+	}
+	if (facts.localBranches.includes(name)) {
+		return { requested: name };
+	}
+	const remoteRefs = plan.remotes.map((remote) => `refs/remotes/${remote}/${name}`);
+	const known =
+		context.deletionLog.list().some((entry) => entry.branch === name) ||
+		(await readTips(context.git, remoteRefs)).size > 0 ||
+		(options.github && (await mergedPullRequestsOf(context.gh, name)).length > 0);
+	if (!known) {
+		throw new PostPrUsageError(`No branch named "${name}".${suggest(name, facts.localBranches)}`, 'unknown-branch');
+	}
+	return { gone: name };
+}
+
 /**
  * `gsp post-pr`: once a pull request is merged, deletes its branch (and the
  * linked worktree it is checked out in), fast-forwards the default branch,
@@ -258,14 +361,8 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	]);
 	const current = head.stdout.trim();
 	const localBranches = locals.stdout.split('\n').filter(Boolean);
-	const mainCheckout = worktrees.find((worktree) => worktree.state === 'main')?.path ?? context.root;
-	// A merged branch that no longer exists is already deleted (`gh pr merge --delete-branch`): the rest goes on.
-	let gone: string | undefined;
-	if (options.branch !== undefined && options.branch !== options.into && !localBranches.includes(options.branch)) {
-		// The old form named the default branch: it may exist only on the remote.
-		const remoteHead = (await git(['for-each-ref', '--format=%(symref:lstrip=3)', 'refs/remotes/*/HEAD'])).stdout.split('\n');
-		gone = remoteHead.includes(options.branch) ? undefined : options.branch;
-	}
+	const main = worktrees.find((worktree) => worktree.state === 'main');
+	const mainCheckout = main?.path ?? context.root;
 
 	const apply = !options.dryRun && (options.yes || options.canPrompt);
 	const mode = apply ? 'apply' : 'plan';
@@ -289,14 +386,16 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		fetch: options.fetch,
 	};
 
-
-	let requested = options.branch;
-	if (requested === into) {
-		output.appendLine(
-			`note: "gsp post-pr ${into}" is deprecated: run "gsp post-pr" from the merged branch, or "gsp post-pr <branch>". Finishing the current branch.`
-		);
-		requested = undefined;
-	}
+	const { requested, gone } = await readPositional(context, options, {
+		name: options.branch,
+		current,
+		into,
+		intoRemote,
+		base,
+		plan,
+		localBranches,
+		mainCheckoutBranch: main && canonical(main.path) !== canonical(context.root) ? main.branch : undefined,
+	});
 	const targetName = gone ? undefined : (requested ?? (current !== 'HEAD' && current !== into ? current : undefined));
 
 	/** The branch to finish, compared with --into; the detected default branch stays protected. */
@@ -422,7 +521,6 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		output.appendLine(held.message);
 	}
 	const gitAfter = leaving() ? context.gitAt(mainCheckout) : git;
-
 	const worktree = targetWorktree();
 	if (target?.action === 'delete' && worktree?.isMain) {
 		try {
