@@ -82,10 +82,18 @@ suite('cli app (real git)', function () {
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 		assert.ok(planned.out.join('').includes('To apply this plan, run: gsp clean feature/a --yes'));
 
+		const json = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['--json'], json), EXIT.notApplied);
+		assert.strictEqual(JSON.parse(json.out.join('')).next, 'gsp clean feature/a --yes', 'the same command, for agents');
+
 		const accepted = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['sweep', '--yes'], accepted), EXIT.ok);
 		assert.ok(!branchExists(fx.repo, 'feature/a'));
 		assert.ok(accepted.out.join('').includes('1 deleted (1 empty) · restore with gsp restore feature/a'));
+
+		const done = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['--json'], done), EXIT.ok);
+		assert.strictEqual(JSON.parse(done.out.join('')).next, null);
 	});
 
 	test('dry run plans even with --yes, and the deprecated --merged changes nothing', async () => {
@@ -361,7 +369,7 @@ suite('cli app (real git)', function () {
 			const byName = new Map(
 				(report.branches as Array<{ name: string; worktree: unknown; reason: string }>).map((branch) => [branch.name, branch])
 			);
-			assert.deepStrictEqual(byName.get('feature/wt')?.worktree, { path: realWt, isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] } });
+			assert.deepStrictEqual(byName.get('feature/wt')?.worktree, { path: realWt, isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false });
 			assert.strictEqual(byName.get('feature/here')?.reason, 'current-branch');
 		});
 
@@ -381,10 +389,12 @@ suite('cli app (real git)', function () {
 			assert.ok(io.out.join('').includes(`→ git worktree unlock ${fs.realpathSync(locked)}`));
 		});
 
-		test('a worktree with uncommitted changes is kept, and so is its branch', async () => {
+		test('a worktree with uncommitted changes is kept, and so is its branch, even when status hides untracked files', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');
 			fs.writeFileSync(path.join(wt, 'wip.txt'), 'work in progress\n');
+			// Hidden from git status, but still lost with the worktree.
+			git(['config', 'status.showUntrackedFiles', 'no'], fx.repo);
 
 			const io = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['--yes'], io), EXIT.ok);
@@ -431,6 +441,69 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(await runCli(['clean', 'feature/env', '--yes', '--force'], createFakeIo(fx.repo)), EXIT.ok);
 			assert.ok(!fs.existsSync(env));
 			assert.ok(!branchExists(fx.repo, 'feature/env'));
+		});
+
+		test('a folder is regenerable only when Git reports it whole; secret-like files never are', async () => {
+			fs.writeFileSync(path.join(fx.repo, '.gitignore'), 'credentials.json\nnode_modules/\ndist/\n');
+			fs.mkdirSync(path.join(fx.repo, 'tools', 'build'), { recursive: true });
+			fs.writeFileSync(path.join(fx.repo, 'tools', 'build', 'run.sh'), 'echo\n');
+			git(['add', '.gitignore', 'tools'], fx.repo);
+			git(['commit', '-q', '-m', 'tools'], fx.repo);
+			git(['push', '-q', 'origin', 'main'], fx.repo);
+			const files: Record<string, string[]> = {
+				'feature/build': ['tools/build/credentials.json'],
+				'feature/dist': ['dist/app.js', 'dist/.env'],
+				'feature/deps': ['node_modules/pkg/.env', 'node_modules/pkg/index.js'],
+			};
+			for (const [branch, paths] of Object.entries(files)) {
+				makeGoneBranch(fx.repo, branch);
+				const wt = addWorktree(branch);
+				for (const file of paths) {
+					fs.mkdirSync(path.dirname(path.join(wt, file)), { recursive: true });
+					fs.writeFileSync(path.join(wt, file), 'x\n');
+				}
+			}
+
+			const plan = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--json'], plan), EXIT.notApplied);
+			const ignored = Object.fromEntries(
+				(JSON.parse(plan.out.join('')).branches as Array<{ name: string; reason: string; worktree: { ignoredFiles: unknown } | null }>)
+					.filter((branch) => branch.name !== 'main')
+					.map((branch) => [branch.name, [branch.reason, branch.worktree?.ignoredFiles]])
+			);
+			assert.deepStrictEqual(ignored, {
+				'feature/build': ['ignored-files', { count: 1, sample: ['tools/build/credentials.json'] }],
+				'feature/dist': ['ignored-files', { count: 1, sample: ['dist/.env'] }],
+				// Packages ship their own `.env` files: dependency folders are not searched.
+				'feature/deps': ['empty', { count: 0, sample: [] }],
+			});
+		});
+
+		test('a worktree holding a checked-out submodule is skipped, not left to fail', async () => {
+			const lib = path.join(fx.dir, 'lib');
+			git(['init', '-q', lib], fx.dir);
+			commitFile(lib, 'lib.txt', 'lib\n', 'lib');
+			git(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', lib, 'lib'], fx.repo);
+			git(['commit', '-q', '-m', 'add lib'], fx.repo);
+			git(['push', '-q', 'origin', 'main'], fx.repo);
+			makeGoneBranch(fx.repo, 'feature/sub');
+			makeGoneBranch(fx.repo, 'feature/bare');
+			const sub = addWorktree('feature/sub');
+			const bare = addWorktree('feature/bare');
+			git(['-c', 'protocol.file.allow=always', 'submodule', 'update', '-q', '--init'], sub);
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--yes'], io), EXIT.ok);
+			assert.ok(fs.existsSync(path.join(sub, 'lib', 'lib.txt')));
+			assert.ok(branchExists(fx.repo, 'feature/sub'));
+			assert.ok(!fs.existsSync(bare), 'its submodule is not checked out: removed');
+			const real = fs.realpathSync(sub);
+			assert.ok(
+				io.out.join('').includes(
+					`skip    feature/sub   worktree ${real} holds submodules, which git worktree remove refuses to delete (already in origin/main) → check the submodules of ${real}`
+				),
+				io.out.join('')
+			);
 		});
 
 		test('a clean worktree in the middle of a rebase is never removed, nor its branch deleted, even with --force', async () => {
@@ -613,10 +686,12 @@ suite('cli app (real git)', function () {
 			assert.ok(io.out.join('').includes('Removed worktree'));
 		});
 
-		test('worktree remove refuses a dirty worktree without --force and removes it with --force', async () => {
+		test('worktree remove refuses a dirty worktree without --force, even when status hides untracked files, and removes it with --force', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');
 			fs.writeFileSync(path.join(wt, 'wip.txt'), 'work in progress\n');
+			// Hidden from git status, but still lost with the worktree.
+			git(['config', 'status.showUntrackedFiles', 'no'], fx.repo);
 
 			const refused = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt'], refused), EXIT.failed);

@@ -6,10 +6,10 @@ const EXIT_CODES = `Exit codes:
   2  Invalid arguments, or a branch that does not exist
   3  Sync paused on conflicts: resolve them, then run "gsp resume"
   4  Cancelled at a prompt
-  5  clean, post-pr: some planned deletions were not applied (no --yes,
-     or --force needed); the output says what was done. post-pr also
-     when the merged branch was not deleted. Other commands: a
-     confirmation was needed but nobody could answer; rerun with --yes`;
+  5  clean, post-pr: some planned deletions were not applied; the output
+     says why and what to run next. post-pr also when the merged branch
+     was not deleted. Other commands: a confirmation was needed but
+     nobody could answer; rerun with --yes`;
 
 const GLOBAL_OPTIONS = `  -C <path>          Run as if started in <path>
       --non-interactive

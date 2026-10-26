@@ -120,7 +120,7 @@ suite('post-pr plan', () => {
 		const rebasing = decideTarget(branch({ worktree: worktree({ path: '/repo', isMain: true, inProgress: 'rebase' }) }), { ...OPTIONS, force: true });
 		assert.deepStrictEqual([rebasing.action, rebasing.reason, rebasing.worktree?.isMain], ['skip', 'rebase-in-progress', true]);
 		const ignored = decideTarget(branch({ worktree: { ...worktree(), ignoredFiles: { count: 1, sample: ['.env'] } } }), OPTIONS);
-		assert.deepStrictEqual([ignored.action, ignored.reason, ignored.hint], ['skip', 'ignored-files', 'gsp post-pr feature/x --yes --force']);
+		assert.deepStrictEqual([ignored.action, ignored.reason, ignored.hint], ['skip', 'ignored-files', 'move what you need out of /wt, then: gsp post-pr feature/x --yes --force']);
 		const tracked = decideTarget(branch({ upstreamOf: ['feature/y'] }), OPTIONS);
 		assert.deepStrictEqual([tracked.action, tracked.reason], ['skip', 'tracked-by-kept-branch']);
 	});

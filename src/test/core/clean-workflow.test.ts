@@ -2,8 +2,8 @@ import * as assert from 'assert';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { decideActions, type CleanBranch, type PlannedBranch, type RemoteCheck } from '../../core/clean-plan';
-import { holdToPlan, runCleanWorkflow, type CleanOptions } from '../../core/clean-workflow';
+import { decideActions, formatSummary, type CleanBranch, type PlannedBranch, type RemoteCheck } from '../../core/clean-plan';
+import { holdToBase, holdToPlan, runCleanWorkflow, type CleanOptions } from '../../core/clean-workflow';
 import { gitFailureReason } from '../../core/errors';
 import { isRegenerable } from '../../core/ignored-files';
 import { branchExists, commitFile, createRepoFixture, git, makeGoneBranch, type RepoFixture } from '../cli/git-fixture';
@@ -51,6 +51,8 @@ suite('clean workflow (real git)', function () {
 		makeGoneBranch(fx.repo, 'feature/wt');
 		const wt = path.join(fx.dir, 'wt');
 		git(['worktree', 'add', '-q', wt, 'feature/wt'], fx.repo);
+		// The new file is untracked: it must count even when status hides untracked files.
+		git(['config', 'status.showUntrackedFiles', 'no'], fx.repo);
 
 		// The last check before deleting reads the branch tip: someone starts working in the worktree meanwhile.
 		const { context } = contextFor({
@@ -68,26 +70,49 @@ suite('clean workflow (real git)', function () {
 		assert.ok(branchExists(fx.repo, 'feature/wt'));
 	});
 
+	test('an ignored file that replaces one the plan showed counts as a change, even with --force', async () => {
+		makeGoneBranch(fx.repo, 'feature/wt');
+		const wt = path.join(fx.dir, 'wt');
+		git(['worktree', 'add', '-q', wt, 'feature/wt'], fx.repo);
+		fs.appendFileSync(path.join(fx.repo, '.git', 'info', 'exclude'), '*.local\n');
+		fs.writeFileSync(path.join(wt, 'shown.local'), 'seen in the plan\n');
+
+		// Same count after the fetch, but not the file the plan showed.
+		const { context } = contextFor({
+			onGit: (command) => {
+				if (command.startsWith('fetch --prune')) {
+					fs.renameSync(path.join(wt, 'shown.local'), path.join(wt, 'other.local'));
+				}
+			},
+		});
+		const { report, outcome } = await runCleanWorkflow(context, { ...APPLY, force: true, patterns: ['feature/wt'] });
+		const [branch] = report.branches;
+		assert.deepStrictEqual([branch.action, branch.reason, branch.worktree?.ignoredFiles], ['skip', 'worktree-changed', { count: 1, sample: ['other.local'] }]);
+		assert.strictEqual(outcome, 'not-applied');
+		assert.ok(fs.existsSync(path.join(wt, 'other.local')));
+		assert.ok(branchExists(fx.repo, 'feature/wt'));
+	});
+
 	test('the picker comes before any write: a cancel leaves no fetch and no prune behind', async () => {
 		makeGoneBranch(fx.repo, 'feature/a');
 		const fake = contextFor({ pickMany: () => undefined });
 		const { outcome } = await runCleanWorkflow(fake.context, { ...APPLY, yes: false, canPrompt: true });
 		assert.strictEqual(outcome, 'cancelled');
 		assert.strictEqual(fake.pickManyRequests.length, 1);
-		assert.ok(!fake.commands.some((command) => command.includes(' fetch ') || command.startsWith('worktree prune')), fake.commands.join('\n'));
+		assert.ok(!fake.commands.some((command) => /^(.* )?fetch /.test(command) || command.startsWith('worktree prune')), fake.commands.join('\n'));
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 
 		// Approved: the fetch only comes after the picker.
 		let fetchedBeforePicking = false;
 		const approved = contextFor({
 			pickMany: (items) => {
-				fetchedBeforePicking = approved.commands.some((command) => command.includes(' fetch '));
+				fetchedBeforePicking = approved.commands.some((command) => /^(.* )?fetch /.test(command));
 				return items.map((item) => item.label);
 			},
 		});
 		assert.strictEqual((await runCleanWorkflow(approved.context, { ...APPLY, yes: false, canPrompt: true })).outcome, 'done');
 		assert.strictEqual(fetchedBeforePicking, false);
-		assert.ok(approved.commands.some((command) => command.includes(' fetch --prune')));
+		assert.ok(approved.commands.some((command) => command.startsWith('fetch --prune')));
 		assert.ok(!branchExists(fx.repo, 'feature/a'));
 	});
 
@@ -101,7 +126,7 @@ suite('clean workflow (real git)', function () {
 		git(['push', '-q', 'origin', '--delete', 'feature/x'], fx.repo);
 
 		const { context, appendedLines } = contextFor({
-			git: { '-c remote.origin.followRemoteHEAD=always fetch --prune --multiple origin': new Error('fatal: unable to access the remote') },
+			git: { 'fetch --prune --multiple origin': new Error('fatal: unable to access the remote') },
 		});
 		const { report, outcome } = await runCleanWorkflow(context, APPLY);
 		const branch = report.branches.find((entry) => entry.name === 'feature/x');
@@ -110,6 +135,24 @@ suite('clean workflow (real git)', function () {
 		assert.strictEqual(outcome, 'not-applied');
 		assert.ok(branchExists(fx.repo, 'feature/x'));
 		assert.strictEqual(appendedLines.filter((line) => line.startsWith('Could not reach the remote')).length, 1);
+	});
+
+	test('when the fetch fails, a deletion that only ls-remote proved is reported as fetch-failed', async () => {
+		// Deleted on the remote, not pruned here: only ls-remote sees it gone. Its commit is on another remote branch.
+		git(['checkout', '-q', '-b', 'feature/x'], fx.repo);
+		commitFile(fx.repo, 'x.txt', 'x\n', 'x');
+		git(['push', '-q', '-u', 'origin', 'feature/x'], fx.repo);
+		git(['push', '-q', 'origin', 'feature/x:feature/copy'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['branch', '-q', '-D', 'feature/x'], fx.remote);
+
+		const { context } = contextFor({ git: { 'fetch --prune --multiple origin': new Error('fatal: unable to access the remote') } });
+		const { report, outcome } = await runCleanWorkflow(context, APPLY);
+		const branch = report.branches.find((entry) => entry.name === 'feature/x');
+		assert.deepStrictEqual([branch?.action, branch?.reason, branch?.hint], ['skip', 'fetch-failed', 'gsp clean feature/x --yes']);
+		assert.strictEqual(outcome, 'not-applied');
+		assert.strictEqual(formatSummary(report), 'Nothing deleted · 1 skipped (1 fetch failed)');
+		assert.ok(branchExists(fx.repo, 'feature/x'));
 	});
 
 	test('a plan reading ls-remote only turns branches alive for their unmerged commits into upstream-gone', async () => {
@@ -202,6 +245,16 @@ suite('clean workflow', () => {
 		});
 	});
 
+	test('with --yes, deletes what the fetch proves, and still reports what it disproves', () => {
+		const planned = decide([branch('kept'), branch('now-alive')]);
+		const current = decide([branch('kept'), branch('now-alive', { verdict: 'alive', reason: 'unmerged-commits' }), branch('new')]);
+		assert.deepStrictEqual(actions(holdToPlan(planned, current, fetched, false)), {
+			kept: ['delete', 'squash-merged', 'gsp clean kept --yes'],
+			'now-alive': ['skip', 'plan-changed', 'gsp clean now-alive'],
+			new: ['delete', 'squash-merged', 'gsp clean new --yes'],
+		});
+	});
+
 	test('after a failed fetch, only deletions that remote-tracking refs alone prove are held back', () => {
 		const branches = [branch('gone', { reason: 'upstream-gone' }), branch('squashed')];
 		const unreachable: RemoteCheck = { source: 'local-refs', reason: 'unreachable', detail: 'offline' };
@@ -213,6 +266,20 @@ suite('clean workflow', () => {
 		assert.strictEqual(holdToPlan(decide(branches), decide(branches), noFetch)[0].action, 'delete', '--no-fetch is a choice');
 	});
 
+	test('a default branch that changed holds back every deletion, and the planned one is never deleted', () => {
+		const base = (name: string) => ({ name, ref: `refs/remotes/origin/${name}`, remote: 'origin', tip: 'b'.repeat(40), source: 'remote-head' as const });
+		const branches = decide([branch('main'), branch('feature/a')]);
+		assert.deepStrictEqual(actions(holdToBase(branches, base('main'), base('main')).branches), {
+			main: ['skip', 'protected', null],
+			'feature/a': ['delete', 'squash-merged', 'gsp clean feature/a --yes'],
+		});
+		const moved = holdToBase(branches, base('main'), base('develop'));
+		assert.deepStrictEqual(actions(moved.branches), { main: ['skip', 'protected', null], 'feature/a': ['skip', 'plan-changed', 'gsp clean --dry-run'] });
+		assert.match(moved.message ?? '', /^The default branch changed from origin\/main to origin\/develop during the fetch/);
+		assert.strictEqual(holdToBase(branches, null, base('main')).branches[0].reason, 'plan-changed');
+		assert.strictEqual(holdToBase(decide([]), base('main'), base('develop')).message, undefined, 'nothing held back, nothing to say');
+	});
+
 	test("Git's own reason is kept, not Node's command line", () => {
 		const failure = Object.assign(new Error('Command failed: git worktree remove /wt\nfatal: /wt is locked'), { stderr: "fatal: '/wt' contains modified or untracked files, use --force to delete it\n" });
 		assert.strictEqual(gitFailureReason(failure), "'/wt' contains modified or untracked files, use --force to delete it");
@@ -220,12 +287,14 @@ suite('clean workflow', () => {
 		assert.strictEqual(gitFailureReason('plain'), 'plain');
 	});
 
-	test('regenerable folders and files, at any depth', () => {
+	test('regenerable folders, at any depth, only as whole entries; secret-like names never', () => {
 		for (const regenerable of ['node_modules/', 'packages/app/node_modules/', 'vendor/bundle/', 'dist/', 'web/.next/', 'tsconfig.tsbuildinfo', 'a/.DS_Store', '.venv/', 'target/']) {
 			assert.strictEqual(isRegenerable(regenerable), true, regenerable);
 		}
-		for (const kept of ['.env', 'notes.md', 'vendor/', 'secrets/', 'distribution/', 'build.log.bak', '.DS_Store/']) {
-			assert.strictEqual(isRegenerable(kept), false, kept);
+		const kept = ['.env', 'notes.md', 'vendor/', 'secrets/', 'distribution/', 'build.log.bak', '.DS_Store/', 'tools/build/credentials.json', 'dist/app.js', 'build/cache/'];
+		const secrets = ['dist/.env', '.env.local', 'node_modules/.npmrc', 'certs/server.PEM', 'tls.key', 'aws-credentials.tsbuildinfo', 'my-secret.tsbuildinfo', '.netrc'];
+		for (const path of [...kept, ...secrets]) {
+			assert.strictEqual(isRegenerable(path), false, path);
 		}
 	});
 });

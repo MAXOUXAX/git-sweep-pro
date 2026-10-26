@@ -4,7 +4,7 @@ import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
-import { applyCommand, CLEAN_SCHEMA, formatBranchLines, formatSummary, type CleanReport } from '../core/clean-plan';
+import { CLEAN_SCHEMA, formatBranchLines, formatSummary, nextCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
 import { runCleanWorkflow, UnknownBranchError, type CleanOutcome } from '../core/clean-workflow';
 import { createGhRunner } from '../core/github-signal';
 import { formatNextSteps, formatPostPrLines, type PostPrReport } from '../core/post-pull-request-plan';
@@ -270,19 +270,12 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 }
 
 /** What to do next when the plan was not applied, or `undefined` when there is nothing to say. */
-function nextStep(report: CleanReport, outcome: CleanOutcome, options: CliOptions): string | undefined {
+function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | null): string | undefined {
 	if (outcome !== 'not-applied') {
 		return undefined;
 	}
-	if (report.summary.delete > 0 && !report.branches.some((branch) => branch.result !== undefined)) {
-		const command = applyCommand(report.branches, {
-			...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-			patterns: options.positionals,
-			protectedPatterns: options.protect,
-			github: options.github,
-			fetch: options.fetch,
-		});
-		return `Nothing was changed. To apply this plan, run: ${command}`;
+	if (next && report.summary.delete > 0 && !report.branches.some((branch) => branch.result !== undefined)) {
+		return `Nothing was changed. To apply this plan, run: ${next}`;
 	}
 	const count = (test: (branch: CleanReport['branches'][number]) => boolean) => report.branches.filter(test).length;
 	const unpushed = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'dead');
@@ -296,19 +289,30 @@ function nextStep(report: CleanReport, outcome: CleanOutcome, options: CliOption
 	const changed = count((branch) => branch.reason === 'plan-changed' || branch.reason === 'fetch-failed' || branch.reason === 'worktree-changed');
 	const lines = [
 		...(kept.length > 0 ? [`Kept without --force: ${kept.join(', ')}. Each line above gives the command.`] : []),
-		...(changed > 0 ? [`${changed} changed while applying: run gsp clean again.`] : []),
+		...(changed > 0 && next ? [`${changed} not deleted, as things changed while applying. Review them with: ${next}`] : []),
 	];
 	return lines.length > 0 ? lines.join('\n') : undefined;
 }
 
 function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: CliOptions, frontend: Frontend, io: CliIo): void {
+	const command =
+		outcome === 'cancelled'
+			? null
+			: nextCommand(report, {
+					...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+					patterns: options.positionals,
+					protectedPatterns: options.protect,
+					github: options.github,
+					fetch: options.fetch,
+				});
 	if (options.json) {
-		io.stdout(`${JSON.stringify(report, null, 2)}\n`);
+		const document: CleanDocument = { ...report, next: command };
+		io.stdout(`${JSON.stringify(document, null, 2)}\n`);
 		return;
 	}
 	const lines = formatBranchLines(report);
 	const summary = outcome === 'cancelled' ? 'Cancelled. Nothing was deleted.' : formatSummary(report);
-	const next = nextStep(report, outcome, options);
+	const next = nextStep(report, outcome, command);
 	if (options.rpc || frontend.canPrompt) {
 		lines.forEach((line) => frontend.output.appendLine(line));
 		const message = next ? `${summary}\n${next}` : summary;

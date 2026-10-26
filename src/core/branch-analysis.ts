@@ -1023,8 +1023,9 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 			}),
 			CONCURRENCY,
 			async (path) => {
-				// No optional locks: status must not refresh and rewrite the index. Unknown counts as dirty.
-				const dirty = await git(['-C', path, '--no-optional-locks', 'status', '--porcelain']).then(
+				// No optional locks: status must not refresh and rewrite the index. Untracked files count,
+				// even when status.showUntrackedFiles hides them. Unknown counts as dirty.
+				const dirty = await git(['-C', path, '--no-optional-locks', 'status', '--porcelain', '--untracked-files=normal']).then(
 					(result) => result.stdout.trim().length > 0,
 					() => true
 				);

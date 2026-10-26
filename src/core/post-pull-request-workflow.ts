@@ -6,8 +6,8 @@ import {
 	buildReport,
 	holdToPlan,
 	planBranches,
+	inspectWorktrees,
 	refreshBranches,
-	withIgnoredFiles,
 	type CleanContext,
 	type CleanOptions,
 	type CleanOutcome,
@@ -236,7 +236,11 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	const targetName = requested ?? (current !== 'HEAD' && current !== into ? current : undefined);
 
 	/** The branch to finish, compared with --into; the detected default branch stays protected. */
-	const analyseTarget = async (planned: readonly PlannedBranch[], fetched: boolean): Promise<PlannedBranch | undefined> => {
+	const analyseTarget = async (
+		planned: readonly PlannedBranch[],
+		ignored: Map<string, readonly string[]>,
+		fetched: boolean
+	): Promise<PlannedBranch | undefined> => {
 		if (!targetName || into === base?.name) {
 			return planned.find((branch) => branch.name === targetName);
 		}
@@ -250,7 +254,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 				fetched,
 			}
 		);
-		return (await withIgnoredFiles(git, result.branches, named)).find((branch) => branch.name === targetName);
+		return (await inspectWorktrees(git, result.branches, named, ignored)).find((branch) => branch.name === targetName);
 	};
 	const decide = async (branch: PlannedBranch | undefined, remoteAhead: boolean): Promise<CleanBranch | null> => {
 		const worktree = branch?.worktree && !branch.worktree.prunable ? branch.worktree : null;
@@ -268,7 +272,8 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		plan.remote.source === 'ls-remote' && intoRemote !== undefined
 			? await isRemoteAhead(git, intoRef, intoRemote, (await readTips(git, [intoRef])).get(intoRef) ?? '')
 			: false;
-	let analysed = await analyseTarget(plan.planned, false);
+	const plannedIgnored = new Map(plan.ignored);
+	let analysed = await analyseTarget(plan.planned, plannedIgnored, false);
 	let target = await decide(analysed, remoteAhead);
 	// The clean step: the other branches, with the rules of `gsp clean --yes`.
 	const excluded = new Set([targetName, ...(into === base?.name ? [] : [into])]);
@@ -328,10 +333,14 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	// other branches are held to the plan, as with gsp clean.
 	const refreshed = await refreshBranches(context, read, plan, named);
 	({ analysis, remote, worktreesPruned } = refreshed);
-	analysed = await analyseTarget(refreshed.planned, remote.source === 'fetch');
+	const fetchedIgnored = new Map(refreshed.ignored);
+	analysed = await analyseTarget(refreshed.planned, fetchedIgnored, remote.source === 'fetch');
 	const fresh = await decide(analysed, false);
+	// The worktrees as the plan showed them, to check them against before removing one. The merged
+	// branch is decided again after the fetch: its worktree is checked against the ignored files only.
+	const shown = { branches: others, ignored: [plannedIgnored, fetchedIgnored] };
 	target = fresh && holdToPlan([fresh], [fresh], remote)[0];
-	others = holdToPlan(others, decideOthers(refreshed.planned), remote);
+	others = holdToPlan(others, decideOthers(refreshed.planned), remote, !options.yes);
 	const gitAfter = leaving() ? context.gitAt(mainCheckout) : git;
 
 	const worktree = targetWorktree();
@@ -345,10 +354,10 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	}
 	if (target?.action === 'delete' && target.result === undefined) {
 		const deleting = target;
-		[target] = await ui.withProgress({ title: `Deleting ${deleting.name}` }, () => applyDeletions(gitAfter, [deleting], targetRecorder));
+		[target] = await ui.withProgress({ title: `Deleting ${deleting.name}` }, () => applyDeletions(gitAfter, [deleting], shown, targetRecorder));
 	}
 	const defaultBranch = await updateDefaultBranch(context, gitAfter, into, upstreamRef, { apply });
-	others = await applyDeletions(gitAfter, others, cleanRecorder);
+	others = await applyDeletions(gitAfter, others, shown, cleanRecorder);
 	return finish(undefined, defaultBranch);
 }
 

@@ -36,6 +36,8 @@ export type SkipReason =
 	| 'main-worktree'
 	| 'locked-worktree'
 	| 'dirty-worktree'
+	/** Its worktree holds submodules, which `git worktree remove` refuses to delete. */
+	| 'submodules'
 	/** Its worktree holds ignored files that are not regenerable (see `ignoredFiles`): removing it would delete them. `--force` lifts it. */
 	| 'ignored-files'
 	/** Holds commits found nowhere else, or is alive and named explicitly: only `--force` deletes it. */
@@ -44,7 +46,7 @@ export type SkipReason =
 	| 'tracked-by-kept-branch'
 	/** Left out of the interactive picker. */
 	| 'not-selected'
-	/** Applying: the analysis after the fetch no longer matches the plan that was shown or picked from. */
+	/** Applying: the analysis after the fetch no longer matches the plan that was shown or picked from, or the default branch changed. */
 	| 'plan-changed'
 	/** Applying: the fetch failed, and the only proof relies on remote-tracking refs that may be out of date. */
 	| 'fetch-failed'
@@ -58,12 +60,12 @@ export type IgnoredFiles = {
 	readonly sample: readonly string[];
 };
 
-/** A branch's worktree, with its ignored files when they were looked for (linked worktrees of candidates). */
-export type CleanWorktree = BranchWorktree & { readonly ignoredFiles: IgnoredFiles | null };
+/** A branch's worktree, with its ignored files and whether it holds submodules, when they were looked for (linked worktrees of candidates). */
+export type CleanWorktree = BranchWorktree & { readonly ignoredFiles: IgnoredFiles | null; readonly submodules: boolean | null };
 
-/** An analysed branch, its worktree's ignored files attached when they were looked for. */
+/** An analysed branch, what its worktree holds attached when it was looked for. */
 export type PlannedBranch = Omit<BranchAnalysis, 'worktree'> & {
-	readonly worktree: (BranchWorktree & { readonly ignoredFiles?: IgnoredFiles | null }) | null;
+	readonly worktree: (BranchWorktree & { readonly ignoredFiles?: IgnoredFiles | null; readonly submodules?: boolean | null }) | null;
 };
 
 /** What happened to a branch when the plan was applied. */
@@ -123,7 +125,10 @@ export type CleanSummary = {
 	readonly reasons: Readonly<Partial<Record<DeadReason | AliveReason, number>>>;
 };
 
-/** The `--json` document of `gsp clean`. */
+/** The `--json` document of `gsp clean`: the report, and the command to run next (see {@link nextCommand}). */
+export type CleanDocument = CleanReport & { readonly next: string | null };
+
+/** The report of `gsp clean`. */
 export type CleanReport = {
 	readonly schema: typeof CLEAN_SCHEMA;
 	readonly mode: CleanMode;
@@ -204,8 +209,19 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 			hint: `${cmd('git', '-C', worktree.path, 'stash', '--include-untracked')} && ${cmd('gsp', 'clean', branch.name, '--yes')}`,
 		};
 	}
+	if (worktree?.submodules) {
+		// `--force` would delete whatever the submodules hold: let the user check them first.
+		return {
+			reason: 'submodules',
+			hint: `check the submodules of ${quoteShellArg(worktree.path)} (${cmd('git', '-C', worktree.path, 'submodule', 'foreach', '--recursive', 'git', 'status', '--short')}), then: ${cmd('git', 'worktree', 'remove', '--force', worktree.path)} && ${cmd('gsp', 'clean', branch.name, '--yes')}`,
+		};
+	}
 	if (worktree?.ignoredFiles && worktree.ignoredFiles.count > 0 && !options.force) {
-		return { reason: 'ignored-files', hint: cmd('gsp', 'clean', branch.name, '--yes', '--force') };
+		// Removing the worktree deletes them for good: save what matters first.
+		return {
+			reason: 'ignored-files',
+			hint: `move what you need out of ${quoteShellArg(worktree.path)}, then: ${cmd('gsp', 'clean', branch.name, '--yes', '--force')}`,
+		};
 	}
 	return undefined;
 }
@@ -235,7 +251,7 @@ export function decideActions(branches: readonly PlannedBranch[], options: Decid
 			unpushedCommits: branch.unpushedCommits,
 			upstream: branch.upstream,
 			upstreamState: branch.upstreamState,
-			worktree: branch.worktree && { ...branch.worktree, ignoredFiles: branch.worktree.ignoredFiles ?? null },
+			worktree: branch.worktree && { ...branch.worktree, ignoredFiles: branch.worktree.ignoredFiles ?? null, submodules: branch.worktree.submodules ?? null },
 			needsForce,
 			hint,
 		});
@@ -335,6 +351,11 @@ export const MAX_NAMED_BRANCHES = 10;
 export function applyCommand(branches: readonly CleanBranch[], scope: CleanScope): string {
 	const deleting = branches.filter((branch) => branch.action === 'delete' && branch.result === undefined);
 	const targets = deleting.length > 0 && deleting.length <= MAX_NAMED_BRANCHES ? deleting.map((branch) => branch.name) : scope.patterns;
+	return scopedCommand(scope, targets, ['--yes', ...(deleting.some((branch) => branch.needsForce) ? ['--force'] : [])]);
+}
+
+/** `gsp clean` on `targets`, with every option of `scope` that narrows it, then `flags`. */
+function scopedCommand(scope: CleanScope, targets: readonly string[], flags: readonly string[]): string {
 	return cmd(
 		'gsp',
 		...(scope.cwd === undefined ? [] : ['-C', scope.cwd]),
@@ -343,9 +364,25 @@ export function applyCommand(branches: readonly CleanBranch[], scope: CleanScope
 		...scope.protectedPatterns.flatMap((pattern) => ['--protect', pattern]),
 		...(scope.github ? [] : ['--no-github']),
 		...(scope.fetch ? [] : ['--no-fetch']),
-		'--yes',
-		...(deleting.some((branch) => branch.needsForce) ? ['--force'] : [])
+		...flags
 	);
+}
+
+/**
+ * The command to run next, or null when nothing is left that gsp can do on
+ * its own: the one that applies the planned deletions not carried out, or,
+ * when some changed while applying, the one that plans again (within the
+ * same scope) to review them. Branches that only `--force` deletes are left
+ * to their own hint, which says what to save first.
+ */
+export function nextCommand(report: Pick<CleanReport, 'branches'>, scope: CleanScope): string | null {
+	if (report.branches.some((branch) => branch.action === 'delete' && branch.result === undefined)) {
+		return applyCommand(report.branches, scope);
+	}
+	if (report.branches.some((branch) => RERUN_LIFTS.has(branch.reason))) {
+		return scopedCommand(scope, scope.patterns, ['--dry-run']);
+	}
+	return null;
 }
 
 /** The command that restores `branches`, or null when there are none. */
@@ -424,6 +461,8 @@ function describeSkip(branch: CleanBranch): string {
 			return `worktree ${worktree} is locked`;
 		case 'dirty-worktree':
 			return `worktree ${worktree} has uncommitted changes`;
+		case 'submodules':
+			return `worktree ${worktree} holds submodules, which git worktree remove refuses to delete`;
 		case 'ignored-files':
 			return `removing worktree ${worktree} would delete ${branch.worktree?.ignoredFiles ? describeIgnored(branch.worktree.ignoredFiles) : 'ignored files'}, needs --force`;
 		case 'needs-force':
@@ -434,7 +473,7 @@ function describeSkip(branch: CleanBranch): string {
 		case 'not-selected':
 			return 'not selected';
 		case 'plan-changed':
-			return 'changed since the plan was made: run gsp clean again';
+			return 'changed since the plan was made';
 		case 'fetch-failed':
 			return 'the fetch failed, and only the remote-tracking refs prove it';
 		case 'worktree-changed':
@@ -486,24 +525,37 @@ function describeReasons(reasons: CleanSummary['reasons']): string {
 	return parts.length > 0 ? ` (${parts.join(', ')})` : '';
 }
 
+/** Skips of planned deletions that running `gsp clean` again may carry out, as the summary names them. */
+const RERUN_LABEL: Partial<Record<CleanBranch['reason'], string>> = {
+	'plan-changed': 'changed since the plan',
+	'fetch-failed': 'fetch failed',
+	'worktree-changed': 'worktree changed',
+};
+
 /** The one summary line: e.g. "3 deleted (2 squash-merged, 1 empty) · 2 skipped · restore with gsp restore a b c". */
 export function formatSummary(report: CleanReport): string {
 	const { summary, mode } = report;
-	if (summary.delete === 0 && summary.needsForce === 0 && report.worktreesPruned.length === 0) {
+	const rerun = Object.entries(RERUN_LABEL)
+		.map(([reason, label]) => [report.branches.filter((branch) => branch.reason === reason).length, label] as const)
+		.filter(([count]) => count > 0);
+	if (summary.delete === 0 && summary.needsForce === 0 && rerun.length === 0 && report.worktreesPruned.length === 0) {
 		return summary.skipped > 0 ? `Nothing to clean · ${summary.skipped} skipped.` : 'Nothing to clean.';
 	}
 	const parts: string[] = [];
 	if (mode === 'plan') {
 		parts.push(`${summary.delete} to delete${describeReasons(summary.reasons)}`);
 	} else {
-		parts.push(`${summary.deleted} deleted${describeReasons(summary.reasons)}`);
+		parts.push(summary.deleted > 0 ? `${summary.deleted} deleted${describeReasons(summary.reasons)}` : 'Nothing deleted');
 		if (summary.failed > 0) {
 			parts.push(`${summary.failed} failed`);
 		}
 	}
 	if (summary.skipped > 0) {
-		const force = summary.needsForce > 0 ? ` (${summary.needsForce} ${summary.needsForce === 1 ? 'needs' : 'need'} --force)` : '';
-		parts.push(`${summary.skipped} skipped${force}`);
+		const why = [
+			...(summary.needsForce > 0 ? [`${summary.needsForce} ${summary.needsForce === 1 ? 'needs' : 'need'} --force`] : []),
+			...rerun.map(([count, label]) => `${count} ${label}`),
+		];
+		parts.push(`${summary.skipped} skipped${why.length > 0 ? ` (${why.join(', ')})` : ''}`);
 	}
 	if (report.worktreesPruned.length > 0) {
 		parts.push(`${plural(report.worktreesPruned.length, 'worktree registration')} ${mode === 'plan' ? 'to prune' : 'pruned'}`);
