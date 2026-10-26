@@ -18,10 +18,10 @@ export type UpstreamState = 'tracking' | 'gone' | 'none';
  * Why a branch is dead:
  * - `empty`: it points at a commit of the base's own history, so it adds nothing;
  * - `merged`: its tip is reachable from the base (a merge commit brought it in);
- * - `rebase-merged`: each of its commits has exactly the same patch on the base, whitespace included;
+ * - `rebase-merged`: each of its commits has exactly the same patch on the base, whitespace included, and its merges add nothing;
  * - `squash-merged`: the base reached the exact content of every file it changed;
  * - `pr-merged`: its tip is the head of a pull request merged into the default branch, or behind it;
- * - `commits-merged`: each of its own commits is proven merged separately (integration branches);
+ * - `commits-merged`: each of its own commits is proven merged separately, and its merges add nothing (integration branches);
  * - `upstream-gone`: its upstream was deleted. Not a proof by itself: see `unpushedCommits`.
  */
 export type DeadReason = 'empty' | 'merged' | 'rebase-merged' | 'squash-merged' | 'pr-merged' | 'commits-merged' | 'upstream-gone';
@@ -630,6 +630,30 @@ class Prover {
 		return exact;
 	}
 
+	/**
+	 * The branch's merge commits, and whether one of them changes something
+	 * neither parent has (a conflict resolution, an "evil merge"): git cherry
+	 * never looks at merges, so patch ids alone would miss that work.
+	 */
+	async mergesOf(tip: string): Promise<{ merges: number; ownChanges: boolean }> {
+		const output = await this.gitRead([
+			'log',
+			'--merges',
+			'--cc',
+			'--format=commit %H',
+			'--no-color',
+			'--no-ext-diff',
+			'--no-textconv',
+			'--no-relative',
+			'--no-show-signature',
+			tip,
+			'--not',
+			this.base.ref,
+		]);
+		const headers = lines(output).filter((line) => /^commit [0-9a-f]{40,64}$/.test(line));
+		return { merges: headers.length, ownChanges: lines(output).length > headers.length };
+	}
+
 	openPullRequest(commit: string): PullRequest | undefined {
 		return this.github?.pullRequests.find((pr) => pr.state === 'open' && pr.headSha === commit);
 	}
@@ -719,7 +743,8 @@ function parseCherry(output: string): Map<string, boolean> {
 /**
  * The squash proof for a whole branch, from its merge base; or, when its
  * oldest commits are already on the base by patch id (a branch started from
- * a release branch that was later rebase-merged), from the last of them.
+ * a release branch that was later rebase-merged), from the last of them,
+ * provided patch ids cover the branch's merges.
  */
 async function squashProof(
 	git: RunGit,
@@ -727,7 +752,8 @@ async function squashProof(
 	base: AnalysisBase,
 	tip: string,
 	mergeBase: string,
-	cherry: ReadonlyMap<string, boolean>
+	cherry: ReadonlyMap<string, boolean>,
+	patchIdsCover: () => Promise<boolean>
 ): Promise<{ squashCommit: string; files: number; patchIdCommits: number } | undefined> {
 	const fromMergeBase = await prover.fileStateProof(mergeBase, tip, mergeBase);
 	if (fromMergeBase) {
@@ -736,7 +762,7 @@ async function squashProof(
 	// git cherry lists the oldest commit first.
 	const commits = [...cherry];
 	const prefix = commits.findIndex(([, upstream]) => !upstream);
-	if (prefix <= 0) {
+	if (prefix <= 0 || !(await patchIdsCover())) {
 		return undefined;
 	}
 	const last = commits[prefix - 1][0];
@@ -768,10 +794,14 @@ async function proveTip(git: RunGit, prover: Prover, tip: string, isAncestor: bo
 	}
 	const cherry = mergeBase ? await prover.exactCherry(tip, parseCherry((await git(['cherry', base.ref, tip, mergeBase])).stdout)) : new Map<string, boolean>();
 	const unmerged = [...cherry.values()].filter((upstream) => !upstream).length;
-	if (mergeBase && cherry.size > 0 && unmerged === 0) {
+	// Patch ids and per-commit proofs only see non-merge commits: they hold when no merge adds work of its own.
+	let merges: Promise<{ merges: number; ownChanges: boolean }> | undefined;
+	const mergesOf = () => (merges ??= prover.mergesOf(tip));
+	const patchIdsCover = async () => !(await mergesOf()).ownChanges;
+	if (mergeBase && cherry.size > 0 && unmerged === 0 && (await patchIdsCover())) {
 		return { verdict: 'dead', reason: 'rebase-merged', evidence: { method: 'patch-id', base: base.ref, commits: cherry.size } };
 	}
-	const squash = mergeBase ? await squashProof(git, prover, base, tip, mergeBase, cherry) : undefined;
+	const squash = mergeBase ? await squashProof(git, prover, base, tip, mergeBase, cherry, patchIdsCover) : undefined;
 	if (squash) {
 		return { verdict: 'dead', reason: 'squash-merged', evidence: { method: 'file-state', base: base.ref, ...squash } };
 	}
@@ -781,7 +811,7 @@ async function proveTip(git: RunGit, prover: Prover, tip: string, isAncestor: bo
 		return { verdict: 'dead', reason: 'pr-merged', evidence: { method: 'pull-request', pullRequest: number, state: 'merged', headSha, match: pr.match } };
 	}
 	// A single commit is the tip itself: already tried above.
-	const proofs = mergeBase && cherry.size > 1 ? await prover.commitsProof(tip, mergeBase, cherry) : undefined;
+	const proofs = mergeBase && cherry.size > 1 && (await patchIdsCover()) ? await prover.commitsProof(tip, mergeBase, cherry) : undefined;
 	if (proofs) {
 		return { verdict: 'dead', reason: 'commits-merged', evidence: { method: 'commits', base: base.ref, commits: proofs.length, proofs } };
 	}

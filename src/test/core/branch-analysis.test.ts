@@ -242,6 +242,56 @@ suite('branch analysis (real git)', function () {
 		assert.strictEqual(`${branches['feature/same'].verdict} ${branches['feature/same'].reason}`, 'dead rebase-merged');
 	});
 
+	/** Merges `branch` into the checked-out branch, adding `file` in the merge commit itself (an "evil merge"). */
+	const evilMerge = (branch: string, file: string) => {
+		git(['merge', '-q', '--no-ff', '--no-commit', branch], fx.repo);
+		fs.writeFileSync(path.join(fx.repo, file), 'only in the merge\n');
+		git(['add', file], fx.repo);
+		git(['commit', '-q', '-m', `merge ${branch}`], fx.repo);
+	};
+
+	test('a merge commit adding work of its own keeps the branch alive', async () => {
+		// Merges main in, resolving with extra work; its own commit is then cherry-picked onto main.
+		makeBranch('feature/merges-main', [['e.txt', 'e\n']]);
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		git(['checkout', '-q', 'feature/merges-main'], fx.repo);
+		evilMerge('main', 'resolution.txt');
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['cherry-pick', 'feature/merges-main^1'], fx.repo);
+
+		// Integrates two branches, the second merge adding work; both branches land on main by cherry-pick.
+		const integrate = (name: string, branches: string[]) => {
+			makeBranch(name, []);
+			git(['checkout', '-q', name], fx.repo);
+			git(['merge', '-q', '--no-ff', '-m', `merge ${branches[0]}`, branches[0]], fx.repo);
+			evilMerge(branches[1], `${name}-glue.txt`);
+			git(['checkout', '-q', 'main'], fx.repo);
+		};
+		makeBranch('feature/a', [['a.txt', 'a\n']]);
+		makeBranch('feature/b', [['b.txt', 'b\n']]);
+		integrate('integration', ['feature/a', 'feature/b']);
+		commitFile(fx.repo, 'other.txt', 'main moves again\n', 'unrelated again');
+		git(['cherry-pick', 'feature/a', 'feature/b'], fx.repo);
+
+		// The same with two-commit branches squashed separately, main editing in between.
+		makeBranch('feature/c', [['c.txt', 'c1\n'], ['c.txt', 'c1\nc2\n']]);
+		makeBranch('feature/d', [['d.txt', 'd1\n'], ['d.txt', 'd1\nd2\n']]);
+		integrate('integration-squashed', ['feature/c', 'feature/d']);
+		squashInto('feature/c');
+		commitFile(fx.repo, 'c.txt', 'c1\nc2\nmain\n', 'main edits c');
+		squashInto('feature/d');
+		pushMain();
+
+		const branches = byName(await analyze());
+		for (const name of ['feature/merges-main', 'integration', 'integration-squashed']) {
+			assert.strictEqual(`${branches[name].verdict} ${branches[name].reason}`, 'alive unmerged-commits', name);
+			assert.ok(branches[name].unpushedCommits > 0, name);
+		}
+		// What they merged in is proven on its own.
+		assert.strictEqual(branches['feature/a'].reason, 'rebase-merged');
+		assert.strictEqual(branches['feature/d'].reason, 'squash-merged');
+	});
+
 	test('an integration branch whose two pull requests were squashed separately', async () => {
 		makeBranch('feature/a', [['a.txt', 'a1\n'], ['a.txt', 'a1\na2\n']]);
 		makeBranch('feature/b', [['b.txt', 'b1\n'], ['b.txt', 'b1\nb2\n']]);
