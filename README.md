@@ -93,7 +93,7 @@ gsp restore feature/x   # undo: recreate a deleted branch at its last commit
 
 ### Plan, then apply
 
-Without a terminal, `gsp clean` prints the plan and changes nothing unless you pass `--yes`; it ends with the command that applies exactly that plan. In a terminal, it shows a picker with every planned deletion selected; with `--force`, branches that need it are listed too, never selected. `--dry-run` always plans only.
+Without a terminal, `gsp clean` prints the plan and changes nothing unless you pass `--yes`; it ends with the command that applies exactly that plan, naming every planned branch. In a terminal, it shows a picker with every planned deletion selected; with `--force`, branches that need it are listed too, never selected. `--dry-run` always plans only.
 
 Planning is read-only: no fetch, no prune, no change to refs, objects, config or worktrees. To find the branches deleted on the remote, it reads `git ls-remote --heads`. With `--no-fetch`, or when the remote cannot be reached, it uses the local remote-tracking refs, and the JSON says so in `checks.remote`.
 
@@ -135,7 +135,7 @@ Removing a worktree deletes its ignored files, and `gsp restore` cannot bring th
 
 and so are `*.tsbuildinfo`, `.DS_Store` and `.eslintcache` files, and any ignored symbolic link (removing the worktree only removes the link, not what it points to). An ignored file inside a tracked folder with one of these names (`tools/build/credentials.json`) is not.
 
-Secret-like files are never regenerable, wherever they are, even as symbolic links: `.env`, `.env.*`, `*.pem`, `*.key`, `*credentials*`, `*secret*`, `.npmrc` and `.netrc`. Inside an ignored build or cache folder, `gsp clean` also looks for `.env`, `.env.*`, `*.pem`, `*.key`, `.npmrc` and `.netrc` files (a compiler never writes one there). Dependency folders (`node_modules`, `.pnpm-store`, `vendor/bundle`, `.venv`, `venv`, `.yarn/cache`, `.terraform`, `.vscode-test`) are not searched: packages ship such files of their own.
+Secret-like files are never regenerable, wherever they are, even as symbolic links: `.env`, `.env.*`, `*.pem`, `*.key`, `*credentials*`, `*secret*`, `.npmrc` and `.netrc`. Inside an ignored build or cache folder, `gsp clean` also looks for these names, except compiled code named after a module (`dist/auth/credentials.js`: `.js`, `.mjs`, `.cjs`, `.ts`, `.map`, `.css`, `.html`, `.py`, `.pyc`, `.class` and `.o` files). Dependency folders (`node_modules`, `.pnpm-store`, `vendor/bundle`, `.venv`, `venv`, `.yarn/cache`, `.terraform`, `.vscode-test`) are not searched: packages ship such files of their own.
 
 Every deletion is recorded: `gsp restore <branch>` recreates any of the last 100 deleted branches, tracking its upstream again if it still exists, until Git garbage-collects its commits (two weeks by default). Like after `git branch -D`, the rest of the branch's configuration (its description, `pushRemote`, `rebase` and other `branch.<name>.*` settings) is not restored.
 
@@ -193,6 +193,7 @@ gsp post-pr --dry-run             # preview, change nothing
 - When the branch is checked out in the main checkout, gsp switches that checkout to the default branch first, and refuses when it has uncommitted changes.
 - The default branch is fast-forwarded with `git merge --ff-only` where it is checked out, when that worktree is clean, or moved as a ref when it is checked out nowhere. A dirty checkout is reported, never an error.
 - `--into <branch>` names the branch the pull request was merged into, when it is not the default branch.
+- `--clean <branch>` (repeatable) limits the other branches it cleans to those named; `--no-clean` cleans none. The command that applies a plan uses them to name every other branch the plan deletes, or `--no-clean` when there is none, so it never deletes a branch that became deletable since.
 
 ```text
 deleted feature/x  squash-merged into origin/main, removed worktree /work/wt-x

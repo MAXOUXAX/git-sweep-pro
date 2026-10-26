@@ -9,6 +9,7 @@ import {
 	type CleanMode,
 	type CleanReport,
 	type PlannedBranch,
+	withCommand,
 } from './clean-plan';
 import { quoteShellArg } from './git-command';
 
@@ -103,6 +104,8 @@ export type PostPrScope = {
 	readonly protectedPatterns: readonly string[];
 	readonly github: boolean;
 	readonly fetch: boolean;
+	/** The only other branches the clean step may delete (`--clean`, or `--no-clean` when empty); every proven one when undefined. */
+	readonly others?: readonly string[];
 };
 
 /** `gsp post-pr`, on `branch` when given, with the options of the run, then `flags`. */
@@ -116,8 +119,19 @@ export function postPrCommand(scope: PostPrScope, branch: string | undefined, ..
 		...scope.protectedPatterns.flatMap((pattern) => ['--protect', pattern]),
 		...(scope.github ? [] : ['--no-github']),
 		...(scope.fetch ? [] : ['--no-fetch']),
+		...(scope.others === undefined ? [] : scope.others.length === 0 ? ['--no-clean'] : scope.others.flatMap((name) => ['--clean', name])),
 		...flags
 	);
+}
+
+/**
+ * `scope`, for a command that applies a plan without going beyond it: the
+ * clean step limited to the other branches the plan deletes, by name, as
+ * with gsp clean. Never every proven branch, which could include one that
+ * became deletable since.
+ */
+export function withPlannedOthers(scope: PostPrScope, others: readonly CleanBranch[]): PostPrScope {
+	return { ...scope, others: others.filter((branch) => branch.action === 'delete' && branch.result === undefined).map((branch) => branch.name) };
 }
 
 export type DecideTargetOptions = {
@@ -290,12 +304,11 @@ export type PostPrDocument = PostPrReport & { readonly next: string | null };
  */
 export function postPrNextCommand(report: PostPrReport, scope: PostPrScope): string | null {
 	const target = hasNoLocalBranch(report.branch) ? null : report.branch;
-	const rerun = (...flags: string[]) => postPrCommand(scope, report.branch?.name, ...flags);
 	if (report.mode === 'plan' && wouldChange(report)) {
-		return rerun('--yes', ...(target?.action === 'delete' ? approvalFlags([target]) : []));
+		return postPrCommand(withPlannedOthers(scope, report.clean.branches), report.branch?.name, '--yes', ...(target?.action === 'delete' ? approvalFlags([target]) : []));
 	}
 	if (report.mode === 'apply' && heldBack(report) > 0) {
-		return rerun('--dry-run');
+		return postPrCommand(scope, report.branch?.name, '--dry-run');
 	}
 	return target?.action === 'skip' ? safeStep(target) : null;
 }
@@ -337,11 +350,11 @@ export function formatNextSteps(report: PostPrReport, next: string | null): stri
 		steps.push(`The worktree you ran gsp in was removed. Continue in the main checkout: cd ${quoteShellArg(report.nextCwd)}`);
 	}
 	if (next && report.mode === 'plan' && wouldChange(report)) {
-		steps.push(`Nothing was changed. To apply this plan, run: ${next}`);
+		steps.push(withCommand('Nothing was changed. To apply this plan, run', next));
 	}
 	const held = heldBack(report);
 	if (next && report.mode === 'apply' && held > 0) {
-		steps.push(`${held} not deleted, as things changed while applying. Review them with: ${next}`);
+		steps.push(withCommand(`${held} not deleted, as things changed while applying. Review them with`, next));
 	}
 	return steps;
 }

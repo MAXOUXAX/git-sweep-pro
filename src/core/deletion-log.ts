@@ -41,7 +41,8 @@ const SOURCES: readonly DeletionSource[] = ['sweep', 'post-pr'];
 /**
  * Accepts only well-formed entries: the state file can be edited by hand, and
  * restoring passes the name and SHA to git. A name starting with "-" would be
- * read as an option, and Git never creates such a branch anyway.
+ * read as an option, and Git never creates such a branch anyway. A remote
+ * with ":" or "\" would be read as a URL or a path, and Git never names one so.
  */
 function isDeletedBranch(value: unknown): value is DeletedBranch {
 	const entry = value as Partial<Record<keyof DeletedBranch, unknown>> | null;
@@ -57,7 +58,7 @@ function isDeletedBranch(value: unknown): value is DeletedBranch {
 		SOURCES.includes(entry.source as DeletionSource) &&
 		(entry.worktree === undefined || typeof entry.worktree === 'string') &&
 		(entry.upstream === undefined || (typeof entry.upstream === 'string' && /^refs\/\S+$/.test(entry.upstream))) &&
-		(entry.remote === undefined || (typeof entry.remote === 'string' && /^[^-\s/]\S*$/.test(entry.remote)))
+		(entry.remote === undefined || (typeof entry.remote === 'string' && /^[^-\s/][^\s:\\]*$/.test(entry.remote)))
 	);
 }
 

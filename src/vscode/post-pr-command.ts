@@ -48,8 +48,6 @@ export function postPrPreview(document: PostPrDocument, windowInWorktree: boolea
 	const others = document.clean.branches.filter((other) => other.action === 'delete');
 	const { defaultBranch } = document;
 	const update = fetchFirst && defaultBranch.reason === 'up-to-date' ? `Updates ${defaultBranch.name} too.` : describeUpdatePlan(defaultBranch);
-	// Applying fetches, then deletes every other branch proven merged by then, not only the ones listed.
-	const fetches = document.clean.checks.remote.source !== 'local-refs';
 	const lines: string[] = [];
 	if (branch && deletes) {
 		lines.push(`Deletes ${branch.name}: ${describeVerdict(branch)}.`);
@@ -71,15 +69,11 @@ export function postPrPreview(document: PostPrDocument, windowInWorktree: boolea
 	if (update) {
 		lines.push(update);
 	}
-	const anyOther = fetches ? ', and any other branch proven merged after fetching' : '';
 	if (others.length > 0) {
-		lines.push(`Also deletes ${plural(others.length, 'other merged branch', 'other merged branches')}: ${listInline(others.map((other) => other.name))}${anyOther}.`);
+		lines.push(`Also deletes ${plural(others.length, 'other merged branch', 'other merged branches')}: ${listInline(others.map((other) => other.name))}.`);
 	}
 	if (lines.length === 0) {
 		return undefined;
-	}
-	if (others.length === 0 && fetches) {
-		lines.push('Also deletes any other branch proven merged after fetching.');
 	}
 	if (windowInWorktree) {
 		lines.push(
@@ -96,6 +90,16 @@ export function postPrPreview(document: PostPrDocument, windowInWorktree: boolea
 		detail: lines.join('\n'),
 		confirmLabel: deletes ? 'Finish' : 'Update and clean',
 	};
+}
+
+/**
+ * `--clean <branch>` for each other branch the preview listed, or `--no-clean`
+ * when it listed none: applying deletes what the person approved, never a
+ * branch the fetch alone proved since.
+ */
+export function cleanArgs(document: PostPrDocument): string[] {
+	const others = document.clean.branches.filter((other) => other.action === 'delete');
+	return others.length > 0 ? others.flatMap((other) => ['--clean', other.name]) : ['--no-clean'];
 }
 
 /** The notification after applying. */
@@ -158,7 +162,7 @@ export async function runPostPrCommand(deps: CommandDeps, root: string): Promise
 		return;
 	}
 
-	const applied = await ui.withProgress('Finishing the merged pull request', () => client.json<PostPrDocument>(root, ['post-pr', '--yes', ...(branch ? [branch.name] : [])]));
+	const applied = await ui.withProgress('Finishing the merged pull request', () => client.json<PostPrDocument>(root, ['post-pr', '--yes', ...(branch ? [branch.name] : []), ...cleanArgs(plan.document)]));
 	if (applied.kind === 'error') {
 		await reportRunError(ui, applied);
 		return;

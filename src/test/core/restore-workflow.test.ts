@@ -34,7 +34,7 @@ function createHarness(options: { log: DeletionLog; git?: Record<string, GitEntr
 	const fake = createFakeContext({
 		git: options.git,
 		// By default, every recorded commit still exists.
-		gitFallback: (args) => ({ stdout: args[0] === 'rev-list' ? args.slice(3).join('\n') : '' }),
+		gitFallback: (args) => ({ stdout: args[0] === 'rev-list' ? args.slice(3).join('\n') : args[0] === 'remote' ? 'origin\n' : '' }),
 		pickMany: () => options.picked,
 		deletionLog: options.log,
 	});
@@ -92,6 +92,8 @@ suite('deletion log', () => {
 			null as unknown as DeletedBranch,
 		]);
 		assert.deepStrictEqual(log.list(), [valid]);
+		const urls = logWith([entry('x', SHA_A, '2026-01-01T00:00:00Z', { remote: 'attacker.example:repo' }), entry('y', SHA_A, '2026-01-01T00:00:00Z', { remote: 'C:\\repo' })]);
+		assert.deepStrictEqual(urls.log.list(), [], 'a remote that Git would read as a URL or a path');
 		await log.forget('other');
 		assert.deepStrictEqual(store.state[DELETION_LOG_KEY], [valid]);
 		assert.deepStrictEqual(createDeletionLog(createMemoryStore({ [DELETION_LOG_KEY]: { not: 'a list' } })).list(), []);
@@ -244,6 +246,14 @@ suite('restore workflow', () => {
 			'Restored 0 of 2 branch(es). Could not restore back (a branch with this name already exists); gone (Git has garbage-collected its commit bbbbbbb).',
 		]);
 		assert.strictEqual((store.state[DELETION_LOG_KEY] as DeletedBranch[]).length, 2, 'failed restores stay in the log');
+	});
+
+	test('only pushes to a remote this repository names', async () => {
+		const { log } = logWith([entry('x', SHA_A, '2026-01-01T00:00:00Z', { remote: 'mirror' })]);
+		const h = createHarness({ log });
+		assert.strictEqual(await h.restore(['mirror/x']), 'failed');
+		assert.ok(!h.commands.some((c) => c.startsWith('push ')));
+		assert.deepStrictEqual(h.errors, ['Restored 0 of 1 branch(es). Could not restore mirror/x (remote) (mirror is not a remote of this repository).']);
 	});
 
 	test('tracks the recorded upstream again only while it exists', async () => {

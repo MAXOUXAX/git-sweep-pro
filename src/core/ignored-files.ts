@@ -57,12 +57,30 @@ export const REGENERABLE_FILES: readonly string[] = ['*.tsbuildinfo', '.DS_Store
 /** Names that look like secrets, matched against the file name, ignoring case: never regenerable, wherever they are. */
 export const SECRET_FILES: readonly string[] = ['.env', '.env.*', '*.pem', '*.key', '*credentials*', '*secret*', '.npmrc', '.netrc'];
 
-/**
- * Secret-like names no compiler produces, looked for inside the regenerable
- * folders that are not dependencies: a build output or a cache only holds a
- * `.env` or a key if someone put it there.
+/*
+ * The regenerable folders that are not dependencies are searched for
+ * secret-like names too: a build output or a cache only holds a `.env`, a key
+ * or a `credentials.json` if someone put it there.
  */
-const SECRET_FILES_IN_FOLDERS: readonly string[] = ['.env', '.env.*', '*.pem', '*.key', '.npmrc', '.netrc'];
+
+/**
+ * Compiled or bundled code a build names after its source module
+ * (`dist/auth/credentials.js`): a `*credentials*` or `*secret*` name with one
+ * of these extensions is build output, not a secret.
+ */
+const CODE_EXTENSIONS: readonly string[] = ['.js', '.mjs', '.cjs', '.ts', '.map', '.css', '.html', '.py', '.pyc', '.class', '.o'];
+
+/** Secret-like names a module can carry, unlike `.env` or `*.key`. */
+const MODULE_SECRET_FILES: readonly string[] = ['*credentials*', '*secret*'];
+
+/** True when `name`, found in a build output or a cache, is compiled code rather than a secret. */
+function isCompiledCode(name: string): boolean {
+	const lower = name.toLowerCase();
+	return (
+		CODE_EXTENSIONS.some((extension) => lower.endsWith(extension)) &&
+		SECRET_FILES.every((pattern) => MODULE_SECRET_FILES.includes(pattern) || !matchesFileName(name, pattern, true))
+	);
+}
 
 /**
  * Regenerable folders downloaded from a registry: packages ship `.env` or
@@ -152,11 +170,11 @@ export async function listIgnoredFiles(git: RunGit, worktreePath: string): Promi
 						'--exclude-standard',
 						'-z',
 						'--',
-						...regenerableFolders.flatMap((folder) => SECRET_FILES_IN_FOLDERS.map((pattern) => `:(glob,icase)${globLiteral(folder)}**/${pattern}`)),
+						...regenerableFolders.flatMap((folder) => SECRET_FILES.map((pattern) => `:(glob,icase)${globLiteral(folder)}**/${pattern}`)),
 					])
 				).stdout
 					.split('\0')
-					.filter(Boolean);
+					.filter((file) => file.length > 0 && !isCompiledCode(file.split('/').at(-1) ?? ''));
 	const isSymlink = (entry: string) => !entry.endsWith('/') && (fs.lstatSync(path.join(worktreePath, entry), { throwIfNoEntry: false })?.isSymbolicLink() ?? false);
 	return [...entries.filter((entry) => !isRegenerable(entry, isSymlink(entry))), ...secrets].sort();
 }

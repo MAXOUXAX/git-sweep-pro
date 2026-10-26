@@ -552,14 +552,23 @@ export type CleanScope = {
 	readonly remote?: string;
 };
 
-/** Up to this many planned deletions, the command to apply a plan names them. */
-export const MAX_NAMED_BRANCHES = 10;
+/** Longer than this, a suggested command is printed on its own line. */
+const COMMAND_INLINE_WIDTH = 80;
 
 /**
- * The command that applies a plan without ever going beyond it: the planned
- * branches by name when there are few, otherwise the patterns the plan was
- * made with; then every option that narrows it. `--force` and
- * `--discard-changes` only when a planned deletion needs them.
+ * `text`, then `command`: on the same line when short, otherwise on its own
+ * line, whole, since it names every planned branch.
+ */
+export function withCommand(text: string, command: string): string {
+	return command.length > COMMAND_INLINE_WIDTH ? `${text}:\n${command}` : `${text}: ${command}`;
+}
+
+/**
+ * The command that applies a plan without ever going beyond it: every planned
+ * branch by name, however many, then every option that narrows it. Never the
+ * patterns the plan was made with, which could match a branch that became
+ * deletable since. `--force` and `--discard-changes` only when a planned
+ * deletion needs them.
  */
 export function applyCommand(branches: readonly CleanBranch[], scope: CleanScope, remoteBranches: readonly CleanRemoteBranch[] = []): string {
 	const deleting = branches.filter((branch) => branch.action === 'delete' && branch.result === undefined);
@@ -569,8 +578,7 @@ export function applyCommand(branches: readonly CleanBranch[], scope: CleanScope
 			...remoteBranches.filter((branch) => branch.action === 'delete' && branch.result === undefined).map(remoteBranchArg),
 		]),
 	];
-	const targets = names.length > 0 && names.length <= MAX_NAMED_BRANCHES ? names : scope.patterns;
-	return scopedCommand(scope, targets, ['--yes', ...approvalFlags(deleting)]);
+	return scopedCommand(scope, names, ['--yes', ...approvalFlags(deleting)]);
 }
 
 /** `gsp clean` on `targets`, with every option of `scope` that narrows it, then `flags`. */

@@ -512,7 +512,7 @@ suite('cli app (real git)', function () {
 		});
 
 		test('a folder is regenerable only when Git reports it whole; secret-like files never are', async () => {
-			fs.writeFileSync(path.join(fx.repo, '.gitignore'), 'credentials.json\nnode_modules/\ndist/\n');
+			fs.writeFileSync(path.join(fx.repo, '.gitignore'), 'credentials.json\nnode_modules/\ndist/\n/build/\n');
 			fs.mkdirSync(path.join(fx.repo, 'tools', 'build'), { recursive: true });
 			fs.writeFileSync(path.join(fx.repo, 'tools', 'build', 'run.sh'), 'echo\n');
 			git(['add', '.gitignore', 'tools'], fx.repo);
@@ -520,7 +520,7 @@ suite('cli app (real git)', function () {
 			git(['push', '-q', 'origin', 'main'], fx.repo);
 			const files: Record<string, string[]> = {
 				'feature/build': ['tools/build/credentials.json'],
-				'feature/dist': ['dist/app.js', 'dist/.env'],
+				'feature/dist': ['dist/app.js', 'dist/.env', 'dist/credentials.json', 'dist/auth/credentials.js', 'build/secrets.txt'],
 				'feature/deps': ['node_modules/pkg/.env', 'node_modules/pkg/index.js'],
 			};
 			for (const [branch, paths] of Object.entries(files)) {
@@ -541,7 +541,8 @@ suite('cli app (real git)', function () {
 			);
 			assert.deepStrictEqual(ignored, {
 				'feature/build': ['ignored-files', { count: 1, sample: ['tools/build/credentials.json'] }],
-				'feature/dist': ['ignored-files', { count: 1, sample: ['dist/.env'] }],
+				// Compiled code named after a module (`dist/auth/credentials.js`) is build output, not a secret.
+				'feature/dist': ['ignored-files', { count: 3, sample: ['build/secrets.txt', 'dist/.env', 'dist/credentials.json'] }],
 				// Packages ship their own `.env` files: dependency folders are not searched.
 				'feature/deps': ['empty', { count: 0, sample: [] }],
 			});
