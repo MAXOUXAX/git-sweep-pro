@@ -20,12 +20,16 @@ export type WorktreeEntry = {
 	readonly inProgress: 'rebase' | 'bisect' | null;
 	/** The ignored files removing it would delete, regenerable ones left out; null for the main or a prunable one. */
 	readonly ignoredFiles: IgnoredFiles | null;
-	/** What the analysis found about the branch, and what `gsp clean` would do with it; all null without a branch. */
+	/**
+	 * What the analysis found about the branch, and what `gsp clean` would do
+	 * with it. A detached worktree has no branch to clean: `keep`, reason
+	 * `detached`, verdict null; a main or prunable one without a branch: all null.
+	 */
 	readonly verdict: 'dead' | 'alive' | null;
 	readonly verdictReason: DeadReason | AliveReason | null;
 	readonly action: CleanAction | null;
-	/** As in `gsp clean --json`: the skip reason for `skip`, otherwise the verdict reason. */
-	readonly reason: CleanBranch['reason'] | null;
+	/** As in `gsp clean --json`: the skip reason for `skip`, otherwise the verdict reason; `detached` for a detached worktree. */
+	readonly reason: CleanBranch['reason'] | 'detached' | null;
 	readonly hint: string | null;
 };
 
@@ -102,6 +106,8 @@ export async function listWorktreeStates(
 							(files) => summarizeIgnored(files),
 							() => null
 						)));
+			// Linked and on no branch: gsp clean never removes it.
+			const detached = !branch && !worktree.branch && !isMain && !prunable;
 			return {
 				path: worktree.path,
 				branch: worktree.branch ?? branch?.name ?? null,
@@ -114,8 +120,8 @@ export async function listWorktreeStates(
 				ignoredFiles,
 				verdict: branch?.verdict ?? null,
 				verdictReason: branch?.verdictReason ?? null,
-				action: branch?.action ?? null,
-				reason: branch?.reason ?? null,
+				action: branch?.action ?? (detached ? 'keep' : null),
+				reason: branch?.reason ?? (detached ? 'detached' : null),
 				hint: branch?.hint ?? null,
 			};
 		})
@@ -131,10 +137,8 @@ export async function listWorktreeStates(
  */
 export function formatWorktreeLines(document: WorktreeListDocument, branches: readonly CleanBranch[]): string[] {
 	const byName = new Map(branches.map((branch) => [branch.name, branch]));
-	const pathWidth = Math.max(0, ...document.worktrees.map((worktree) => worktree.path.length));
 	const nameOf = (worktree: WorktreeEntry) => worktree.branch ?? `(detached at ${worktree.head?.slice(0, 7) ?? 'unknown'})`;
-	const nameWidth = Math.max(0, ...document.worktrees.map((worktree) => nameOf(worktree).length));
-	return document.worktrees.map((worktree) => {
+	const rows = document.worktrees.map((worktree) => {
 		const states = [
 			...(worktree.isMain ? ['main'] : []),
 			...(worktree.locked ? ['locked'] : []),
@@ -144,10 +148,20 @@ export function formatWorktreeLines(document: WorktreeListDocument, branches: re
 			...(worktree.ignoredFiles?.count ? [`${worktree.ignoredFiles.count} ignored`] : []),
 		];
 		const branch = worktree.branch ? byName.get(worktree.branch) : undefined;
-		const plan = branch ? `${actionLabel(branch).padEnd(8)}${describeAction(branch)}` : '';
-		return [`${worktree.path.padEnd(pathWidth)}  ${nameOf(worktree).padEnd(nameWidth)}`, states.length > 0 ? `[${states.join(', ')}]` : '', plan]
-			.filter(Boolean)
-			.join('  ')
-			.trimEnd();
+		const plan = branch
+			? `${actionLabel(branch).padEnd(8)}${describeAction(branch)}`
+			: worktree.reason === 'detached'
+				? `${'keep'.padEnd(8)}detached, no branch to clean`
+				: '';
+		return [worktree.path, nameOf(worktree), states.length > 0 ? `[${states.join(', ')}]` : '', plan];
 	});
+	// Every column but the last padded to its widest cell, so the plans line up.
+	const widths = [0, 1, 2].map((column) => Math.max(0, ...rows.map((row) => row[column].length)));
+	return rows.map((row) =>
+		row
+			.map((cell, column) => (column < widths.length ? cell.padEnd(widths[column]) : cell))
+			.filter((_cell, column) => column < 2 || column >= widths.length || widths[column] > 0)
+			.join('  ')
+			.trimEnd()
+	);
 }

@@ -754,7 +754,7 @@ suite('cli app (real git)', function () {
 				'gsp clean feature/gone --yes',
 				null,
 			]);
-			assert.deepStrictEqual(pick(byPath[real(detached)], ['branch', 'head', 'verdict', 'action', 'hint']), [null, head('HEAD'), null, null, null]);
+			assert.deepStrictEqual(pick(byPath[real(detached)], ['branch', 'head', 'verdict', 'action', 'reason', 'hint']), [null, head('HEAD'), null, 'keep', 'detached', null]);
 			assert.strictEqual(document.worktrees[0].path, fs.realpathSync(fx.repo), 'the main worktree first');
 
 			// Read-only: the prunable registration is still there, and so is every branch.
@@ -774,7 +774,7 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(await runCli(['worktree', 'list', '--no-github'], io), EXIT.ok);
 			const width = linked.length;
 			assert.deepStrictEqual(io.out.join('').split('\n').filter(Boolean), [
-				`${root.padEnd(width)}  main        [main]  keep    default branch`,
+				`${root.padEnd(width)}  main        [main]       keep    default branch`,
 				`${linked}  feature/wt  [1 ignored]  skip    removing worktree ${linked} would delete 1 ignored file (.env), needs --force (already in origin/main) → move what you need out of ${linked}, then: gsp clean feature/wt --yes --force`,
 			]);
 		});
