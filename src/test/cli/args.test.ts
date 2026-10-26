@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { modeToCliArgs, parseArgs, settingsToCliArgs, UsageError } from '../../cli/args';
+import { parseArgs, settingsToCliArgs, UsageError } from '../../cli/args';
 import { DEFAULT_SETTINGS } from '../fake-context';
 
 suite('cli args', () => {
@@ -175,11 +175,8 @@ suite('cli args', () => {
 		assert.throws(() => parseArgs(['worktree', 'remove', 'feature/x', '--dry-run']), /--dry-run cannot be used with worktree remove\./);
 	});
 
-	test('--force selects a force delete, and modeToCliArgs maps each mode back to its flags', () => {
+	test('--force selects a force delete', () => {
 		assert.strictEqual(parseArgs(['-f']).mode, 'forceDelete');
-		assert.deepStrictEqual(modeToCliArgs('dryRun'), ['--dry-run']);
-		assert.deepStrictEqual(modeToCliArgs('safeDelete'), []);
-		assert.deepStrictEqual(modeToCliArgs('forceDelete'), ['--force']);
 	});
 
 	test('settingsToCliArgs mirrors the extension settings', () => {

@@ -147,8 +147,3 @@ export async function listIgnoredFiles(git: RunGit, worktreePath: string): Promi
 export function summarizeIgnored(paths: readonly string[]): IgnoredFiles {
 	return { count: paths.length, sample: paths.slice(0, IGNORED_SAMPLE_SIZE) };
 }
-
-/** {@link listIgnoredFiles}, as a plan shows them. */
-export async function findIgnoredFiles(git: RunGit, worktreePath: string): Promise<IgnoredFiles> {
-	return summarizeIgnored(await listIgnoredFiles(git, worktreePath));
-}

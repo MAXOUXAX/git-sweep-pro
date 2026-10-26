@@ -287,13 +287,6 @@ function helpOptions(topic: CommandName | undefined): CliOptions {
 	};
 }
 
-const MODE_FLAGS: Record<SweepMode, readonly string[]> = { dryRun: ['--dry-run'], safeDelete: [], forceDelete: ['--force'] };
-
-/** The CLI flags selecting a sweep mode. */
-export function modeToCliArgs(mode: SweepMode): string[] {
-	return [...MODE_FLAGS[mode]];
-}
-
 /** Translates sweep settings (e.g. the VS Code configuration) into CLI flags. */
 export function settingsToCliArgs(settings: SweepSettings): string[] {
 	return [

@@ -78,11 +78,6 @@ export async function listWorktrees({ git }: WorkflowContext): Promise<Worktree[
 	return parseWorktrees(stdout);
 }
 
-/** Path of the main worktree: the first entry of the listing, as Git always reports it. */
-export async function findMainWorktree(context: WorkflowContext): Promise<string | undefined> {
-	return (await listWorktrees(context))[0]?.path;
-}
-
 export type WorktreePrune = {
 	/** Paths of the registrations Git forgot. */
 	readonly pruned: readonly string[];

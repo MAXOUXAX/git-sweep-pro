@@ -1,4 +1,3 @@
-import type { SweepMode } from './sweep-logic';
 import type { PickItem } from './workflow';
 
 /** Marks every branch as selected. */
@@ -14,64 +13,4 @@ export function clearAll(items: readonly PickItem[]): PickItem[] {
 /** Toggles each branch's checked state. */
 export function invertSelection(items: readonly PickItem[]): PickItem[] {
 	return items.map((item) => ({ ...item, picked: !item.picked }));
-}
-
-/**
- * Human-readable description of the sweep mode, matching the flags the user sees
- * in Git: `dry run`, `safe delete (-d)`, or `force delete (-D)`.
- */
-export function describeSweepMode(mode: SweepMode): string {
-	return { dryRun: 'dry run', safeDelete: 'safe delete (-d)', forceDelete: 'force delete (-D)' }[mode];
-}
-
-export type SweepSummary = {
-	readonly totalDetected: number;
-	/** Branches merged into the default branch whose upstream is not gone, offered on top of the stale ones. */
-	readonly mergedCount: number;
-	readonly protectedCount: number;
-	/** Stale branches skipped because they are checked out here or in the main worktree. */
-	readonly checkedOutCount: number;
-	readonly selectedCount: number;
-	/** Selected branches checked out in another worktree (removed before deletion). */
-	readonly worktreeCount: number;
-	readonly mode: SweepMode;
-};
-
-/**
- * Builds the multi-line preview shown before a sweep so the user understands
- * exactly what will happen: how many stale branches were detected, how many are
- * protected, how many are selected, and which mode will run.
- */
-export function formatSweepSummary(summary: SweepSummary): string {
-	const lines = [
-		summary.mergedCount > 0
-			? `Detected: ${summary.totalDetected} stale and ${summary.mergedCount} merged branch(es)`
-			: `Detected: ${summary.totalDetected} stale branch(es)`,
-	];
-	if (summary.protectedCount > 0) {
-		lines.push(`Protected (skipped): ${summary.protectedCount}`);
-	}
-	if (summary.checkedOutCount > 0) {
-		lines.push(`Checked out (skipped): ${summary.checkedOutCount}`);
-	}
-	lines.push(`Selected: ${summary.selectedCount}`);
-	if (summary.worktreeCount > 0) {
-		lines.push(`Worktrees to remove: ${summary.worktreeCount}`);
-	}
-	lines.push(`Mode: ${describeSweepMode(summary.mode)}`);
-	return lines.join('\n');
-}
-
-export type SweepOutcome = {
-	readonly deleted: number;
-	readonly skipped: number;
-	readonly failed: number;
-};
-
-/**
- * Formats the post-run outcome with the counts the user cares about: how many
- * branches were deleted, intentionally skipped, and failed to delete.
- */
-export function formatSweepOutcome(outcome: SweepOutcome): string {
-	return `Deleted ${outcome.deleted} branch(es); ${outcome.skipped} skipped, ${outcome.failed} failed.`;
 }
