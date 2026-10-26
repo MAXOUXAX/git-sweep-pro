@@ -756,7 +756,7 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 
 	const proven = (verdict: Verdict) => verdict.verdict === 'dead' && verdict.reason !== 'upstream-gone';
 	const unpushed = await mapWithLimit(selected, CONCURRENCY, async (ref, index) =>
-		proven(verdicts[index]) || verdicts[index].reason === 'default-branch'
+		proven(verdicts[index])
 			? 0
 			: Number((await git(['rev-list', '--count', ref.oid, '--not', '--remotes', ...(base ? [base.ref] : [])])).stdout.trim())
 	);
