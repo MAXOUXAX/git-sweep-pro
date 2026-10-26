@@ -1,25 +1,39 @@
-import { analyzeBranches, type AnalysisChecks, type BranchAnalysis, type BranchAnalysisResult } from './branch-analysis';
+import {
+	analyzeBranches,
+	type AnalysisChecks,
+	type BranchAnalysis,
+	type BranchAnalysisResult,
+	type CleanedRemoteCheck,
+	type RemoteBranchAnalysis,
+} from './branch-analysis';
 import {
 	CLEAN_SCHEMA,
 	decideActions,
+	decideRemoteActions,
 	hasPendingDeletions,
 	describeVerdict,
 	isBranchGlob,
+	remoteBranchArg,
 	restoreCommand,
+	scopedCommand,
 	summarize,
 	type CleanBranch,
 	type CleanMode,
+	type CleanRemoteBranch,
 	type CleanReport,
 	type CleanResult,
+	type CleanScope,
 	type DecideOptions,
 	type PlannedBranch,
+	type RemoteBlocker,
 	type RemoteCheck,
 	type SkipReason,
 } from './clean-plan';
 import { canRecordDeletions, createDeletionRecorder, type DeletionRecorder } from './deletion-log';
 import { gitFailureReason, toErrorMessage } from './errors';
-import { quoteShellArg, type RunGit } from './git-command';
-import type { RunGh } from './github-signal';
+import type { RunGit } from './git-command';
+import { sameRepository, type RunSsh } from './forge';
+import type { GitHubSkipReason, RunGh } from './github-signal';
 import { listIgnoredFiles, summarizeIgnored } from './ignored-files';
 import { isNotFullyMergedError } from './sweep-logic';
 import type { PickItem, WorkflowContext } from './workflow';
@@ -43,11 +57,20 @@ export type CleanOptions = {
 	readonly canPrompt: boolean;
 	/** Confirm before deleting what was picked. */
 	readonly confirm: boolean;
+	/**
+	 * `--remote`: also clean the branches of this remote; an empty string
+	 * picks origin. Deleted there only with `yes`.
+	 */
+	readonly remote?: string;
+	/** `-C <path>` as given on the command line, kept in the commands the hints suggest. */
+	readonly cwd?: string;
 };
 
 export type CleanContext = WorkflowContext & {
 	/** Runs `gh`; without it, the GitHub signal is skipped. */
 	readonly gh?: RunGh;
+	/** Runs `ssh`, to resolve the host aliases of SSH remotes. */
+	readonly ssh?: RunSsh;
 };
 
 /** How `gsp clean` ended: the CLI maps it to its exit code. */
@@ -63,11 +86,105 @@ export type CleanOutcome =
 
 export type CleanRun = { readonly report: CleanReport; readonly outcome: CleanOutcome };
 
-/** Patterns naming branches that do not exist: `gsp clean` refuses them as a usage error. */
+/**
+ * Patterns naming branches that do not exist: `gsp clean` refuses them as a
+ * usage error. `remote`: one of them is the name of a remote, given after a
+ * bare `--remote` (whose value is only read inline).
+ */
 export class UnknownBranchError extends Error {
-	constructor(readonly branches: readonly string[]) {
-		super(`No local branch named ${branches.map((branch) => `"${branch}"`).join(', ')}. Run "gsp clean --dry-run" to see them.`);
+	constructor(
+		readonly branches: readonly string[],
+		remote?: string
+	) {
+		super(
+			remote === undefined
+				? `No branch named ${branches.map((branch) => `"${branch}"`).join(', ')}. Run "gsp clean --dry-run" to see them.`
+				: `No branch named "${remote}". Did you mean --remote=${remote}?`
+		);
 	}
+}
+
+/** `--remote` names a remote that does not exist, or none was named and there is no origin: a usage error. */
+export class UnknownRemoteError extends Error {
+	constructor(readonly remote: string | undefined) {
+		super(
+			remote
+				? `No remote named "${remote}". Run "git remote" to see them.`
+				: 'No remote named "origin". Name the remote to clean: --remote=<name>.'
+		);
+	}
+}
+
+/** `--remote` names a remote that pushes elsewhere than it fetches from: what gsp reads is not what it would delete. A usage error. */
+export class PushUrlMismatchError extends Error {
+	constructor(
+		readonly remote: string,
+		readonly fetchUrl: string,
+		readonly pushUrl: string
+	) {
+		super(
+			`${remote} fetches from ${fetchUrl} but pushes to ${pushUrl}, another repository, so gsp can't check the branches it would delete there. Point both URLs to the same repository.`
+		);
+	}
+}
+
+/**
+ * Fails with {@link PushUrlMismatchError} when `remote` pushes to another
+ * repository than it fetches from, rewrites applied. The URLs may differ:
+ * `https` to fetch and SSH to push the same repository is fine.
+ */
+async function checkPushUrl(git: RunGit, ssh: RunSsh | undefined, remote: string): Promise<void> {
+	const [fetchUrl, pushUrl] = await Promise.all([git(['remote', 'get-url', remote]), git(['remote', 'get-url', '--push', remote])]).then((urls) =>
+		urls.map(({ stdout }) => stdout.trim())
+	);
+	if (!(await sameRepository(ssh, fetchUrl, pushUrl))) {
+		throw new PushUrlMismatchError(remote, fetchUrl, pushUrl);
+	}
+}
+
+async function readRemotes(git: RunGit): Promise<string[]> {
+	return (await git(['remote'])).stdout.split('\n').filter(Boolean);
+}
+
+/** The remote `--remote` names: origin by default, or the only remote. */
+function resolveRemote(configured: readonly string[], requested: string): string {
+	const remote = requested || (configured.includes('origin') || configured.length !== 1 ? 'origin' : configured[0]);
+	if (!configured.includes(remote)) {
+		throw new UnknownRemoteError(requested || undefined);
+	}
+	return remote;
+}
+
+/**
+ * Branch tips of a remote, by name, as its remote-tracking refs last saw
+ * them. The refs of a remote nested in its name ("team/up" in "team") are
+ * not its own.
+ */
+async function readTrackingHeads(git: RunGit, remote: string, configured: readonly string[]): Promise<Map<string, string>> {
+	const prefix = `refs/remotes/${remote}/`;
+	const nested = configured.filter((other) => other.startsWith(`${remote}/`)).map((other) => `refs/remotes/${other}/`);
+	const { stdout } = await git(['for-each-ref', '--format=%(refname)%00%(objectname)%00%(symref)', prefix]);
+	return new Map(
+		stdout.split('\n').flatMap((line) => {
+			const [ref, sha, symref] = line.split('\0');
+			const own = ref && sha && !symref && ref !== `${prefix}HEAD` && !nested.some((other) => ref.startsWith(other));
+			return own ? [[ref.slice(prefix.length), sha] as const] : [];
+		})
+	);
+}
+
+/** Parses `git ls-remote --symref`: the branch HEAD points at, or null when the server names none. */
+function parseRemoteHead(stdout: string): string | null {
+	const line = stdout.split('\n').find((candidate) => candidate.startsWith('ref: refs/heads/') && candidate.endsWith('\tHEAD'));
+	return line ? line.slice('ref: refs/heads/'.length, -'\tHEAD'.length) : null;
+}
+
+/** The default branch of `remote`, read from the server (`git ls-remote --symref`, which writes nothing); null when it cannot be. */
+async function readRemoteHead(git: RunGit, remote: string): Promise<string | null> {
+	return git(['ls-remote', '--symref', remote, 'HEAD']).then(
+		(result) => parseRemoteHead(result.stdout),
+		() => null
+	);
 }
 
 type Upstream = { readonly ref: string; readonly remote: string; readonly remoteRef: string };
@@ -85,17 +202,52 @@ async function readUpstreams(git: RunGit): Promise<Map<string, Upstream>> {
 	return upstreams;
 }
 
-/** Remotes worth fetching or reading: those the branches track, and origin. */
-async function remotesToCheck(git: RunGit, upstreams: ReadonlyMap<string, Upstream>): Promise<string[]> {
+/** Remotes worth fetching or reading: those the branches track, origin, and the one `--remote` cleans. */
+async function remotesToCheck(git: RunGit, upstreams: ReadonlyMap<string, Upstream>, cleaned: string | undefined): Promise<string[]> {
 	const configured = (await git(['remote'])).stdout.split('\n').filter(Boolean);
 	const tracked = new Set([...upstreams.values()].map((upstream) => upstream.remote).filter((remote) => configured.includes(remote)));
 	if (configured.includes('origin')) {
 		tracked.add('origin');
 	}
+	if (cleaned !== undefined) {
+		tracked.add(cleaned);
+	}
 	if (tracked.size === 0 && configured.length > 0) {
 		tracked.add(configured[0]);
 	}
 	return [...tracked];
+}
+
+/** Branch tips of each remote, by branch name, as `git ls-remote` read them; or why it failed. */
+type RemoteHeads = Map<string, Map<string, string>> | { readonly error: string };
+
+/**
+ * Plan mode only: `git ls-remote --heads` on each remote, which writes
+ * nothing. The `cleaned` remote is also asked for its HEAD, in the same call,
+ * recorded in `defaults`.
+ */
+async function lsRemote(git: RunGit, remotes: readonly string[], cleaned: string | undefined, defaults: Map<string, string | null>): Promise<RemoteHeads> {
+	const heads = new Map<string, Map<string, string>>();
+	try {
+		for (const remote of remotes) {
+			const { stdout } = await git(remote === cleaned ? ['ls-remote', '--symref', remote, 'HEAD', 'refs/heads/*'] : ['ls-remote', '--heads', remote]);
+			if (remote === cleaned) {
+				defaults.set(remote, parseRemoteHead(stdout));
+			}
+			heads.set(
+				remote,
+				new Map(
+					stdout.split('\n').flatMap((line) => {
+						const [sha, ref] = line.split('\t');
+						return sha && ref?.startsWith('refs/heads/') ? [[ref.slice('refs/heads/'.length), sha] as const] : [];
+					})
+				)
+			);
+		}
+	} catch (error) {
+		return { error: gitFailureReason(error) };
+	}
+	return heads;
 }
 
 /**
@@ -111,23 +263,18 @@ async function markGoneUpstreams(
 	git: RunGit,
 	analysis: BranchAnalysisResult,
 	upstreams: ReadonlyMap<string, Upstream>,
-	remotes: readonly string[]
+	remotes: readonly string[],
+	heads: RemoteHeads
 ): Promise<{ analysis: BranchAnalysisResult; remote: RemoteCheck }> {
-	const heads = new Map<string, Set<string>>();
-	try {
-		for (const remote of remotes) {
-			const { stdout } = await git(['ls-remote', '--heads', remote]);
-			heads.set(remote, new Set(stdout.split('\n').map((line) => line.split('\t')[1]).filter(Boolean)));
-		}
-	} catch (error) {
-		return { analysis, remote: { source: 'local-refs', reason: 'unreachable', detail: gitFailureReason(error) } };
+	if ('error' in heads) {
+		return { analysis, remote: { source: 'local-refs', reason: 'unreachable', detail: heads.error } };
 	}
 
 	const stale = new Map<string, Upstream>();
 	for (const branch of analysis.branches) {
 		const upstream = upstreams.get(branch.name);
 		const remoteHeads = upstream && heads.get(upstream.remote);
-		if (branch.upstreamState === 'tracking' && upstream && remoteHeads && !remoteHeads.has(upstream.remoteRef)) {
+		if (branch.upstreamState === 'tracking' && upstream && remoteHeads && !remoteHeads.has(upstream.remoteRef.slice('refs/heads/'.length))) {
 			stale.set(branch.name, upstream);
 		}
 	}
@@ -319,12 +466,18 @@ const skipped = (branch: CleanBranch, reason: SkipReason, hint: string | null): 
  * With `heldToPlan` (a person could pick from the plan), only branches approved
  * then are deleted: one deleted now but not approved is skipped as
  * `plan-changed`. Without it (`--yes`), a branch only the fetch proves is
- * deleted too.
+ * deleted too. Hints keep the options of `scope` that narrow the plan.
  */
-export function holdToPlan(planned: readonly CleanBranch[], current: readonly CleanBranch[], remote: RemoteCheck, heldToPlan = true): CleanBranch[] {
+export function holdToPlan(
+	planned: readonly CleanBranch[],
+	current: readonly CleanBranch[],
+	remote: RemoteCheck,
+	heldToPlan = true,
+	scope: CleanScope = DEFAULT_SCOPE
+): CleanBranch[] {
 	const before = new Map(planned.map((branch) => [branch.name, branch]));
 	const stale = remote.source === 'local-refs' && remote.reason === 'unreachable';
-	const replan = (branch: CleanBranch) => `gsp clean ${quoteShellArg(branch.name)}`;
+	const replan = (branch: CleanBranch) => scopedCommand(scope, [branch.name], []);
 	return current.map((branch) => {
 		const previous = before.get(branch.name);
 		const approved = previous?.action === 'delete';
@@ -342,6 +495,9 @@ export function holdToPlan(planned: readonly CleanBranch[], current: readonly Cl
 		return branch;
 	});
 }
+
+/** The scope of a plain `gsp clean`, for hints. */
+const DEFAULT_SCOPE: CleanScope = { patterns: [], protectedPatterns: [], github: true, fetch: true };
 
 type Base = AnalysisChecks['base'];
 
@@ -385,6 +541,7 @@ export function buildReport(
 	analysis: BranchAnalysisResult,
 	remote: RemoteCheck,
 	branches: readonly CleanBranch[],
+	cleaned: { readonly remote: string; readonly branches: readonly CleanRemoteBranch[] } | undefined,
 	worktreesPruned: readonly string[],
 	restored: readonly string[]
 ): CleanReport {
@@ -393,10 +550,140 @@ export function buildReport(
 		mode,
 		checks: { ...analysis.checks, remote },
 		branches,
+		...(cleaned ? { remoteBranches: cleaned.branches } : {}),
 		worktreesPruned,
 		restore: restoreCommand(restored),
-		summary: summarize(branches, mode),
+		summary: summarize(branches, mode, cleaned),
 	};
+}
+
+/** For each branch of `remote`, the local branches whose upstream it is. */
+function trackersOf(upstreams: ReadonlyMap<string, Upstream>, remote: string): Map<string, string[]> {
+	const trackers = new Map<string, string[]>();
+	for (const [local, upstream] of upstreams) {
+		if (upstream.remote === remote && upstream.remoteRef.startsWith('refs/heads/')) {
+			const name = upstream.remoteRef.slice('refs/heads/'.length);
+			trackers.set(name, [...(trackers.get(name) ?? []), local]);
+		}
+	}
+	return trackers;
+}
+
+/**
+ * Checks the remote deletions decided after the fetch: when the fetch failed,
+ * the remote cannot be reached and its branches were not checked again
+ * (`fetch-failed`); when a default branch changed (the remote's or the local
+ * one), no proof holds the way the plan said (`plan-changed`).
+ */
+export function holdRemoteToFetch(
+	branches: readonly CleanRemoteBranch[] | undefined,
+	remote: RemoteCheck,
+	baseChanged: boolean,
+	scope: CleanScope = DEFAULT_SCOPE
+): CleanRemoteBranch[] | undefined {
+	const stale = remote.source === 'local-refs' && remote.reason === 'unreachable';
+	return branches?.map((branch) => {
+		if (branch.action !== 'delete') {
+			return branch;
+		}
+		if (baseChanged) {
+			return { ...branch, action: 'skip', reason: 'plan-changed', hint: scopedCommand({ ...scope, remote: branch.remote }, scope.patterns, ['--dry-run']) };
+		}
+		return stale ? { ...branch, action: 'skip', reason: 'fetch-failed', hint: branch.hint } : branch;
+	});
+}
+
+/**
+ * Deletes the planned remote branches, one push each, with a lease on the
+ * analysed tip: a branch someone pushed to since is not deleted
+ * (`plan-changed`). Each deletion is recorded, so `gsp restore` can push it back.
+ */
+async function deleteRemoteBranches(
+	git: RunGit,
+	branches: readonly CleanRemoteBranch[],
+	recorder: DeletionRecorder,
+	scope: CleanScope
+): Promise<CleanRemoteBranch[]> {
+	const results: CleanRemoteBranch[] = [];
+	for (const branch of branches) {
+		if (branch.action !== 'delete') {
+			results.push(branch);
+			continue;
+		}
+		const ref = `refs/heads/${branch.name}`;
+		try {
+			await git(['push', `--force-with-lease=${ref}:${branch.tip}`, branch.remote, `:${ref}`]);
+		} catch (error) {
+			const reason = gitFailureReason(error);
+			const stderr = (error as { stderr?: unknown }).stderr;
+			results.push(
+				/stale info/.test(`${typeof stderr === 'string' ? stderr : ''}${toErrorMessage(error)}`)
+					? { ...branch, action: 'skip', reason: 'plan-changed', hint: scopedCommand({ ...scope, remote: branch.remote }, [remoteBranchArg(branch)], ['--dry-run']) }
+					: { ...branch, result: 'failed', error: reason }
+			);
+			continue;
+		}
+		await recorder.record({ branch: branch.name, sha: branch.tip, remote: branch.remote });
+		results.push({ ...branch, result: 'deleted', hint: null });
+	}
+	return results;
+}
+
+const GITHUB_SKIPS: Record<GitHubSkipReason, string> = {
+	disabled: '--no-github was passed',
+	'no-remote': 'no remote',
+	'not-github': 'not a GitHub remote',
+	'unknown-host': 'unknown host',
+	'gh-missing': 'gh is not installed',
+	'gh-unauthenticated': 'gh is not logged in',
+	offline: 'GitHub could not be reached',
+	timeout: 'GitHub took too long',
+	'gh-failed': 'gh failed',
+	'too-many-open-prs': 'too many open pull requests to list',
+};
+
+/**
+ * What keeps the cleaned remote's branches from going: its default branch is
+ * unknown, or it is on GitHub and its open pull requests could not all be
+ * read. The hint is the command that lifts it, when there is one.
+ */
+function remoteBlocker(check: CleanedRemoteCheck, scope: CleanScope): RemoteBlocker | undefined {
+	const review = (changed: Partial<CleanScope>) => scopedCommand({ ...scope, ...changed }, scope.patterns, ['--dry-run']);
+	if (check.defaultBranch === null) {
+		// Without --no-fetch, gsp asks the server.
+		return { reason: 'remote-default-unknown', hint: scope.fetch ? null : scopedCommand({ ...scope, fetch: true }, scope.patterns, []) };
+	}
+	if (check.github && !check.github.used) {
+		const { reason, detail } = check.github;
+		const hint =
+			reason === 'unknown-host'
+				? `gh auth login --hostname ${detail}`
+				: reason === 'disabled'
+					? review({ github: true })
+					: reason === 'gh-unauthenticated' || reason === 'gh-missing'
+						? 'gh auth login'
+						: review({});
+		return { reason: 'github-unavailable', hint };
+	}
+	return undefined;
+}
+
+/** The warning printed once when a blocker holds the cleaned remote's branches back. */
+function describeRemoteBlocker(check: CleanedRemoteCheck, blocker: RemoteBlocker): string {
+	const then = `so no branch on ${check.remote} is deleted${blocker.hint ? `. To lift it: ${blocker.hint}` : '.'}`;
+	if (blocker.reason === 'remote-default-unknown') {
+		return `The default branch of ${check.remote} could not be read from the server, ${then}`;
+	}
+	const github = check.github && !check.github.used ? check.github : undefined;
+	if (github?.reason === 'unknown-host') {
+		return (
+			`Can't tell whether ${check.remote} is on GitHub (${github.detail}), so no branch on ${check.remote} is deleted: ` +
+			`it may be the head or base of an open pull request. If it is on GitHub, run gh auth login --hostname ${github.detail}. ` +
+			`If not, run git config git-sweep-pro.forge none.`
+		);
+	}
+	const why = github ? `${GITHUB_SKIPS[github.reason]}${github.detail ? `: ${github.detail}` : ''}` : 'unknown error';
+	return `The open pull requests on ${check.remote} could not be checked (${why}), ${then}`;
 }
 
 /**
@@ -412,28 +699,53 @@ export function buildReport(
  */
 export async function runCleanWorkflow(context: CleanContext, options: CleanOptions): Promise<CleanRun> {
 	const { git, ui, output } = context;
-	const locals = (await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).stdout.split('\n').filter(Boolean);
-	const missing = options.patterns.filter((pattern) => !isBranchGlob(pattern) && !locals.includes(pattern));
-	if (missing.length > 0) {
-		throw new UnknownBranchError(missing);
-	}
-
 	const apply = !options.dryRun && (options.yes || options.canPrompt);
 	const mode: CleanMode = apply ? 'apply' : 'plan';
 	const named = new Set(options.patterns.filter((pattern) => !isBranchGlob(pattern)));
 	const plan = await planBranches(context, options, named);
+	const { cleaned } = plan;
 	let { analysis, remote, planned } = plan;
+	const scope: CleanScope = {
+		...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+		patterns: options.patterns,
+		protectedPatterns: options.protectedPatterns,
+		github: options.github,
+		fetch: options.fetch,
+		...(cleaned === undefined ? {} : { remote: cleaned }),
+	};
+	const trackers = cleaned === undefined ? new Map<string, string[]>() : trackersOf(plan.upstreams, cleaned);
+	let blocker: RemoteBlocker | undefined;
+	const decideRemote = (remoteBranches: readonly RemoteBranchAnalysis[] | undefined, deletedLocals: Iterable<string>) =>
+		remoteBranches &&
+		decideRemoteActions(
+			remoteBranches.map((branch) => ({ ...branch, trackedBy: trackers.get(branch.name) ?? [] })),
+			new Set(deletedLocals),
+			blocker
+		);
+	let warnedBlocker = false;
+	const block = (check: CleanedRemoteCheck | undefined) => {
+		blocker = check && remoteBlocker(check, scope);
+		if (blocker && check && !warnedBlocker) {
+			output.appendLine(describeRemoteBlocker(check, blocker));
+			warnedBlocker = true;
+		}
+	};
+	const deleting = (list: readonly CleanBranch[]) => list.filter((branch) => branch.action === 'delete').map((branch) => branch.name);
+
+	block(analysis.checks.cleanedRemote);
 	const plannedBase = analysis.checks.base;
 	const decideOptions: DecideOptions = { force: options.force, named, defaultBranch: plannedBase?.name };
 	let branches = decideActions(planned, decideOptions);
+	let remoteBranches = decideRemote(analysis.remoteBranches, deleting(branches));
 	let worktreesPruned: readonly string[] = apply ? [] : plan.prunable;
 	const report = (outcome: CleanOutcome, restored: readonly string[] = []): CleanRun => ({
-		report: buildReport(mode, analysis, remote, branches, worktreesPruned, restored),
+		report: buildReport(mode, analysis, remote, branches, cleaned === undefined ? undefined : { remote: cleaned, branches: remoteBranches ?? [] }, worktreesPruned, restored),
 		outcome,
 	});
+	const pending = () => hasPendingDeletions(branches, remoteBranches);
 
 	if (!apply) {
-		return report(hasPendingDeletions(branches) ? 'not-applied' : 'done');
+		return report(pending() ? 'not-applied' : 'done');
 	}
 
 	let picked: ReadonlySet<string> | undefined;
@@ -442,18 +754,21 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 		const answer = await ui.pickMany({ items: offered, title: 'Select branches to delete' });
 		if (answer === undefined || answer.length === 0) {
 			branches = decideActions(planned, { ...decideOptions, picked: new Set() });
+			remoteBranches = decideRemote(analysis.remoteBranches, []);
 			return report('cancelled');
 		}
 		picked = new Set(answer);
 		branches = decideActions(planned, { ...decideOptions, picked });
-		const deleting = branches.filter((branch) => branch.action === 'delete');
-		const forced = deleting.filter((branch) => branch.needsForce).length;
-		if (options.confirm && deleting.length > 0) {
+		remoteBranches = decideRemote(analysis.remoteBranches, deleting(branches));
+		const deletions = branches.filter((branch) => branch.action === 'delete');
+		const forced = deletions.filter((branch) => branch.needsForce).length;
+		if (options.confirm && deletions.length > 0) {
 			const undo = canRecordDeletions(context.deletionLog) ? 'You can restore them later.' : 'This cannot be undone.';
 			const work = forced > 0 ? ` ${forced} of them hold work found nowhere else.` : '';
-			const confirmed = await ui.confirm(`Delete ${deleting.length} branch(es)?${work} ${undo}`, `Delete ${deleting.length}`);
+			const confirmed = await ui.confirm(`Delete ${deletions.length} branch(es)?${work} ${undo}`, `Delete ${deletions.length}`);
 			if (!confirmed) {
 				branches = decideActions(planned, { ...decideOptions, picked: new Set() });
+				remoteBranches = decideRemote(analysis.remoteBranches, []);
 				return report('cancelled');
 			}
 		}
@@ -463,12 +778,13 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	// again. A person who picked is held to what they picked: a branch that
 	// only the fetch proves is reported as `plan-changed`, for the next run.
 	// `--yes` applies whatever is proven now, within the same scope.
+	const plannedRemote = remoteBranches;
 	const refreshed = await refreshBranches(context, options, plan, named);
 	({ analysis, remote, planned, worktreesPruned } = refreshed);
 	// The worktrees as the plan showed them, to check them against before removing one.
 	const shown = { branches, ignored: [plan.ignored, refreshed.ignored] };
-	branches = holdToPlan(branches, decideActions(planned, decideOptions), remote, !options.yes);
-	const held = holdToBase(branches, plannedBase, analysis.checks.base);
+	branches = holdToPlan(branches, decideActions(planned, decideOptions), remote, !options.yes, scope);
+	const held = holdToBase(branches, plannedBase, analysis.checks.base, scopedCommand(scope, scope.patterns, ['--dry-run']));
 	branches = held.branches;
 	if (held.message) {
 		output.appendLine(held.message);
@@ -476,7 +792,18 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 
 	const recorder = createDeletionRecorder(context.deletionLog, 'sweep', output.appendLine);
 	branches = await applyDeletions(git, branches, shown, recorder);
-	return report(appliedOutcome(branches), recorder.recorded);
+
+	// Remote branches go only with --yes, once the local ones they could be the upstream of are gone.
+	if (options.yes) {
+		const deletedLocals = branches.filter((branch) => branch.result === 'deleted').map((branch) => branch.name);
+		const baseChanged = plannedBase?.ref !== analysis.checks.base?.ref || refreshed.remoteDefault !== plan.remoteDefault;
+		block(analysis.checks.cleanedRemote);
+		remoteBranches = holdRemoteToFetch(decideRemote(analysis.remoteBranches, deletedLocals), remote, baseChanged, scope);
+		remoteBranches = remoteBranches && (await deleteRemoteBranches(git, remoteBranches, recorder, scope));
+	} else {
+		remoteBranches = plannedRemote;
+	}
+	return report(appliedOutcome(branches, remoteBranches), recorder.recorded);
 }
 
 /** What the clean and post-pr workflows read before deciding anything. */
@@ -493,9 +820,15 @@ export type BranchPlan = {
 	readonly remotes: readonly string[];
 	/** The remotes are checked: `fetch` is on and there is at least one. */
 	readonly online: boolean;
+	/** Every configured remote. */
+	readonly configured: readonly string[];
+	/** The remote `--remote` resolved to, whose branches are analysed too. */
+	readonly cleaned?: string;
+	/** The cleaned remote's default branch, only ever read from the server: a local remote HEAD may be missing or out of date. */
+	readonly remoteDefault: string | null;
 };
 
-export type BranchReadOptions = Pick<CleanOptions, 'patterns' | 'fetch' | 'github' | 'protectedPatterns'>;
+export type BranchReadOptions = Pick<CleanOptions, 'patterns' | 'fetch' | 'github' | 'protectedPatterns' | 'remote'>;
 
 function warnIfUnreachable(context: CleanContext, remote: RemoteCheck): void {
 	if (remote.source === 'local-refs' && remote.reason === 'unreachable') {
@@ -503,16 +836,28 @@ function warnIfUnreachable(context: CleanContext, remote: RemoteCheck): void {
 	}
 }
 
-function analyse(context: CleanContext, options: BranchReadOptions, fetched: boolean): Promise<BranchAnalysisResult> {
+/**
+ * Analyses the local branches, and those of the `cleaned` remote as `heads`
+ * lists them. Only branches named exactly in `patterns` lift the protection
+ * of default names.
+ */
+function analyse(
+	context: CleanContext,
+	options: BranchReadOptions,
+	fetched: boolean,
+	cleaned: { readonly name: string; readonly heads: ReadonlyMap<string, string> | undefined; readonly defaultBranch: string | null } | undefined
+): Promise<BranchAnalysisResult> {
 	return Promise.resolve(
 		context.ui.withProgress({ title: 'Analysing branches' }, () =>
 			analyzeBranches(
-				{ git: context.git, ...(context.gh ? { gh: context.gh } : {}) },
+				{ git: context.git, ...(context.gh ? { gh: context.gh } : {}), ...(context.ssh ? { ssh: context.ssh } : {}) },
 				{
 					...(options.patterns.length > 0 ? { branches: options.patterns } : {}),
 					protectedPatterns: options.protectedPatterns,
 					github: options.github,
 					fetched,
+					named: options.patterns.filter((pattern) => !isBranchGlob(pattern)),
+					...(cleaned?.heads ? { remote: { name: cleaned.name, heads: cleaned.heads, defaultBranch: cleaned.defaultBranch } } : {}),
 				}
 			)
 		)
@@ -522,23 +867,60 @@ function analyse(context: CleanContext, options: BranchReadOptions, fetched: boo
 /**
  * The plan: analyses the branches and reads the remote heads with
  * `git ls-remote`. Read-only, whatever the mode: no fetch, no prune, no ref,
- * config or object write.
+ * config or object write. With `remote` (`--remote`), checks it can be
+ * cleaned, then analyses its branches too.
  */
 export async function planBranches(context: CleanContext, options: BranchReadOptions, named: ReadonlySet<string>): Promise<BranchPlan> {
 	const { git, ui } = context;
+	const configured = await readRemotes(git);
+	const cleaned = options.remote === undefined ? undefined : resolveRemote(configured, options.remote);
+	if (cleaned !== undefined) {
+		await checkPushUrl(git, context.ssh, cleaned);
+	}
 	const upstreams = await readUpstreams(git);
-	const remotes = await remotesToCheck(git, upstreams);
+	const remotes = await remotesToCheck(git, upstreams, cleaned);
 	const online = options.fetch && remotes.length > 0;
+	const defaults = new Map<string, string | null>();
+	const heads: RemoteHeads | undefined = online
+		? await ui.withProgress({ title: 'Checking remote branches' }, () => lsRemote(git, remotes, cleaned, defaults))
+		: undefined;
+	// The cleaned remote's branches as ls-remote read them, else as last fetched.
+	const remoteHeads =
+		cleaned === undefined ? undefined : heads && !('error' in heads) ? (heads.get(cleaned) ?? new Map<string, string>()) : await readTrackingHeads(git, cleaned, configured);
+	const remoteDefault = cleaned === undefined ? null : (defaults.get(cleaned) ?? null);
+
+	const locals = (await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).stdout.split('\n').filter(Boolean);
+	const onRemote = (pattern: string) =>
+		cleaned !== undefined && (remoteHeads?.has(pattern) || (pattern.startsWith(`${cleaned}/`) && remoteHeads?.has(pattern.slice(cleaned.length + 1))));
+	const missing = options.patterns.filter((pattern) => !isBranchGlob(pattern) && !locals.includes(pattern) && !onRemote(pattern));
+	if (missing.length > 0) {
+		// `--remote upstream`: the value of a bare --remote is only read inline.
+		const remoteName = options.remote === '' ? missing.find((pattern) => configured.includes(pattern)) : undefined;
+		throw new UnknownBranchError(missing, remoteName);
+	}
+
 	const prunable = (await listWorktrees(context)).filter((worktree) => worktree.state === 'prunable').map((worktree) => worktree.path);
-	let analysis = await analyse(context, options, false);
+	let analysis = await analyse(context, options, false, cleaned === undefined ? undefined : { name: cleaned, heads: remoteHeads, defaultBranch: remoteDefault });
 	let remote: RemoteCheck = { source: 'local-refs', reason: options.fetch ? 'no-remote' : 'no-fetch' };
-	if (online) {
-		({ analysis, remote } = await ui.withProgress({ title: 'Checking remote branches' }, () => markGoneUpstreams(git, analysis, upstreams, remotes)));
+	if (heads) {
+		({ analysis, remote } = await markGoneUpstreams(git, analysis, upstreams, remotes, heads));
 	}
 	warnIfUnreachable(context, remote);
 	const ignored = new Map<string, readonly string[]>();
 	const planned = await inspectWorktrees(git, analysis.branches, named, ignored);
-	return { analysis, remote, planned, ignored, prunable, upstreams, remotes, online };
+	return {
+		analysis,
+		remote,
+		planned,
+		ignored,
+		prunable,
+		upstreams,
+		remotes,
+		online,
+		configured,
+		...(cleaned === undefined ? {} : { cleaned }),
+		remoteDefault,
+	};
 }
 
 /**
@@ -550,7 +932,8 @@ export async function refreshBranches(
 	options: BranchReadOptions,
 	plan: BranchPlan,
 	named: ReadonlySet<string>
-): Promise<Pick<BranchPlan, 'analysis' | 'remote' | 'planned' | 'ignored'> & { readonly worktreesPruned: readonly string[] }> {
+): Promise<Pick<BranchPlan, 'analysis' | 'remote' | 'planned' | 'ignored' | 'remoteDefault'> & { readonly worktreesPruned: readonly string[] }> {
+	const { git } = context;
 	let { remote } = plan;
 	if (plan.online) {
 		const fetched = await fetchAndPrune(context, plan.remotes);
@@ -561,10 +944,20 @@ export async function refreshBranches(
 	}
 	// Until pruned, a worktree whose directory is gone still holds its branch.
 	const worktreesPruned = plan.prunable.length > 0 ? (await pruneWorktrees(context)).pruned : [];
-	const analysis = await analyse(context, options, remote.source === 'fetch');
+	const { cleaned } = plan;
+	const remoteHeads = cleaned === undefined ? undefined : await readTrackingHeads(git, cleaned, plan.configured);
+	// Read again from the server: the fetch only moves the local remote HEAD when followRemoteHEAD says so.
+	// When the fetch failed, its deletions wait for the next run (`fetch-failed`) whatever the default branch.
+	const remoteDefault = cleaned === undefined ? null : remote.source === 'fetch' ? await readRemoteHead(git, cleaned) : plan.remoteDefault;
+	const analysis = await analyse(
+		context,
+		options,
+		remote.source === 'fetch',
+		cleaned === undefined ? undefined : { name: cleaned, heads: remoteHeads, defaultBranch: remoteDefault }
+	);
 	const ignored = new Map<string, readonly string[]>();
-	const planned = await inspectWorktrees(context.git, analysis.branches, named, ignored);
-	return { analysis, remote, planned, ignored, worktreesPruned };
+	const planned = await inspectWorktrees(git, analysis.branches, named, ignored);
+	return { analysis, remote, planned, ignored, remoteDefault, worktreesPruned };
 }
 
 /** What the plan showed, to check each worktree against before removing it. */
@@ -598,10 +991,10 @@ export async function applyDeletions(git: RunGit, branches: readonly CleanBranch
 	return applied;
 }
 
-/** How applying `branches` ended. */
-export function appliedOutcome(branches: readonly CleanBranch[]): CleanOutcome {
-	if (branches.some((branch) => branch.result === 'failed' || branch.result === 'worktree-removed')) {
+/** How applying `branches`, and `remoteBranches` on the cleaned remote, ended. */
+export function appliedOutcome(branches: readonly CleanBranch[], remoteBranches: readonly CleanRemoteBranch[] = []): CleanOutcome {
+	if ([...branches, ...remoteBranches].some((branch) => branch.result === 'failed' || branch.result === 'worktree-removed')) {
 		return 'failed';
 	}
-	return hasPendingDeletions(branches) ? 'not-applied' : 'done';
+	return hasPendingDeletions(branches, remoteBranches) ? 'not-applied' : 'done';
 }

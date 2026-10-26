@@ -1,5 +1,5 @@
 import { analyzeBranches } from './branch-analysis';
-import { CLEAN_SCHEMA, decideActions, hasPendingDeletions, restoreCommand, type CleanBranch, type PlannedBranch } from './clean-plan';
+import { CLEAN_SCHEMA, decideActions, hasPendingDeletions, restoreCommand, type CleanBranch, type CleanScope, type PlannedBranch } from './clean-plan';
 import {
 	appliedOutcome,
 	applyDeletions,
@@ -407,7 +407,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 			return planned.find((branch) => branch.name === targetName);
 		}
 		const result = await analyzeBranches(
-			{ git, ...(context.gh ? { gh: context.gh } : {}) },
+			{ git, ...(context.gh ? { gh: context.gh } : {}), ...(context.ssh ? { ssh: context.ssh } : {}) },
 			{
 				branches: [targetName],
 				base: intoRef,
@@ -484,7 +484,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 			branch: noLocal ? { name: noLocal, action: 'no-local-branch' } : target,
 			worktree: { path: worktree?.path ?? null, removed, switched: mode === 'plan' ? target?.action === 'delete' && inMain() : switched },
 			defaultBranch,
-			clean: buildReport(mode, analysis, remote, others, worktreesPruned, cleanRecorder.recorded),
+			clean: buildReport(mode, analysis, remote, others, undefined, worktreesPruned, cleanRecorder.recorded),
 			nextCwd: removed && leaving() ? continueIn : null,
 			restore: restoreCommand([...targetRecorder.recorded, ...cleanRecorder.recorded]),
 		};
@@ -515,12 +515,20 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	// The worktrees as the plan showed them, to check them against before removing one. The merged
 	// branch is decided again after the fetch: its worktree is checked against the ignored files only.
 	const shown = { branches: others, ignored: [plannedIgnored, fetchedIgnored] };
-	others = holdToPlan(others, decideOthers(refreshed.planned), remote, !options.yes);
+	// Hints that replan a branch keep the options of the run.
+	const cleanScope: CleanScope = {
+		...(scope.cwd === undefined ? {} : { cwd: scope.cwd }),
+		patterns: [],
+		protectedPatterns: scope.protectedPatterns,
+		github: scope.github,
+		fetch: scope.fetch,
+	};
+	others = holdToPlan(others, decideOthers(refreshed.planned), remote, !options.yes, cleanScope);
 	const review = postPrCommand(scope, targetName ?? noLocal, '--dry-run');
 	const fresh = await decide(analysed, false);
 	// Asked in a terminal, it is deleted only when the question named it: one the fetch alone proves is planned again.
 	const approved = target && finishing ? [{ ...target, action: 'delete' as const }] : [];
-	target = fresh && holdToPlan(approved, [fresh], remote, !options.yes)[0];
+	target = fresh && holdToPlan(approved, [fresh], remote, !options.yes, cleanScope)[0];
 	if (target?.reason === 'plan-changed') {
 		target = { ...target, hint: review };
 	}

@@ -587,7 +587,7 @@ suite('branch analysis (real git)', function () {
 			reason: 'offline',
 			detail: 'error connecting to api.github.com',
 		});
-		assert.deepStrictEqual(await reasonFor(failing({ killed: true, signal: 'SIGTERM' })), { used: false, reason: 'offline', detail: 'gh failed' });
+		assert.deepStrictEqual(await reasonFor(failing({ killed: true, signal: 'SIGTERM' })), { used: false, reason: 'timeout', detail: 'gh failed' });
 		assert.deepStrictEqual(await reasonFor(failing({ code: 1, stderr: 'GraphQL: Could not resolve to a Repository\n' })), {
 			used: false,
 			reason: 'gh-failed',

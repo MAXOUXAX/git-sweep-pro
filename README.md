@@ -26,7 +26,8 @@ gsp clean --yes         # delete every branch proven merged
 gsp clean feature/x --yes            # delete one branch, if proven merged
 gsp clean feature/x --yes --force    # delete a branch with unpushed work
 gsp clean --json        # the plan as JSON, for scripts and agents
-gsp worktree list       # every worktree, its branch and its state
+gsp clean --remote --yes             # also delete the merged branches on origin
+gsp worktree list       # every worktree, its state, and what clean would do
 gsp worktree prune      # forget worktree registrations whose directory is gone
 gsp worktree remove <path|branch>   # remove one linked worktree
 gsp post-pr --yes       # after a merged PR: delete its branch and worktree, update main, clean
@@ -66,6 +67,7 @@ A branch with commits found nowhere else is skipped with `needs-force`. Only `--
 Whatever the flags, `gsp clean` never deletes:
 
 - the default branch, or a protected branch (`--protect 'release/*'`, `git config --add git-sweep-pro.protected 'release/*'`, or the `gitSweepPro.protectedBranches` setting);
+- a branch named `main`, `master`, `trunk` or `develop`, unless you name it exactly (`gsp clean master`): when the remote's default branch moves, the old one looks merged into the new one. Naming it lifts only this protection: it still needs a proof;
 - a branch with `branch.<name>.deleteMerged` set to `false`;
 - a branch being rebased or bisected, in any worktree;
 - the current branch, or a branch checked out in the main worktree;
@@ -84,6 +86,29 @@ Secret-like files are never regenerable, wherever they are: `.env`, `.env.*`, `*
 
 Every deletion is recorded: `gsp restore <branch>` recreates any of the last 100 deleted branches, tracking its upstream again if it still exists, until Git garbage-collects its commits (two weeks by default). Like after `git branch -D`, the rest of the branch's configuration (its description, `pushRemote`, `rebase` and other `branch.<name>.*` settings) is not restored.
 
+### Branches on the remote
+
+`gsp clean --remote` also plans the branches on `origin` (`--remote=<name>` for another remote, or the only one when there is no `origin`). It deletes them only with `--yes`, never with `--force`, and only when their work is proven on that remote's own default branch: the tip is on it, each commit has an equivalent patch there, the default branch reached the content of every file it changed, or it is the head of a pull request merged into the default branch of that remote's repository (matched by SHA). A branch merged into your fork's `main` is not merged on `upstream`.
+
+The remote's default branch is the one its server names (`git ls-remote --symref <remote> HEAD`), read again after the fetch, never your local `<remote>/HEAD`. When the server names none, cannot be reached, or `--no-fetch` is passed, the branches it would delete, and those it can't judge without one, are skipped with `remote-default-unknown`; what is kept for its own reason stays kept.
+
+It never deletes there the default branch, a protected branch or name, the head or the base of an open pull request (a stacked pull request targets it), the upstream of a local branch with `branch.<name>.deleteMerged` set to `false`, or a branch a kept local branch tracks. A local branch deleted in the same run no longer holds its upstream, so both go together. Branch names and globs apply to remote names too, bare (`feature/*`) or qualified (`origin/feature/*`). Naming `develop` lifts its long-lived-name protection on your local branch only: on the remote, name it `origin/develop`.
+
+On a GitHub remote, open pull requests are read with `gh`: those on its repository, and in a fork, every one on its parent and on the root of its fork network (matched by SHA, or by name when it comes from your fork). When they cannot all be read (`gh` missing, unauthenticated, failing or too slow, more than 1000 open, or `--no-github`), no branch there is deleted: each one that would be is skipped with `github-unavailable`, and a warning says how to fix it.
+
+gsp tells a GitHub remote by its URL, as Git uses it (`insteadOf` applied), with SSH host aliases resolved through `ssh -G`: github.com, GitHub Enterprise (`*.ghe.com`, or a host `gh auth status` is logged in to). Local paths, `file://`, gitlab.com and bitbucket.org are not GitHub, and rely on the proofs alone. On any other host, gsp can't tell, so it deletes nothing there either: log `gh` in to that host (`gh auth login --hostname <host>`), or say what it is:
+
+```bash
+git config git-sweep-pro.forge none     # a self-hosted server that is not GitHub
+git config git-sweep-pro.forge github   # a GitHub server gh can't recognise
+```
+
+`--remote` refuses a remote that pushes elsewhere than it fetches from (`remote.<name>.pushurl`, `pushInsteadOf`): gsp would check one repository and delete in another.
+
+The plan reads the remote with `git ls-remote`, and changes nothing. A tip this repository has not fetched yet cannot be proven: the branch is kept until the next run. Once approved, `gsp clean` fetches, checks again, then deletes each branch with `git push --force-with-lease=refs/heads/<branch>:<tip> <remote> :refs/heads/<branch>`: a branch someone pushed to since it was analysed is skipped with `plan-changed`.
+
+Each remote deletion is recorded too: `gsp restore origin/<branch>` pushes it back at its recorded commit, unless a branch of that name exists there again. Lists show it as `origin/<branch> (remote)`; when a local branch was literally named `origin/<branch>` too, pick the one to restore from `gsp restore`.
+
 ### Output
 
 One line per branch, then one summary line:
@@ -96,6 +121,8 @@ keep    feature/wip     1 commit not merged into origin/main
 keep    main            default branch
 2 deleted (1 empty, 1 squash-merged) · 1 skipped (1 needs --force) · restore with gsp restore feature/empty feature/squash
 ```
+
+With `--remote`, an "On origin" section follows, in the same format, and the summary line ends with what happened there, for instance `on origin: 3 deleted`.
 
 ### After a merged pull request
 
@@ -131,7 +158,7 @@ The worktree you ran gsp in was removed. Continue in the main checkout: cd /work
 | --- | --- |
 | 0 | Done, or nothing to do |
 | 1 | At least one action failed; the output says which |
-| 2 | Invalid arguments, or a branch that does not exist |
+| 2 | Invalid arguments, or a branch or remote that does not exist |
 | 3 | Sync paused on conflicts. Resolve them, stage the files, then run `gsp resume` |
 | 4 | Cancelled at a prompt |
 | 5 | `clean`, `post-pr`: some planned deletions were not applied; the output says why and what to run next (`next` in the JSON). For `post-pr`, 5 also means the branch you asked to finish isn't finished. `sync`, `agents`, `restore`: a confirmation was needed but nobody could answer; rerun with `--yes` |
@@ -151,6 +178,7 @@ Agents read the plan, then apply it when authorized:
 ```sh
 gsp clean --json                  # the plan; exit code 5 when there is something to delete
 gsp clean --json --yes            # apply it; the result, with a restore command
+gsp clean --json --remote --yes   # also delete the merged branches on origin
 gsp post-pr --json --yes          # after merging a pull request; "nextCwd" says where to cd
 gsp restore --json                # list recoverable deletions
 gsp restore feature/x --non-interactive
@@ -160,7 +188,7 @@ gsp restore feature/x --non-interactive
 
 ### JSON
 
-`--json` works with `clean` (and `sweep`, `list`), `post-pr`, `worktree list` and `restore` without branch names. It writes one JSON document to stdout; progress and warnings go to stderr. A fatal error is still one document, `{ "schema": 2, "error": { "message": "…", "code": "…" } }`, with `code` one of `usage`, `no-such-directory`, `unknown-branch`, `not-a-repository` or `failed`.
+`--json` works with `clean` (and `sweep`, `list`), `post-pr`, `worktree list` and `restore` without branch names. It writes one JSON document to stdout; progress and warnings go to stderr. A fatal error is still one document, `{ "schema": 2, "error": { "message": "…", "code": "…" } }`, with `code` one of `usage`, `no-such-directory`, `unknown-branch`, `unknown-remote`, `push-url-differs`, `not-a-repository` or `failed`.
 
 `gsp clean --json` writes a versioned document (`schema` is 2):
 
@@ -205,20 +233,24 @@ gsp restore feature/x --non-interactive
 | `checks.remote.source` | `fetch` (apply), `ls-remote` (plan), or `local-refs` with a `reason`: `no-fetch`, `no-remote` or `unreachable` |
 | `branches[].action` | `delete`, `keep` (its work exists nowhere else) or `skip` (a rule or a missing flag stops it) |
 | `branches[].reason` | For `skip`: `protected`, `delete-merged-false`, `rebase-in-progress`, `bisect-in-progress`, `current-branch`, `main-worktree`, `locked-worktree`, `dirty-worktree`, `submodules`, `ignored-files`, `needs-force`, `tracked-by-kept-branch`, `not-selected`, and while applying `plan-changed`, `fetch-failed`, `worktree-changed`. Otherwise the same as `verdictReason` |
-| `branches[].verdictReason` | Dead: `empty`, `merged`, `rebase-merged`, `squash-merged`, `pr-merged`, `commits-merged`, `upstream-gone`. Alive: `default-branch`, `open-pr`, `unmerged-commits`, `no-base`, `analysis-failed` (`evidence` is `{ "method": "error", "message" }`) |
+| `branches[].verdictReason` | Dead: `empty`, `merged`, `rebase-merged`, `squash-merged`, `pr-merged`, `commits-merged`, `upstream-gone`. Alive: `default-branch`, `open-pr`, `open-pr-base` (remote branches only: an open pull request targets it; `evidence.match` is `base`), `unmerged-commits`, `no-base`, `analysis-failed` (`evidence` is `{ "method": "error", "message" }`) |
 | `branches[].worktree` | `null`, or `path`, `isMain`, `dirty`, `locked`, `prunable`, `inProgress` (`rebase`, `bisect` or `null`) and `ignoredFiles`: `{ count, sample }` for the ignored files removing it would delete (at most 10 in `sample`; a trailing `/` is a whole folder), and `submodules`: whether it holds submodules. Both are `null` when they were not looked for |
-| `branches[].hint` | The command that resolves a skip or applies a planned deletion; for `ignored-files`, it first says what to do by hand: `move what you need out of <path>, then: <command>`. `null` when there is nothing to do, and for `protected` and `delete-merged-false` |
+| `branches[].protected` | Why it is kept whatever its verdict, or `null`: `{ "by": "default-branch" }`, `{ "by": "pattern", "pattern" }`, `{ "by": "branch-config", "key" }` (`deleteMerged` is false) or `{ "by": "default-name" }` (`main`, `master`, `trunk` or `develop`, not named exactly) |
+| `branches[].hint` | The command that resolves a skip or applies a planned deletion; for `ignored-files`, it first says what to do by hand: `move what you need out of <path>, then: <command>`. `null` when there is nothing to do, and for `protected` (except `default-name`: `gsp clean <name>`) and `delete-merged-false` |
 | `branches[].result` | Apply mode, deleted branches only: `deleted`, `worktree-removed` (the worktree went, the branch did not: see `error`) or `failed` (nothing changed: see `error`) |
+| `remoteBranches` | With `--remote` only: the branches on that remote, each with `remote`, `name`, `tip`, `action`, `reason`, `verdict`, `verdictReason`, `evidence`, `protected`, `trackedBy` (the local branches whose upstream it is), `hint`, and once applied `result` (`deleted` or `failed`, with `error`). `name` is the branch on the remote; the command line names it `<remote>/<name>`. `reason` for `skip`: `protected` (including `{ "by": "branch-config" }` for the upstream of a local branch that keeps it), `tracked-by-kept-branch`, `remote-default-unknown` (every branch, see `checks.cleanedRemote`), `github-unavailable` (each branch that would be deleted), and while applying `plan-changed` (it moved since it was analysed, or a default branch changed) or `fetch-failed` |
+| `checks.cleanedRemote` | With `--remote` only: `{ remote, defaultBranch, github }`. `defaultBranch` is what the server names, or `null` (nothing there is deleted). `github` is `null` for a remote known not to be on GitHub, else `{ "used": true, repo, parent, source, openPullRequests }` (`repo`: as GitHub names it today; `parent`: the repository it is a fork of, or `null`; `source`: the root of its fork network when it is not the parent, or `null`) or `{ "used": false, reason, detail? }` with `reason` one of `disabled` (`--no-github`), `unknown-host` (`detail` is the host: gsp can't tell whether it is GitHub), `gh-missing`, `gh-unauthenticated`, `offline`, `timeout`, `gh-failed` or `too-many-open-prs` |
+| `summary.remote` | With `--remote` only: `{ remote, delete, deleted, failed, skipped, kept }` for its branches |
 | `worktreesPruned` | Registrations whose directory is gone: pruned (apply) or to prune (plan) |
-| `restore` | `gsp restore <names>` for the branches deleted by this run, or `null` |
+| `restore` | `gsp restore <names>` for the branches deleted by this run (`<remote>/<name>` for a remote one), or `null` |
 | `next` | The command to run next, the one the terminal output prints: it applies the planned deletions not carried out, or, when some changed while applying, plans again within the same branches and options (`--dry-run`) so you can review them. `null` when nothing is left, or when what is left needs `--force` or your action: each branch's `hint` says what to do |
 
 Other JSON outputs:
 
 | Command | JSON value |
 | --- | --- |
-| `gsp worktree list --json` | Array of worktrees, each with `path`, `branch` (`null` when detached) and `state` (`main`, `linked`, `prunable` or `locked`) |
-| `gsp restore --json` | Array of recoverable deletion records, including `branch`, `sha`, `deletedAt` and `source` |
+| `gsp worktree list --json` | `{ "schema": 2, "command": "worktree list", "worktrees": [...] }`, main worktree first. Each has `path`, `branch` (during a rebase or a bisect, the branch being worked on; `null` when detached), `head`, `isMain`, `locked`, `prunable`, `dirty`, `inProgress` (`rebase`, `bisect` or `null`), `ignoredFiles` (`{ count, sample }`, as in `gsp clean`; `null` for the main worktree and a prunable one), and what `gsp clean` would do with its branch: `verdict`, `verdictReason`, `action`, `reason` and `hint`, as in `gsp clean --json`. A detached linked worktree has `action: "keep"` and `reason: "detached"`; without a branch otherwise, all are `null`. Read-only, like a plan |
+| `gsp restore --json` | Array of recoverable deletion records, including `branch`, `sha`, `deletedAt`, `source`, and `remote` for a branch deleted on a remote |
 
 `gsp post-pr --json` writes the same `schema` 2, with `"command": "post-pr"`:
 

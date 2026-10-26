@@ -333,6 +333,21 @@ suite('cli post-pr (real git)', function () {
 		assert.ok(!branchExists(fx.repo, 'feature/x'));
 	});
 
+	test('a default name is protected without --protect: naming it is read as the old form', async () => {
+		git(['branch', 'develop', 'origin/main'], fx.repo);
+		mergedCurrentBranch('feature/x');
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', 'develop', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
+		assert.ok(io.err.join('').includes('develop is protected, so "gsp post-pr develop" is read as the deprecated'), io.err.join(''));
+		const report = json(io.out);
+		assert.strictEqual(report.branch?.name, 'feature/x');
+		const develop = report.clean.branches.find((branch) => branch.name === 'develop');
+		assert.deepStrictEqual(develop?.protected, { by: 'default-name' });
+		assert.ok(branchExists(fx.repo, 'develop'), 'develop is never deleted');
+		assert.ok(!branchExists(fx.repo, 'feature/x'));
+	});
+
 	test('from a linked worktree, naming the branch of the main checkout finishes that branch', async () => {
 		mergedCurrentBranch('feature/b');
 		const wt = addFeatureWorktree('feature/a');

@@ -1,7 +1,14 @@
 import * as assert from 'assert';
-import { runGitCommand, type ExecFileFn } from '../../core/git-command';
+import { quoteShellArg, runGitCommand, type ExecFileFn } from '../../core/git-command';
 
 suite('git-command', () => {
+	test('quotes only what the shell would interpret', () => {
+		assert.deepStrictEqual(
+			['--remote=upstream', 'feature/x', '=x', 'a b', "it's"].map(quoteShellArg),
+			['--remote=upstream', 'feature/x', "'=x'", "'a b'", "'it'\\''s'"]
+		);
+	});
+
 	test('logs command and stdout/stderr on success', async () => {
 		const lines: string[] = [];
 		const execFileFn: ExecFileFn = async () => ({

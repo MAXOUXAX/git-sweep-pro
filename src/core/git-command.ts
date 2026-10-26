@@ -14,7 +14,8 @@ function escapeForShell(s: string): string {
 
 /** Quotes `s` for a copy-pasteable shell command, only when it contains characters the shell would interpret. */
 export function quoteShellArg(s: string): string {
-	return /^[\w./@+-]+$/.test(s) ? s : escapeForShell(s);
+	// `=` only after the first character: zsh expands a word starting with it.
+	return /^[\w./@+-][\w./@+=-]*$/.test(s) ? s : escapeForShell(s);
 }
 
 /**
