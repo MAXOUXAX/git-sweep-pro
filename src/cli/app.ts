@@ -453,6 +453,8 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 	if (!worktree) {
 		return 'failed';
 	}
+	// With --rpc, stdout carries only protocol events: a line goes to the output channel as a log event.
+	const print = (line: string) => (options.rpc ? context.output.appendLine(line) : io.stdout(`${line}\n`));
 	try {
 		switch (worktree.subcommand) {
 			case 'list': {
@@ -473,8 +475,8 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 				if (pruned.length === 0) {
 					io.stderr('No worktree registrations to prune.\n');
 				} else {
-					io.stdout(`${dryRun ? 'Would prune' : 'Pruned'} ${pruned.length} worktree registration(s):\n`);
-					pruned.forEach((path) => io.stdout(`  ${path}\n`));
+					print(`${dryRun ? 'Would prune' : 'Pruned'} ${pruned.length} worktree registration(s):`);
+					pruned.forEach((path) => print(`  ${path}`));
 				}
 				return 'ok';
 			}
@@ -482,7 +484,7 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 				const result = await removeWorktree(context, worktree.target ?? '', options.mode === 'forceDelete', dir);
 				switch (result.kind) {
 					case 'removed':
-						io.stdout(`Removed worktree ${result.worktree.path}.\n`);
+						print(`Removed worktree ${result.worktree.path}.`);
 						return 'ok';
 					case 'main':
 						context.ui.showErrorMessage(`Refusing to remove the main worktree (${result.worktree.path}).`, { failed: true });

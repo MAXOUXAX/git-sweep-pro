@@ -856,6 +856,20 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(JSON.parse(after.out.join('')).worktrees.at(-1).prunable, true, 'the registration is still there');
 		});
 
+		test('worktree prune and remove write only protocol events to stdout with --rpc', async () => {
+			makeGoneBranch(fx.repo, 'feature/gone');
+			fs.rmSync(addWorktree('feature/gone'), { recursive: true, force: true });
+			makeGoneBranch(fx.repo, 'feature/wt');
+			addWorktree('feature/wt');
+
+			for (const args of [['worktree', 'prune', '--rpc'], ['worktree', 'remove', 'feature/wt', '--rpc']]) {
+				const io = createFakeIo(fx.repo);
+				assert.strictEqual(await runCli(args, io), EXIT.ok);
+				const events = io.out.join('').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { type: string; line?: string });
+				assert.ok(events.some((event) => event.type === 'log' && /^(Pruned|Removed)/.test(event.line ?? '')), JSON.stringify(events));
+			}
+		});
+
 		test('worktree remove removes a linked worktree, refuses the main one, and reports an unknown one', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');
