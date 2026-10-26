@@ -267,24 +267,28 @@ Other JSON outputs:
 
 ## In VS Code
 
-Every command runs the same CLI, rendered with VS Code pickers and dialogs. Open the Command Palette and type **Git Sweep Pro**:
+Every command runs the same CLI: the extension reads its `--json` plan, shows it with VS Code pickers and dialogs, then applies exactly what you picked. Open the Command Palette and type **Git Sweep Pro**:
 
 | Command | Does |
 | --- | --- |
-| Sweep Stale Branches | Pick a mode, then `gsp clean`: pick branches, confirm |
-| Preview Stale Branches (Dry Run) | `gsp clean --dry-run` |
-| Post Pull Request Cleanup | `gsp post-pr` |
+| Sweep Stale Branches | Shows the plan of `gsp clean`: proven deletions selected, skipped branches below with why (and a button that copies the command fixing it). Confirm, then the picked branches are deleted, with an Undo in the notification. The title-bar button also offers the branches that need a forced delete, never selected |
+| Preview Stale Branches (Dry Run) | The same plan, read-only |
+| Finish Merged Pull Request | Previews `gsp post-pr`, then finishes it. When it removes the worktree this window has open, offers to open the main checkout |
+| Show Worktrees | Every worktree with its state, and what Sweep Stale Branches would do with it; open, remove or prune one |
+| Remove Worktree / Prune Worktrees | `gsp worktree remove` / `gsp worktree prune`. A worktree with uncommitted changes or ignored files a build doesn't recreate is only removed after two confirmations |
 | Sync Branch With Upstream / Resume Sync With Upstream | `gsp sync` / `gsp resume` |
 | Restore Deleted Branches | `gsp restore` |
 | Add Instructions for Coding Agents | `gsp agents` |
 
 | Setting | Default | |
 | --- | --- | --- |
-| `gitSweepPro.defaultMode` | `safeDelete` | Mode offered first: `dryRun`, `safeDelete` or `forceDelete` (`--force`) |
+| `gitSweepPro.defaultMode` | `safeDelete` | How Sweep Stale Branches opens: `safeDelete`, `forceDelete` (branches that need a forced delete on offer) or `dryRun` (the preview) |
 | `gitSweepPro.protectedBranches` | `[]` | Globs never deleted (`*` and `?`) |
-| `gitSweepPro.autoFetchPrune` | `true` | Run `git fetch -p` first |
-| `gitSweepPro.confirmBeforeDelete` | `true` | Ask before deleting |
-| `gitSweepPro.includeMergedBranches` | `false` | Deprecated: merged branches are always offered |
+| `gitSweepPro.cleanRemoteBranches` | `false` | Also offer the merged branches on the remote (`--remote`), confirmed separately |
+| `gitSweepPro.github` | `true` | Use the GitHub CLI for pull requests; off is `--no-github` |
+| `gitSweepPro.autoFetchPrune` | `true` | Read the remote before planning and fetch before deleting; off is `--no-fetch` |
+| `gitSweepPro.confirmBeforeDelete` | `true` | Ask before deleting proven branches. Forced and remote deletions are always confirmed |
+| `gitSweepPro.includeMergedBranches` | `false` | Deprecated, does nothing: merged branches are always offered |
 | `gitSweepPro.cli.addToTerminalPath` | `true` | Put `gsp` on the integrated terminals' `PATH` |
 
 Every git command and its output goes to the **Git Sweep** output channel.
