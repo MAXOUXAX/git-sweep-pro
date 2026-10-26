@@ -104,8 +104,8 @@ suite('clean plan', () => {
 			main: ['skip', 'protected', null],
 			'release/1': ['skip', 'protected', null],
 			'keep/me': ['skip', 'delete-merged-false', null],
-			'feature/here': ['skip', 'current-branch', 'gsp post-pr main'],
-			'feature/main': ['skip', 'main-worktree', 'git -C /repo switch main'],
+			'feature/here': ['skip', 'current-branch', 'gsp post-pr feature/here --yes'],
+			'feature/main': ['skip', 'main-worktree', 'gsp post-pr feature/main --yes'],
 		});
 	});
 
@@ -335,7 +335,7 @@ suite('clean plan', () => {
 			'delete  feature/b     already in origin/main',
 			'delete  feature/a     squash-merged into origin/main, removes worktree /wt/a',
 			'skip    main          default branch',
-			'skip    feature/here  current branch (squash-merged into origin/main) → gsp post-pr main',
+			'skip    feature/here  current branch (squash-merged into origin/main) → gsp post-pr feature/here --yes',
 			'skip    feature/gone  needs --force (upstream origin/feature/gone is gone, 2 commits found nowhere else) → gsp clean feature/gone --yes --force',
 		]);
 		assert.strictEqual(formatSummary(plan), '2 to delete (1 empty, 1 squash-merged) · 3 skipped (1 needs --force) · 1 worktree registration to prune');

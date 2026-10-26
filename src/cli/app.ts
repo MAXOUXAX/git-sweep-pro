@@ -8,7 +8,8 @@ import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, next
 import { PushUrlMismatchError, runCleanWorkflow, UnknownBranchError, UnknownRemoteError, type CleanOutcome } from '../core/clean-workflow';
 import { createSshRunner } from '../core/forge';
 import { createGhRunner } from '../core/github-signal';
-import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
+import { formatNextSteps, formatPostPrLines, postPrNextCommand, type PostPrDocument, type PostPrReport } from '../core/post-pull-request-plan';
+import { PostPrUsageError, runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import { inspectDeletions, runRestoreWorkflow } from '../core/restore-workflow';
 import { runResumeWorkflow } from '../core/sync-resume-workflow';
 import type { SyncContext } from '../core/sync-state';
@@ -157,6 +158,9 @@ async function runCommand(options: CliOptions, dir: string, frontend: Frontend, 
 	if (options.command === 'clean') {
 		return runClean(options, dir, frontend, io);
 	}
+	if (options.command === 'post-pr') {
+		return runPostPr(options, dir, frontend, io);
+	}
 	return { kind: 'workflow', outcome: await runWorkflow(options, dir, frontend, io) };
 }
 
@@ -175,8 +179,6 @@ async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend,
 	switch (options.command) {
 		case 'worktree':
 			return runWorktree(context, options, io, dir);
-		case 'post-pr':
-			return runPostPullRequestWorkflow(context, requested);
 		case 'restore':
 			return runRestore(context, options, frontend, io);
 		case 'agents':
@@ -194,6 +196,7 @@ async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend,
 			return options.command === 'sync' ? runSyncWorkflow(syncContext, requested) : runResumeWorkflow(syncContext);
 		}
 		case 'clean':
+		case 'post-pr':
 		case 'help':
 		case 'version':
 			return 'ok';
@@ -207,7 +210,7 @@ function createContext({ root, commonDir, protectedPatterns }: Repository, optio
 			protectedBranches: [...options.protect, ...protectedPatterns],
 			autoFetchPrune: options.fetch,
 			confirmBeforeDelete: options.confirm,
-			// Only post-pr still runs the previous sweep; it never offered merged branches.
+			// Read by no command anymore: merged branches are always cleaned.
 			includeMergedBranches: false,
 		},
 		git: (args) => runGitCommand(args, root, { appendLine: frontend.trace }),
@@ -339,6 +342,92 @@ function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: C
 	if (next) {
 		io.stdout(`${next}\n`);
 	}
+}
+
+/**
+ * `post-pr`: finishes a merged pull request. With `--json`, the report is the
+ * only thing on stdout; otherwise one line per change, then the next steps.
+ */
+async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<CommandOutcome> {
+	let repository: Repository;
+	try {
+		repository = await openRepository(dir, frontend.trace);
+	} catch (error) {
+		if (options.json) {
+			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+		}
+		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
+		return EXIT.failed;
+	}
+	const context = createContext(repository, options, frontend);
+	try {
+		const { report, outcome } = await runPostPullRequestWorkflow(
+			{
+				...context,
+				...(options.github ? { gh: createGhRunner(repository.root) } : {}),
+				gitAt: (worktree) => (args) => runGitCommand(args, worktree, { appendLine: frontend.trace }),
+			},
+			{
+				branch: options.positionals[0],
+				into: options.into,
+				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+				dryRun: options.mode === 'dryRun',
+				yes: options.yes,
+				force: options.mode === 'forceDelete',
+				fetch: options.fetch,
+				github: options.github,
+				protectedPatterns: options.protect,
+				canPrompt: frontend.canPrompt && !options.json,
+				confirm: options.confirm,
+			}
+		);
+		printPostPrReport(report, outcome, options, frontend, io);
+		return { kind: 'clean', outcome };
+	} catch (error) {
+		if (error instanceof PostPrUsageError) {
+			if (options.json) {
+				printJsonError(io, error.message, error.code);
+			}
+			io.stderr(`error: ${error.message}\n`);
+			return EXIT.usage;
+		}
+		if (options.json) {
+			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+		}
+		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
+		return EXIT.failed;
+	}
+}
+
+function printPostPrReport(report: PostPrReport, outcome: CleanOutcome, options: CliOptions, frontend: Frontend, io: CliIo): void {
+	const next =
+		outcome === 'cancelled'
+			? null
+			: postPrNextCommand(report, {
+					...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+					...(options.into === undefined ? {} : { into: options.into }),
+					protectedPatterns: options.protect,
+					github: options.github,
+					fetch: options.fetch,
+				});
+	if (options.json) {
+		const document: PostPrDocument = { ...report, next };
+		io.stdout(`${JSON.stringify(document, null, 2)}\n`);
+		return;
+	}
+	const lines = formatPostPrLines(report);
+	const steps = outcome === 'cancelled' ? ['Cancelled. Nothing was changed.'] : formatNextSteps(report, next);
+	if (options.rpc || frontend.canPrompt) {
+		lines.forEach((line) => frontend.output.appendLine(line));
+		const message = [lines[0], ...steps].join('\n');
+		if (outcome === 'failed') {
+			frontend.ui.showErrorMessage(message, { seeOutput: true });
+		} else {
+			frontend.ui.showInformationMessage(message, report.mode === 'plan' ? { dryRun: true } : undefined);
+		}
+		return;
+	}
+	[...lines, ...steps].forEach((line) => io.stdout(`${line}\n`));
 }
 
 /**

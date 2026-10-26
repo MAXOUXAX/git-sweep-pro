@@ -279,26 +279,6 @@ suite('cli app (real git)', function () {
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 	});
 
-	test('post-pr switches to the given branch, deletes the merged one and pulls', async () => {
-		git(['checkout', '-q', '-b', 'feature/done'], fx.repo);
-		git(['push', '-q', '-u', 'origin', 'feature/done'], fx.repo);
-		git(['push', '-q', 'origin', '--delete', 'feature/done'], fx.repo);
-
-		const io = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['post-pr', 'main', '--yes'], io), EXIT.ok);
-		assert.strictEqual(git(['rev-parse', '--abbrev-ref', 'HEAD'], fx.repo).trim(), 'main');
-		assert.ok(!branchExists(fx.repo, 'feature/done'));
-		assert.ok(io.out.join('').includes('Switched to main and pulled.'));
-	});
-
-	test('post-pr reports an unknown target branch', async () => {
-		git(['checkout', '-q', '-b', 'feature/x'], fx.repo);
-		const io = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['post-pr', 'nope'], io), EXIT.failed);
-		assert.ok(io.err.join('').includes('Branch "nope" is not available'));
-		assert.ok(branchExists(fx.repo, 'feature/x'));
-	});
-
 	test('sync rebases and force-pushes; a conflict pauses (exit 3) and resume finishes it', async () => {
 		git(['checkout', '-q', '-b', 'feature/sync'], fx.repo);
 		commitFile(fx.repo, 'shared.txt', 'feature\n', 'feature change');
@@ -380,7 +360,7 @@ suite('cli app (real git)', function () {
 			const realWt = fs.realpathSync(wt);
 			const lines = io.out.join('').split('\n');
 			assert.ok(lines.includes(`delete  feature/wt    already in origin/main, removes worktree ${realWt}`), lines.join('\n'));
-			assert.ok(lines.includes('skip    feature/here  current branch (already in origin/main) → gsp post-pr main'), lines.join('\n'));
+			assert.ok(lines.includes('skip    feature/here  current branch (already in origin/main) → gsp post-pr feature/here --yes'), lines.join('\n'));
 
 			const json = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['list', '--json', '--no-fetch'], json), EXIT.notApplied);
@@ -575,18 +555,6 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(await runCli(['--yes'], createFakeIo(wt)), EXIT.ok);
 			assert.ok(branchExists(fx.repo, 'feature/wt'));
 			assert.ok(!branchExists(fx.repo, 'feature/other'));
-		});
-
-		test('post-pr in a linked worktree detaches at the default branch and deletes the merged one', async () => {
-			makeGoneBranch(fx.repo, 'feature/done');
-			const wt = addWorktree('feature/done');
-
-			const io = createFakeIo(wt);
-			assert.strictEqual(await runCli(['post-pr', '--yes'], io), EXIT.ok, io.err.join(''));
-			assert.strictEqual(git(['rev-parse', '--abbrev-ref', 'HEAD'], wt).trim(), 'HEAD', 'detached');
-			assert.strictEqual(git(['rev-parse', 'HEAD'], wt).trim(), git(['rev-parse', 'origin/main'], fx.repo).trim());
-			assert.ok(!branchExists(fx.repo, 'feature/done'));
-			assert.strictEqual(git(['rev-parse', '--abbrev-ref', 'HEAD'], fx.repo).trim(), 'main', 'main worktree untouched');
 		});
 
 		test('sync in a linked worktree rebases onto main checked out in the main worktree', async () => {
