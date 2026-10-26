@@ -64,6 +64,12 @@ export type CleanOptions = {
 	readonly remote?: string;
 	/** `-C <path>` as given on the command line, kept in the commands the hints suggest. */
 	readonly cwd?: string;
+	/**
+	 * `--expect`: branch (or `<remote>/<name>`) → the tip it must still have to
+	 * be deleted. Each is in `patterns` too; one that no longer exists is
+	 * skipped as `plan-changed` instead of being a usage error.
+	 */
+	readonly expect?: ReadonlyMap<string, string>;
 };
 
 export type CleanContext = WorkflowContext & {
@@ -496,6 +502,72 @@ export function holdToPlan(
 	});
 }
 
+/** A branch named by `--expect` that no longer exists: nothing about it is proven any more. */
+function vanished(name: string, sha: string) {
+	return {
+		tip: sha,
+		action: 'skip',
+		reason: 'plan-changed',
+		verdict: 'alive',
+		verdictReason: 'analysis-failed',
+		evidence: { method: 'error', message: `${name} no longer exists` },
+		protected: null,
+		hint: null,
+	} as const;
+}
+
+/**
+ * Holds the local branches named by `--expect` to the tip they were expected
+ * at: one that moved, that is now kept or that no longer exists is skipped as
+ * `plan-changed`; one now skipped for its own reason keeps it. `isRemote`
+ * tells the expectations meant for the cleaned remote's branches.
+ */
+export function holdToExpected(
+	branches: readonly CleanBranch[],
+	expect: ReadonlyMap<string, string>,
+	isRemote: (name: string) => boolean,
+	scope: CleanScope = DEFAULT_SCOPE
+): CleanBranch[] {
+	const held = branches.map((branch) => {
+		const sha = expect.get(branch.name);
+		if (sha === undefined || branch.result !== undefined || (branch.tip === sha && branch.action !== 'keep')) {
+			return branch;
+		}
+		return skipped(branch, 'plan-changed', scopedCommand(scope, [branch.name], ['--dry-run']));
+	});
+	const present = new Set(branches.map((branch) => branch.name));
+	const gone = [...expect].filter(([name]) => !present.has(name) && !isRemote(name));
+	return [
+		...held,
+		...gone.map(
+			([name, sha]): CleanBranch => ({ name, ...vanished(name, sha), unpushedCommits: 0, upstream: null, upstreamState: 'none', worktree: null, needsForce: false })
+		),
+	];
+}
+
+/** {@link holdToExpected} for the branches of the cleaned `remote`, named `<remote>/<name>` in `expect`. */
+export function holdRemoteToExpected(
+	branches: CleanRemoteBranch[] | undefined,
+	expect: ReadonlyMap<string, string>,
+	remote: string | undefined,
+	localNames: ReadonlySet<string>,
+	scope: CleanScope = DEFAULT_SCOPE
+): CleanRemoteBranch[] | undefined {
+	if (branches === undefined || remote === undefined) {
+		return branches;
+	}
+	const held = branches.map((branch): CleanRemoteBranch => {
+		const sha = expect.get(remoteBranchArg(branch));
+		if (sha === undefined || branch.result !== undefined || (branch.tip === sha && branch.action !== 'keep')) {
+			return branch;
+		}
+		return { ...branch, action: 'skip', reason: 'plan-changed', hint: scopedCommand({ ...scope, remote }, [remoteBranchArg(branch)], ['--dry-run']) };
+	});
+	const present = new Set(branches.map(remoteBranchArg));
+	const gone = [...expect].filter(([arg]) => arg.startsWith(`${remote}/`) && !present.has(arg) && !localNames.has(arg));
+	return [...held, ...gone.map(([arg, sha]): CleanRemoteBranch => ({ remote, name: arg.slice(remote.length + 1), ...vanished(arg, sha), trackedBy: [] }))];
+}
+
 /** The scope of a plain `gsp clean`, for hints. */
 const DEFAULT_SCOPE: CleanScope = { patterns: [], protectedPatterns: [], github: true, fetch: true };
 
@@ -732,11 +804,17 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	};
 	const deleting = (list: readonly CleanBranch[]) => list.filter((branch) => branch.action === 'delete').map((branch) => branch.name);
 
+	const expect = options.expect ?? new Map<string, string>();
+	const isRemote = (name: string) => cleaned !== undefined && name.startsWith(`${cleaned}/`);
+	const holdLocal = (list: readonly CleanBranch[]) => (expect.size > 0 ? holdToExpected(list, expect, isRemote, scope) : [...list]);
+	const holdRemote = (list: CleanRemoteBranch[] | undefined) =>
+		expect.size > 0 ? holdRemoteToExpected(list, expect, cleaned, new Set(analysis.branches.map((branch) => branch.name)), scope) : list;
+
 	block(analysis.checks.cleanedRemote);
 	const plannedBase = analysis.checks.base;
 	const decideOptions: DecideOptions = { force: options.force, named, defaultBranch: plannedBase?.name };
-	let branches = decideActions(planned, decideOptions);
-	let remoteBranches = decideRemote(analysis.remoteBranches, deleting(branches));
+	let branches = holdLocal(decideActions(planned, decideOptions));
+	let remoteBranches = holdRemote(decideRemote(analysis.remoteBranches, deleting(branches)));
 	let worktreesPruned: readonly string[] = apply ? [] : plan.prunable;
 	const report = (outcome: CleanOutcome, restored: readonly string[] = []): CleanRun => ({
 		report: buildReport(mode, analysis, remote, branches, cleaned === undefined ? undefined : { remote: cleaned, branches: remoteBranches ?? [] }, worktreesPruned, restored),
@@ -785,7 +863,7 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	const shown = { branches, ignored: [plan.ignored, refreshed.ignored] };
 	branches = holdToPlan(branches, decideActions(planned, decideOptions), remote, !options.yes, scope);
 	const held = holdToBase(branches, plannedBase, analysis.checks.base, scopedCommand(scope, scope.patterns, ['--dry-run']));
-	branches = held.branches;
+	branches = holdLocal(held.branches);
 	if (held.message) {
 		output.appendLine(held.message);
 	}
@@ -798,7 +876,7 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 		const deletedLocals = branches.filter((branch) => branch.result === 'deleted').map((branch) => branch.name);
 		const baseChanged = plannedBase?.ref !== analysis.checks.base?.ref || refreshed.remoteDefault !== plan.remoteDefault;
 		block(analysis.checks.cleanedRemote);
-		remoteBranches = holdRemoteToFetch(decideRemote(analysis.remoteBranches, deletedLocals), remote, baseChanged, scope);
+		remoteBranches = holdRemote(holdRemoteToFetch(decideRemote(analysis.remoteBranches, deletedLocals), remote, baseChanged, scope));
 		remoteBranches = remoteBranches && (await deleteRemoteBranches(git, remoteBranches, recorder, scope));
 	} else {
 		remoteBranches = plannedRemote;
@@ -828,7 +906,7 @@ export type BranchPlan = {
 	readonly remoteDefault: string | null;
 };
 
-export type BranchReadOptions = Pick<CleanOptions, 'patterns' | 'fetch' | 'github' | 'protectedPatterns' | 'remote'>;
+export type BranchReadOptions = Pick<CleanOptions, 'patterns' | 'fetch' | 'github' | 'protectedPatterns' | 'remote' | 'expect'>;
 
 function warnIfUnreachable(context: CleanContext, remote: RemoteCheck): void {
 	if (remote.source === 'local-refs' && remote.reason === 'unreachable') {
@@ -892,7 +970,8 @@ export async function planBranches(context: CleanContext, options: BranchReadOpt
 	const locals = (await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).stdout.split('\n').filter(Boolean);
 	const onRemote = (pattern: string) =>
 		cleaned !== undefined && (remoteHeads?.has(pattern) || (pattern.startsWith(`${cleaned}/`) && remoteHeads?.has(pattern.slice(cleaned.length + 1))));
-	const missing = options.patterns.filter((pattern) => !isBranchGlob(pattern) && !locals.includes(pattern) && !onRemote(pattern));
+	// A branch `--expect` names may be gone since it was read: it is skipped as `plan-changed`, not refused.
+	const missing = options.patterns.filter((pattern) => !isBranchGlob(pattern) && !locals.includes(pattern) && !onRemote(pattern) && !options.expect?.has(pattern));
 	if (missing.length > 0) {
 		// `--remote upstream`: the value of a bare --remote is only read inline.
 		const remoteName = options.remote === '' ? missing.find((pattern) => configured.includes(pattern)) : undefined;

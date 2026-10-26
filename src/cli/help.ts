@@ -91,6 +91,11 @@ Options:
                      forced, and only with --yes. Name them <name>/<branch>
                      On a host gsp can't tell is GitHub, set
                      "git config git-sweep-pro.forge none" (or "github")
+      --expect <branch>=<sha>
+                     Delete <branch> only if its tip is still <sha>, the
+                     commit a plan showed (repeatable; <remote>/<branch> on
+                     the remote). Names the branch too. A branch that moved
+                     or is gone is skipped as plan-changed
   -p, --protect <glob>
                      Never delete branches matching <glob> (repeatable; also
                      read from "git config --get-all git-sweep-pro.protected")
@@ -106,6 +111,7 @@ Common tasks:
   gsp clean feature/x --yes                Delete one branch, if proven merged
   gsp clean feature/x --yes --force        Delete a branch with unpushed work
   gsp clean --remote --yes                 Also delete merged branches on origin
+  gsp clean --yes --expect feature/x=<sha> Apply exactly what a plan showed
   gsp restore feature/x                    Undo a deletion
 
 ${EXIT_CODES}`;

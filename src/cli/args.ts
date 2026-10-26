@@ -47,6 +47,12 @@ export type CliOptions = {
 	readonly protect: readonly string[];
 	/** `--remote[=<name>]`: also clean the branches of that remote; empty for the default (origin). */
 	readonly remote: string | undefined;
+	/**
+	 * `--expect <branch>=<sha>` (clean): delete each of these branches only if
+	 * its tip is still that commit; remote branches as `<remote>/<name>`.
+	 * They are named for the run too, as if given as positionals.
+	 */
+	readonly expect: ReadonlyMap<string, string>;
 	readonly json: boolean;
 	readonly verbose: boolean;
 	/** Internal: drive the UI over NDJSON on stdio (used by the VS Code extension). */
@@ -77,6 +83,7 @@ const OPTIONS = {
 	protect: { type: 'string', short: 'p', multiple: true, default: [] },
 	/** `--remote` alone is read as `--remote=` (see {@link withRemoteValue}): its value is optional. */
 	remote: { type: 'string' },
+	expect: { type: 'string', multiple: true, default: [] },
 	// Declared explicitly: `allowNegative` needs Node 22.4, and VS Code 1.92 runs Node 20.14.
 	'no-fetch': { type: 'boolean', default: false },
 	'no-confirm': { type: 'boolean', default: false },
@@ -214,6 +221,10 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 	if (values.remote !== undefined && /^-|\s/.test(values.remote)) {
 		throw new UsageError(`Invalid remote name: "${values.remote}".`);
 	}
+	if (values.expect.length > 0 && command !== 'clean') {
+		throw new UsageError('--expect can only be used with clean.');
+	}
+	const expect = parseExpectations(values.expect);
 	if (requested === 'list' && values.force) {
 		throw new UsageError('list only plans: --force cannot be used with it.');
 	}
@@ -246,10 +257,32 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 		github: !values['no-github'],
 		protect: values.protect,
 		remote: values.remote,
+		expect,
 		json: values.json,
 		verbose: values.verbose,
 		rpc: values.rpc,
 	};
+}
+
+/** A full commit SHA: SHA-1 or SHA-256. */
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+
+/** Reads `--expect <branch>=<sha>` values; the last `=` splits them, as a SHA has none. */
+function parseExpectations(values: readonly string[]): Map<string, string> {
+	const expect = new Map<string, string>();
+	for (const value of values) {
+		const split = value.lastIndexOf('=');
+		const branch = value.slice(0, split);
+		const sha = value.slice(split + 1).toLowerCase();
+		if (split <= 0 || branch.startsWith('-') || !FULL_SHA.test(sha)) {
+			throw new UsageError(`Invalid --expect "${value}": use <branch>=<full commit SHA>.`);
+		}
+		if (expect.has(branch) && expect.get(branch) !== sha) {
+			throw new UsageError(`--expect names ${branch} twice, with different commits.`);
+		}
+		expect.set(branch, sha);
+	}
+	return expect;
 }
 
 /** Options of a `help` run: nothing else is read. */
@@ -270,6 +303,7 @@ function helpOptions(topic: CommandName | undefined): CliOptions {
 		github: true,
 		protect: [],
 		remote: undefined,
+		expect: new Map(),
 		json: false,
 		verbose: false,
 		rpc: false,

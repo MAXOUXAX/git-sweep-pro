@@ -248,7 +248,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		const { report, outcome } = await runCleanWorkflow(
 			{ ...context, ssh: createSshRunner(), ...(options.github ? { gh: createGhRunner(repository.root) } : {}) },
 			{
-				patterns: options.positionals,
+				patterns: cleanPatterns(options),
 				dryRun: options.mode === 'dryRun',
 				yes: options.yes,
 				force: options.mode === 'forceDelete',
@@ -259,6 +259,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 				confirm: options.confirm,
 				...(options.remote === undefined ? {} : { remote: options.remote }),
 				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+				...(options.expect.size > 0 ? { expect: options.expect } : {}),
 			}
 		);
 		printCleanReport(report, outcome, options, frontend, io);
@@ -278,6 +279,11 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return EXIT.failed;
 	}
+}
+
+/** The branches `gsp clean` considers: those named or matched, and those `--expect` names. */
+function cleanPatterns(options: CliOptions): string[] {
+	return [...new Set([...options.positionals, ...options.expect.keys()])];
 }
 
 /** What to do next when the plan was not applied, or `undefined` when there is nothing to say. */
@@ -317,7 +323,7 @@ function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: C
 			? null
 			: nextCommand(report, {
 					...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-					patterns: options.positionals,
+					patterns: cleanPatterns(options),
 					protectedPatterns: options.protect,
 					github: options.github,
 					fetch: options.fetch,

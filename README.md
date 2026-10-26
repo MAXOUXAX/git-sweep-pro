@@ -183,6 +183,14 @@ gsp restore --json                # list recoverable deletions
 gsp restore feature/x --non-interactive
 ```
 
+To apply exactly what you read in a plan, pass each branch with the tip the plan gave, as `--expect <branch>=<tip>` (`<remote>/<branch>=<tip>` for a branch on the remote):
+
+```sh
+gsp clean --json --yes --expect feature/x=4f9c2e1… --expect feature/y=a07d3b8…
+```
+
+Only those branches are considered. Each is deleted only if its tip is still that commit and it is still proven (or `--force` is given); one that moved or no longer exists is skipped with `plan-changed`, and the others go ahead.
+
 `--non-interactive` never prompts, even in a pseudo-terminal. It does not grant permission to delete: only `--yes` does.
 
 ### JSON
@@ -231,7 +239,7 @@ gsp restore feature/x --non-interactive
 | `mode` | `plan` (nothing changed) or `apply` |
 | `checks.remote.source` | `fetch` (apply), `ls-remote` (plan), or `local-refs` with a `reason`: `no-fetch`, `no-remote` or `unreachable` |
 | `branches[].action` | `delete`, `keep` (its work exists nowhere else) or `skip` (a rule or a missing flag stops it) |
-| `branches[].reason` | For `skip`: `protected`, `delete-merged-false`, `rebase-in-progress`, `bisect-in-progress`, `current-branch`, `main-worktree`, `locked-worktree`, `dirty-worktree`, `submodules`, `ignored-files`, `needs-force`, `tracked-by-kept-branch`, `not-selected`, and while applying `plan-changed`, `fetch-failed`, `worktree-changed`. Otherwise the same as `verdictReason` |
+| `branches[].reason` | For `skip`: `protected`, `delete-merged-false`, `rebase-in-progress`, `bisect-in-progress`, `current-branch`, `main-worktree`, `locked-worktree`, `dirty-worktree`, `submodules`, `ignored-files`, `needs-force`, `tracked-by-kept-branch`, `not-selected`, and while applying `plan-changed`, `fetch-failed`, `worktree-changed`. With `--expect`, `plan-changed` also marks a branch whose tip is not the expected one, and one that no longer exists (`verdictReason` `analysis-failed`, `tip` the expected commit). Otherwise the same as `verdictReason` |
 | `branches[].verdictReason` | Dead: `empty`, `merged`, `rebase-merged`, `squash-merged`, `pr-merged`, `commits-merged`, `upstream-gone`. Alive: `default-branch`, `open-pr`, `open-pr-base` (remote branches only: an open pull request targets it; `evidence.match` is `base`), `unmerged-commits`, `no-base`, `analysis-failed` (`evidence` is `{ "method": "error", "message" }`) |
 | `branches[].worktree` | `null`, or `path`, `isMain`, `dirty`, `locked`, `prunable`, `inProgress` (`rebase`, `bisect` or `null`) and `ignoredFiles`: `{ count, sample }` for the ignored files removing it would delete (at most 10 in `sample`; a trailing `/` is a whole folder), and `submodules`: whether it holds submodules. Both are `null` when they were not looked for |
 | `branches[].protected` | Why it is kept whatever its verdict, or `null`: `{ "by": "default-branch" }`, `{ "by": "pattern", "pattern" }`, `{ "by": "branch-config", "key" }` (`deleteMerged` is false) or `{ "by": "default-name" }` (`main`, `master`, `trunk` or `develop`, not named exactly) |
