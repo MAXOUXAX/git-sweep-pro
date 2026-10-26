@@ -352,8 +352,8 @@ const baseLabel = (base: Base) => (base ? base.ref.replace(/^refs\/(heads|remote
  * was made on. Every proof compares with it: when it changed (the fetch moved
  * the remote HEAD, for instance), no deletion is proven the way the plan said,
  * so every deletion is skipped as `plan-changed`. Whatever happens, the plan's
- * default branch is never deleted. Returns the message explaining a change,
- * if any.
+ * default branch is never deleted. Returns the message explaining a change
+ * that held a deletion back, if any.
  */
 export function holdToBase(branches: readonly CleanBranch[], planned: Base, current: Base): { branches: CleanBranch[]; message?: string } {
 	const changed = planned?.name !== current?.name || planned?.ref !== current?.ref;
@@ -366,7 +366,7 @@ export function holdToBase(branches: readonly CleanBranch[], planned: Base, curr
 		}
 		return changed ? skipped(branch, 'plan-changed', 'gsp clean --dry-run') : branch;
 	});
-	if (!changed) {
+	if (!changed || !held.some((branch, index) => branch.reason === 'plan-changed' && branches[index].action === 'delete')) {
 		return { branches: held };
 	}
 	return {

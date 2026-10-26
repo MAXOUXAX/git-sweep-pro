@@ -277,6 +277,7 @@ suite('clean workflow', () => {
 		assert.deepStrictEqual(actions(moved.branches), { main: ['skip', 'protected', null], 'feature/a': ['skip', 'plan-changed', 'gsp clean --dry-run'] });
 		assert.match(moved.message ?? '', /^The default branch changed from origin\/main to origin\/develop during the fetch/);
 		assert.strictEqual(holdToBase(branches, null, base('main')).branches[0].reason, 'plan-changed');
+		assert.strictEqual(holdToBase(decide([]), base('main'), base('develop')).message, undefined, 'nothing held back, nothing to say');
 	});
 
 	test("Git's own reason is kept, not Node's command line", () => {
