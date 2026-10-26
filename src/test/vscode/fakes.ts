@@ -101,10 +101,13 @@ type JsonReply = JsonRun<unknown> | ((args: readonly string[]) => JsonRun<unknow
 /** A fake gsp: answers each `--json` run with the next queued reply, and records every call. */
 export function createFakeClient(replies: JsonReply[] = []) {
 	const calls: { readonly cwd: string; readonly args: readonly string[]; readonly json: boolean }[] = [];
+	/** The cancellation signal of each `--json` run, in order. */
+	const signals: (AbortSignal | undefined)[] = [];
 	const runResults: CliRunResult[] = [];
 	const client: GspClient = {
-		json: async <T>(cwd: string, args: readonly string[]) => {
+		json: async <T>(cwd: string, args: readonly string[], options?: { readonly signal?: AbortSignal }) => {
 			calls.push({ cwd, args, json: true });
+			signals.push(options?.signal);
 			const reply = replies.shift();
 			if (!reply) {
 				throw new Error(`unexpected gsp ${args.join(' ')} --json`);
@@ -116,7 +119,7 @@ export function createFakeClient(replies: JsonReply[] = []) {
 			return runResults.shift() ?? { exitCode: 0, errorShown: false };
 		},
 	};
-	return { client, calls, runResults };
+	return { client, calls, signals, runResults };
 }
 
 export const ok = <T>(document: T, exitCode = 0): JsonRun<T> => ({ kind: 'document', exitCode, document });
