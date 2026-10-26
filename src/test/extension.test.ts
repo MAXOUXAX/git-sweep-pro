@@ -5,7 +5,6 @@ import {
 	isProtectedBranch,
 	parseGoneBranchRefs,
 } from '../core/sweep-logic';
-import { orderModeActions, resolveSweepModeAction } from '../vscode/sweep-mode';
 
 suite('Extension Test Suite', () => {
 	test('parseGoneBranchRefs returns empty list for empty output', () => {
@@ -74,46 +73,6 @@ suite('Extension Test Suite', () => {
 		].join('\n');
 
 		assert.deepStrictEqual(parseGoneBranchRefs(output), ['valid/branch']);
-	});
-
-	test('resolveSweepModeAction maps Dry Run action', () => {
-		assert.strictEqual(resolveSweepModeAction('Dry Run'), 'dryRun');
-	});
-
-	test('resolveSweepModeAction maps safe delete action', () => {
-		assert.strictEqual(resolveSweepModeAction('Delete Proven Branches'), 'safeDelete');
-	});
-
-	test('resolveSweepModeAction maps force delete action', () => {
-		assert.strictEqual(resolveSweepModeAction('Also Offer Branches with Unpushed Work'), 'forceDelete');
-	});
-
-	test('resolveSweepModeAction returns undefined for cancel/unknown values', () => {
-		assert.strictEqual(resolveSweepModeAction(undefined), undefined);
-		assert.strictEqual(resolveSweepModeAction('Something else'), undefined);
-	});
-
-	test('resolveSweepModeAction is strict about exact labels', () => {
-		assert.strictEqual(resolveSweepModeAction('dry run'), undefined);
-		assert.strictEqual(resolveSweepModeAction(' Delete Proven Branches '), undefined);
-	});
-
-	test('orderModeActions puts the configured default first', () => {
-		assert.deepStrictEqual(orderModeActions('safeDelete'), [
-			'Delete Proven Branches',
-			'Also Offer Branches with Unpushed Work',
-			'Dry Run',
-		]);
-		assert.deepStrictEqual(orderModeActions('forceDelete'), [
-			'Also Offer Branches with Unpushed Work',
-			'Delete Proven Branches',
-			'Dry Run',
-		]);
-		assert.deepStrictEqual(orderModeActions('dryRun'), [
-			'Dry Run',
-			'Delete Proven Branches',
-			'Also Offer Branches with Unpushed Work',
-		]);
 	});
 
 	test('branchMatchesPattern matches literals exactly', () => {

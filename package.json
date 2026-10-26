@@ -109,12 +109,12 @@
             "forceDelete"
           ],
           "enumDescriptions": [
-            "Only report the branches that would be deleted.",
-            "Offer the branches whose work is proven merged or pushed, all pre-selected.",
-            "Also offer the branches whose commits are found nowhere else, never pre-selected."
+            "Open Sweep Stale Branches as a preview: nothing can be deleted from it.",
+            "Offer the branches proven merged or pushed, all selected.",
+            "Also offer the branches that need a forced delete, such as commits found nowhere else. They are never selected for you."
           ],
           "default": "safeDelete",
-          "description": "The mode offered first by the Run command: Dry Run, Delete Proven Branches, or Also Offer Branches with Unpushed Work."
+          "description": "How Sweep Stale Branches opens. Branches that need a forced delete can also be shown from the picker's title bar."
         },
         "gitSweepPro.protectedBranches": {
           "type": "array",
@@ -127,18 +127,29 @@
         "gitSweepPro.autoFetchPrune": {
           "type": "boolean",
           "default": true,
-          "description": "Run 'git fetch -p' before detecting stale branches. Disable to operate on the local ref state only."
+          "description": "Read the remote before planning, and fetch with prune before deleting. Turn off to work from the remote-tracking branches already fetched."
         },
         "gitSweepPro.confirmBeforeDelete": {
           "type": "boolean",
           "default": true,
-          "description": "Show a confirmation dialog before deleting the selected branches."
+          "description": "Ask before deleting the branches you picked. Forced deletes and deletions on the remote are always confirmed."
+        },
+        "gitSweepPro.github": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Ask GitHub which pull requests are merged or open, through the GitHub CLI (`gh`) when it is signed in. Turn off to rely on Git alone (`--no-github`)."
+        },
+        "gitSweepPro.cleanRemoteBranches": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Also offer the merged branches on the remote (`origin`, or the only remote) in Sweep Stale Branches. Deleting them is confirmed separately, and they are deleted for everyone who uses that remote."
         },
         "gitSweepPro.includeMergedBranches": {
           "type": "boolean",
           "default": false,
           "markdownDescription": "Also offer local branches whose work is already in the remote default branch (merged, rebase-merged or squash-merged) even though their upstream is not gone — e.g. branches that were never pushed or whose remote branch was kept. They are listed but never pre-selected.",
-          "markdownDeprecationMessage": "Merged branches are always offered now, and pre-selected when their work is proven merged. This setting does nothing."
+          "markdownDeprecationMessage": "Merged branches are always offered now, and pre-selected when their work is proven merged. This setting does nothing.",
+          "deprecationMessage": "Merged branches are always offered now. This setting does nothing."
         },
         "gitSweepPro.cli.addToTerminalPath": {
           "type": "boolean",
