@@ -285,6 +285,17 @@ suite('clean workflow', () => {
 		assert.strictEqual(gitFailureReason(failure), "'/wt' contains modified or untracked files, use --force to delete it");
 		assert.strictEqual(gitFailureReason(new Error('Command failed: git branch -d x\nerror: branch x not found')), 'branch x not found');
 		assert.strictEqual(gitFailureReason('plain'), 'plain');
+		const rejected = Object.assign(new Error('Command failed: git push origin :refs/heads/x'), {
+			stderr: [
+				'remote: error: GH006: Protected branch update failed for',
+				'remote: refs/heads/x.',
+				'remote: error: Cannot delete this protected branch',
+				'To github.com:acme/widgets.git',
+				' ! [remote rejected] x (protected branch hook declined)',
+				"error: failed to push some refs to 'github.com:acme/widgets.git'",
+			].join('\n'),
+		});
+		assert.strictEqual(gitFailureReason(rejected), 'GH006: Protected branch update failed for refs/heads/x.');
 	});
 
 	test('regenerable folders, at any depth, only as whole entries; secret-like names never', () => {

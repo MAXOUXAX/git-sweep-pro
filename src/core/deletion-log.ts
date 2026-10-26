@@ -13,6 +13,8 @@ export type DeletedBranch = {
 	readonly worktree?: string;
 	/** Full ref of the branch's upstream (e.g. "refs/remotes/origin/x"), if it had one. */
 	readonly upstream?: string;
+	/** Set when the branch was deleted on this remote (`gsp clean --remote`), not locally. */
+	readonly remote?: string;
 };
 
 export type DeletionSource = 'sweep' | 'post-pr';
@@ -24,8 +26,8 @@ export type DeletionLog = {
 	/** Recorded deletions, newest first. */
 	list: () => readonly DeletedBranch[];
 	record: (entry: Omit<DeletedBranch, 'deletedAt'>) => Promise<void>;
-	/** Drops every deletion of `branch`: once restored, older deletions of that name are outdated. */
-	forget: (branch: string) => Promise<void>;
+	/** Drops every deletion of `branch` (on `remote`, when given): once restored, older deletions of that name are outdated. */
+	forget: (branch: string, remote?: string) => Promise<void>;
 };
 
 /** State key of the log, in the store shared by every worktree of a repository. */
@@ -39,7 +41,8 @@ const SOURCES: readonly DeletionSource[] = ['sweep', 'post-pr'];
 /**
  * Accepts only well-formed entries: the state file can be edited by hand, and
  * restoring passes the name and SHA to git. A name starting with "-" would be
- * read as an option, and Git never creates such a branch anyway.
+ * read as an option, and Git never creates such a branch anyway. A remote
+ * with ":" or "\" would be read as a URL or a path, and Git never names one so.
  */
 function isDeletedBranch(value: unknown): value is DeletedBranch {
 	const entry = value as Partial<Record<keyof DeletedBranch, unknown>> | null;
@@ -54,7 +57,8 @@ function isDeletedBranch(value: unknown): value is DeletedBranch {
 		!Number.isNaN(Date.parse(entry.deletedAt)) &&
 		SOURCES.includes(entry.source as DeletionSource) &&
 		(entry.worktree === undefined || typeof entry.worktree === 'string') &&
-		(entry.upstream === undefined || (typeof entry.upstream === 'string' && /^refs\/\S+$/.test(entry.upstream)))
+		(entry.upstream === undefined || (typeof entry.upstream === 'string' && /^refs\/\S+$/.test(entry.upstream))) &&
+		(entry.remote === undefined || (typeof entry.remote === 'string' && /^[^-\s/][^\s:\\]*$/.test(entry.remote)))
 	);
 }
 
@@ -68,9 +72,9 @@ export function createDeletionLog(store: StateStore, now: () => Date = () => new
 			const recorded: DeletedBranch = { ...entry, deletedAt: now().toISOString() };
 			await store.update<unknown>(DELETION_LOG_KEY, (stored) => [recorded, ...valid(stored)].slice(0, MAX_DELETION_LOG_ENTRIES));
 		},
-		forget: async (branch) => {
+		forget: async (branch, remote) => {
 			await store.update<unknown>(DELETION_LOG_KEY, (stored) => {
-				const remaining = valid(stored).filter((entry) => entry.branch !== branch);
+				const remaining = valid(stored).filter((entry) => entry.branch !== branch || entry.remote !== remote);
 				// An empty log removes its key, and the state file once nothing else is in it.
 				return remaining.length > 0 ? remaining : undefined;
 			});
@@ -80,7 +84,7 @@ export function createDeletionLog(store: StateStore, now: () => Date = () => new
 
 export type DeletionRecorder = {
 	readonly record: (deletion: Deletion) => Promise<void>;
-	/** Branches recorded so far, in deletion order. */
+	/** Branches recorded so far, in deletion order, by {@link deletionLabel}. */
 	readonly recorded: readonly string[];
 };
 
@@ -95,9 +99,9 @@ export function createDeletionRecorder(log: DeletionLog, source: DeletionSource,
 		record: async (deletion) => {
 			try {
 				await log.record({ ...deletion, source });
-				recorded.push(deletion.branch);
+				recorded.push(deletionLabel(deletion));
 			} catch (error) {
-				warn(`[warning] Could not record the deletion of ${deletion.branch}, so it cannot be restored: ${toErrorMessage(error)}`);
+				warn(`[warning] Could not record the deletion of ${deletionLabel(deletion)}, so it cannot be restored: ${toErrorMessage(error)}`);
 			}
 		},
 	};
@@ -113,10 +117,29 @@ export function canRecordDeletions(log: DeletionLog): boolean {
 	}
 }
 
-/** Newest deletion of each branch name (a name can be deleted, recreated and deleted again). */
+/**
+ * How `gsp restore` names a deletion: the branch, prefixed with its remote for
+ * a remote one ("origin/feature/x"). A local branch can be named like that
+ * too: see {@link deletionKey} and {@link describeDeletionTarget}.
+ */
+export function deletionLabel(entry: Pick<DeletedBranch, 'branch' | 'remote'>): string {
+	return entry.remote ? `${entry.remote}/${entry.branch}` : entry.branch;
+}
+
+/** Tells a local branch named "origin/x" from the branch x deleted on origin. */
+export function deletionKey(entry: Pick<DeletedBranch, 'branch' | 'remote'>): string {
+	return entry.remote ? `remote\0${entry.remote}\0${entry.branch}` : `local\0${entry.branch}`;
+}
+
+/** A deletion as lists show it: "origin/x (remote)" for one on a remote, the branch otherwise. */
+export function describeDeletionTarget(entry: Pick<DeletedBranch, 'branch' | 'remote'>): string {
+	return entry.remote ? `${deletionLabel(entry)} (remote)` : entry.branch;
+}
+
+/** Newest deletion of each branch, local or remote (a name can be deleted, recreated and deleted again). */
 export function latestDeletions(entries: readonly DeletedBranch[]): DeletedBranch[] {
 	const seen = new Set<string>();
-	return entries.filter((entry) => !seen.has(entry.branch) && seen.add(entry.branch));
+	return entries.filter((entry) => !seen.has(deletionKey(entry)) && seen.add(deletionKey(entry)));
 }
 
 /** "just now", "3 min ago", "5 h ago", "2 d ago": compact enough for a picker. */

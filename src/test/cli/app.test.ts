@@ -112,7 +112,7 @@ suite('cli app (real git)', function () {
 
 		const unknown = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['clean', 'feature/a', 'nope', '--yes'], unknown), EXIT.usage);
-		assert.ok(unknown.err.join('').includes('No local branch named "nope"'));
+		assert.ok(unknown.err.join('').includes('No branch named "nope"'));
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 
 		assert.strictEqual(await runCli(['clean', 'feature/a', '--yes'], createFakeIo(fx.repo)), EXIT.ok);
@@ -590,42 +590,168 @@ suite('cli app (real git)', function () {
 			assert.ok(!fs.existsSync(stateFilePath(wtGitDir)));
 		});
 
-		test('worktree list prints every worktree and supports --json', async () => {
+		test('clean --remote --json: remote branches in their own array, and the next command keeps --remote', async () => {
+			git(['checkout', '-q', '-b', 'feature/r'], fx.repo);
+			commitFile(fx.repo, 'r.txt', 'r\n', 'r');
+			git(['push', '-q', 'origin', 'feature/r'], fx.repo);
+			git(['checkout', '-q', 'main'], fx.repo);
+			git(['merge', '-q', '--no-ff', '-m', 'merge r', 'feature/r'], fx.repo);
+			git(['push', '-q', 'origin', 'main'], fx.repo);
+			git(['branch', '-q', '-D', 'feature/r'], fx.repo);
+
+			const plan = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', '--remote', '--json', '--no-github'], plan), EXIT.notApplied);
+			const document = JSON.parse(plan.out.join(''));
+			assert.deepStrictEqual(
+				document.remoteBranches.map((branch: { name: string; action: string }) => [branch.name, branch.action]),
+				[
+					['feature/r', 'delete'],
+					['main', 'keep'],
+				]
+			);
+			assert.deepStrictEqual(document.summary.remote, { remote: 'origin', delete: 1, deleted: 0, failed: 0, skipped: 0, kept: 1 });
+			assert.strictEqual(document.next, 'gsp clean origin/feature/r --no-github --remote --yes');
+
+			const human = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', '--remote', '--no-github'], human), EXIT.notApplied);
+			const out = human.out.join('');
+			assert.ok(out.includes('\nOn origin:\ndelete  feature/r  merged into origin/main\n'), out);
+			assert.ok(out.includes('Nothing was changed. To apply this plan, run: gsp clean origin/feature/r --no-github --remote --yes'), out);
+
+			const unknown = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', '--remote=upstream', '--json'], unknown), EXIT.usage);
+			assert.strictEqual(JSON.parse(unknown.out.join('')).error.code, 'unknown-remote');
+
+			git(['config', 'remote.origin.pushurl', `${fx.remote}-elsewhere`], fx.repo);
+			const pushElsewhere = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', '--remote', '--json'], pushElsewhere), EXIT.usage);
+			assert.strictEqual(JSON.parse(pushElsewhere.out.join('')).error.code, 'push-url-differs');
+			git(['config', '--unset', 'remote.origin.pushurl'], fx.repo);
+
+			const applied = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', 'feature/r', '--remote', '--yes', '--no-github'], applied), EXIT.ok);
+			assert.ok(applied.out.join('').includes('on origin: 1 deleted · restore with gsp restore origin/feature/r'), applied.out.join(''));
+			const listed = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['restore'], listed), EXIT.ok);
+			assert.ok(listed.out.join('').startsWith('origin/feature/r (remote)  '), listed.out.join(''));
+		});
+
+		test('worktree list --json gives each worktree its state, and what gsp clean would do with its branch', async () => {
+			makeGoneBranch(fx.repo, 'feature/clean');
+			const clean = addWorktree('feature/clean');
+			makeGoneBranch(fx.repo, 'feature/dirty');
+			const dirty = addWorktree('feature/dirty');
+			fs.writeFileSync(path.join(dirty, 'notes.txt'), 'work in progress\n');
+			// A rebase that stops on a conflict: HEAD is detached, the branch is still being worked on.
+			git(['checkout', '-q', '-b', 'feature/rebasing'], fx.repo);
+			commitFile(fx.repo, 'README.md', '# rebasing\n', 'rebasing');
+			git(['checkout', '-q', 'main'], fx.repo);
+			commitFile(fx.repo, 'README.md', '# main\n', 'main moves');
+			git(['push', '-q', 'origin', 'main'], fx.repo);
+			const rebasing = addWorktree('feature/rebasing');
+			assert.throws(() => git(['rebase', 'main'], rebasing));
+			makeGoneBranch(fx.repo, 'feature/gone');
+			const gone = addWorktree('feature/gone');
+			fs.rmSync(gone, { recursive: true, force: true });
+			const detached = path.join(fx.dir, 'detached');
+			git(['worktree', 'add', '-q', '--detach', detached, 'HEAD'], fx.repo);
+
+			const json = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'list', '--json', '--no-github'], json), EXIT.ok);
+			const document = JSON.parse(json.out.join(''));
+			assert.deepStrictEqual([document.schema, document.command], [2, 'worktree list']);
+			const head = (ref: string) => git(['rev-parse', ref], fx.repo).trim();
+			const real = (dir: string) => path.join(fs.realpathSync(path.dirname(dir)), path.basename(dir));
+			const none = { ignoredFiles: { count: 0, sample: [] } };
+			const byPath = Object.fromEntries(document.worktrees.map((entry: { path: string }) => [entry.path, entry]));
+			assert.deepStrictEqual(byPath[fs.realpathSync(fx.repo)], {
+				path: fs.realpathSync(fx.repo),
+				branch: 'main',
+				head: head('main'),
+				isMain: true,
+				locked: false,
+				prunable: false,
+				dirty: false,
+				inProgress: null,
+				ignoredFiles: null,
+				verdict: 'alive',
+				verdictReason: 'default-branch',
+				action: 'keep',
+				reason: 'default-branch',
+				hint: null,
+			});
+			assert.deepStrictEqual(byPath[real(clean)], {
+				path: real(clean),
+				branch: 'feature/clean',
+				head: head('feature/clean'),
+				isMain: false,
+				locked: false,
+				prunable: false,
+				dirty: false,
+				inProgress: null,
+				...none,
+				verdict: 'dead',
+				verdictReason: 'empty',
+				action: 'delete',
+				reason: 'empty',
+				hint: 'gsp clean feature/clean --yes',
+			});
+			const pick = (entry: Record<string, unknown>, keys: string[]) => keys.map((key) => entry[key]);
+			const keys = ['branch', 'isMain', 'prunable', 'dirty', 'inProgress', 'action', 'reason', 'hint'];
+			assert.deepStrictEqual(pick(byPath[real(dirty)], keys), [
+				'feature/dirty',
+				false,
+				false,
+				true,
+				null,
+				'skip',
+				'dirty-worktree',
+				`git -C ${real(dirty)} stash --include-untracked && gsp clean feature/dirty --yes`,
+			]);
+			assert.deepStrictEqual(pick(byPath[real(rebasing)], keys), [
+				'feature/rebasing',
+				false,
+				false,
+				true,
+				'rebase',
+				'keep',
+				'unmerged-commits',
+				null,
+			]);
+			assert.deepStrictEqual(pick(byPath[real(gone)], [...keys, 'ignoredFiles']), [
+				'feature/gone',
+				false,
+				true,
+				false,
+				null,
+				'delete',
+				'empty',
+				'gsp clean feature/gone --yes',
+				null,
+			]);
+			assert.deepStrictEqual(pick(byPath[real(detached)], ['branch', 'head', 'verdict', 'action', 'reason', 'hint']), [null, head('HEAD'), null, 'keep', 'detached', null]);
+			assert.strictEqual(document.worktrees[0].path, fs.realpathSync(fx.repo), 'the main worktree first');
+
+			// Read-only: the prunable registration is still there, and so is every branch.
+			assert.ok(git(['worktree', 'list', '--porcelain'], fx.repo).includes('prunable'));
+			assert.ok(branchExists(fx.repo, 'feature/clean') && branchExists(fx.repo, 'feature/gone'));
+		});
+
+		test('worktree list prints one line per worktree, with its state and what gsp clean would do', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');
+			fs.appendFileSync(path.join(fx.repo, '.git', 'info', 'exclude'), '.env\n');
+			fs.writeFileSync(path.join(wt, '.env'), 'TOKEN=1\n');
 			const root = fs.realpathSync(fx.repo);
 			const linked = fs.realpathSync(wt);
 
 			const io = createFakeIo(fx.repo);
-			assert.strictEqual(await runCli(['worktree', 'list'], io), EXIT.ok);
-			assert.deepStrictEqual(io.out.join('').split('\n').filter(Boolean), [`${root}  main (main)`, `${linked}  feature/wt (linked)`]);
-
-			const json = createFakeIo(fx.repo);
-			assert.strictEqual(await runCli(['worktree', 'list', '--json'], json), EXIT.ok);
-			assert.deepStrictEqual(JSON.parse(json.out.join('')), [
-				{ path: root, branch: 'main', state: 'main' },
-				{ path: linked, branch: 'feature/wt', state: 'linked' },
+			assert.strictEqual(await runCli(['worktree', 'list', '--no-github'], io), EXIT.ok);
+			const width = linked.length;
+			assert.deepStrictEqual(io.out.join('').split('\n').filter(Boolean), [
+				`${root.padEnd(width)}  main        [main]       keep    default branch`,
+				`${linked}  feature/wt  [1 ignored]  skip    removing worktree ${linked} would delete 1 ignored file (.env), needs --force (already in origin/main) → move what you need out of ${linked}, then: gsp clean feature/wt --yes --force`,
 			]);
-		});
-
-		test('worktree list marks a registration whose directory is gone as prunable', async () => {
-			makeGoneBranch(fx.repo, 'feature/wt');
-			const wt = addWorktree('feature/wt');
-			const linked = path.join(fs.realpathSync(fx.dir), 'feature-wt');
-			fs.rmSync(wt, { recursive: true, force: true });
-
-			const json = createFakeIo(fx.repo);
-			assert.strictEqual(await runCli(['worktree', 'list', '--json'], json), EXIT.ok);
-			assert.deepStrictEqual(JSON.parse(json.out.join('')).at(-1), { path: linked, branch: 'feature/wt', state: 'prunable' });
-		});
-
-		test('worktree list --json reports a detached worktree with a null branch', async () => {
-			const dir = path.join(fx.dir, 'detached');
-			git(['worktree', 'add', '-q', '--detach', dir, 'HEAD'], fx.repo);
-
-			const json = createFakeIo(fx.repo);
-			assert.strictEqual(await runCli(['worktree', 'list', '--json'], json), EXIT.ok);
-			assert.deepStrictEqual(JSON.parse(json.out.join('')).at(-1), { path: fs.realpathSync(dir), branch: null, state: 'linked' });
 		});
 
 		test('worktree prune forgets the registration of a deleted worktree', async () => {
@@ -641,7 +767,7 @@ suite('cli app (real git)', function () {
 
 			const after = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['worktree', 'list', '--json'], after), EXIT.ok);
-			assert.deepStrictEqual(JSON.parse(after.out.join('')).map((entry: { path: string }) => entry.path), [fs.realpathSync(fx.repo)]);
+			assert.deepStrictEqual(JSON.parse(after.out.join('')).worktrees.map((entry: { path: string }) => entry.path), [fs.realpathSync(fx.repo)]);
 		});
 
 		test('worktree prune reports when there is nothing to forget', async () => {
@@ -664,7 +790,7 @@ suite('cli app (real git)', function () {
 
 			const after = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['worktree', 'list', '--json'], after), EXIT.ok);
-			assert.strictEqual(JSON.parse(after.out.join('')).at(-1).state, 'prunable', 'the registration is still there');
+			assert.strictEqual(JSON.parse(after.out.join('')).worktrees.at(-1).prunable, true, 'the registration is still there');
 		});
 
 		test('worktree remove removes a linked worktree, refuses the main one, and reports an unknown one', async () => {

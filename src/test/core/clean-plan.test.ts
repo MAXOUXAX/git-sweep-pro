@@ -13,6 +13,7 @@ import {
 	restoreCommand,
 	summarize,
 	type CleanBranch,
+	type CleanRemoteBranch,
 	type CleanReport,
 	type DecideOptions,
 	type PlannedBranch,
@@ -179,6 +180,36 @@ suite('clean plan', () => {
 		const named = `gsp clean ${Array.from({ length: 11 }, (_, index) => `feature/${index}`).join(' ')} --yes`;
 		assert.strictEqual(applyCommand(many, { ...scope, patterns: ['feature/*'] }), named, 'never the patterns, which could match more later');
 		assert.strictEqual(applyCommand(many, scope), named);
+	});
+
+	test('the command to apply a plan names every remote branch too, qualified', () => {
+		const scope = { patterns: ['feature/*'], protectedPatterns: [], github: true, fetch: true, remote: 'upstream' };
+		const remoteBranch = (name: string, overrides: Partial<CleanRemoteBranch> = {}): CleanRemoteBranch => ({
+			remote: 'upstream',
+			name,
+			tip: 'a'.repeat(40),
+			action: 'delete',
+			reason: 'merged',
+			verdict: 'dead',
+			verdictReason: 'merged',
+			evidence: null,
+			protected: null,
+			trackedBy: [],
+			hint: null,
+			...overrides,
+		});
+		const remoteBranches = [
+			...Array.from({ length: 11 }, (_, index) => remoteBranch(`feature/${index}`)),
+			remoteBranch('feature/done', { result: 'deleted' }),
+			remoteBranch('feature/kept', { action: 'keep' }),
+		];
+		const remotes = Array.from({ length: 11 }, (_, index) => `upstream/feature/${index}`).join(' ');
+		assert.strictEqual(
+			applyCommand(decide([branch('feature/a')]), scope, remoteBranches),
+			`gsp clean feature/a ${remotes} --remote=upstream --yes`,
+			'never the patterns, and only what is left to delete'
+		);
+		assert.strictEqual(nextCommand({ branches: [], remoteBranches }, scope), `gsp clean ${remotes} --remote=upstream --yes`);
 	});
 
 	test('the next command applies what is left, or plans again when it changed', () => {
@@ -395,6 +426,7 @@ suite('clean plan', () => {
 				upstream: 'origin/feature/a',
 				upstreamState: 'gone',
 				worktree: { path: '/wt/a', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: null, submodules: null },
+				protected: null,
 				needsForce: false,
 				hint: null,
 				result: 'deleted',
@@ -411,6 +443,7 @@ suite('clean plan', () => {
 				upstream: 'origin/feature/gone',
 				upstreamState: 'gone',
 				worktree: null,
+				protected: null,
 				needsForce: true,
 				hint: 'gsp clean feature/gone --yes --force',
 			},

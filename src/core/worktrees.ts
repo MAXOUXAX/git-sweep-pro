@@ -69,11 +69,6 @@ export function parseWorktrees(porcelain: string): Worktree[] {
 		});
 }
 
-/** One line for `gsp worktree list`: path, branch (or `detached`) and state. */
-export function describeWorktree({ path: worktreePath, branch, state }: Worktree): string {
-	return `${worktreePath}  ${branch ?? 'detached'} (${state})\n`;
-}
-
 /** Every registered worktree, main first. */
 export async function listWorktrees({ git }: WorkflowContext): Promise<Worktree[]> {
 	const { stdout } = await git(['worktree', 'list', '--porcelain']);

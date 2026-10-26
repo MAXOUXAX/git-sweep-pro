@@ -1,11 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
-import { createDeletionLog, describeDeletion } from '../core/deletion-log';
+import { createDeletionLog, describeDeletion, describeDeletionTarget } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
-import { CLEAN_SCHEMA, formatBranchLines, formatSummary, nextCommand, withCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
-import { runCleanWorkflow, UnknownBranchError, type CleanOutcome } from '../core/clean-workflow';
+import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, nextCommand, withCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
+import { PushUrlMismatchError, runCleanWorkflow, UnknownBranchError, UnknownRemoteError, type CleanOutcome } from '../core/clean-workflow';
+import { createSshRunner } from '../core/forge';
 import { createGhRunner } from '../core/github-signal';
 import { formatNextSteps, formatPostPrLines, postPrNextCommand, type PostPrDocument, type PostPrReport } from '../core/post-pull-request-plan';
 import { PostPrUsageError, runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
@@ -14,7 +15,8 @@ import { runResumeWorkflow } from '../core/sync-resume-workflow';
 import type { SyncContext } from '../core/sync-state';
 import { runSyncWorkflow } from '../core/sync-workflow';
 import type { WorkflowContext, WorkflowOutcome } from '../core/workflow';
-import { describeWorktree, listWorktrees, pruneWorktrees, removeWorktree } from '../core/worktrees';
+import { formatWorktreeLines, listWorktreeStates } from '../core/worktree-list';
+import { pruneWorktrees, removeWorktree } from '../core/worktrees';
 import { EXIT, parseArgs, UsageError, type CliOptions } from './args';
 import { createFrontend, type Frontend } from './frontend';
 import { helpFor, USAGE } from './help';
@@ -134,7 +136,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 }
 
 /** Why a command stopped before producing its JSON document. */
-type JsonErrorCode = 'usage' | 'no-such-directory' | 'unknown-branch' | 'not-a-repository' | 'failed';
+type JsonErrorCode = 'usage' | 'no-such-directory' | 'unknown-branch' | 'unknown-remote' | 'push-url-differs' | 'not-a-repository' | 'failed';
 
 /**
  * With `--json`, a fatal error is still one JSON document on stdout, so a
@@ -243,7 +245,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 	const context = createContext(repository, options, frontend);
 	try {
 		const { report, outcome } = await runCleanWorkflow(
-			{ ...context, ...(options.github ? { gh: createGhRunner(repository.root) } : {}) },
+			{ ...context, ssh: createSshRunner(), ...(options.github ? { gh: createGhRunner(repository.root) } : {}) },
 			{
 				patterns: options.positionals,
 				dryRun: options.mode === 'dryRun',
@@ -254,14 +256,17 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 				protectedPatterns: options.protect,
 				canPrompt: frontend.canPrompt && !options.json,
 				confirm: options.confirm,
+				...(options.remote === undefined ? {} : { remote: options.remote }),
+				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
 			}
 		);
 		printCleanReport(report, outcome, options, frontend, io);
 		return { kind: 'clean', outcome };
 	} catch (error) {
-		if (error instanceof UnknownBranchError) {
+		if (error instanceof UnknownBranchError || error instanceof UnknownRemoteError || error instanceof PushUrlMismatchError) {
 			if (options.json) {
-				printJsonError(io, error.message, 'unknown-branch');
+				const code = error instanceof UnknownBranchError ? 'unknown-branch' : error instanceof UnknownRemoteError ? 'unknown-remote' : 'push-url-differs';
+				printJsonError(io, error.message, code);
 			}
 			io.stderr(`error: ${error.message}\n`);
 			return EXIT.usage;
@@ -279,9 +284,12 @@ function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | nul
 	if (outcome !== 'not-applied') {
 		return undefined;
 	}
-	if (next && report.summary.delete > 0 && !report.branches.some((branch) => branch.result !== undefined)) {
+	const remote = report.summary.remote;
+	const remoteBranches = report.remoteBranches ?? [];
+	if (next && report.summary.delete + (remote?.delete ?? 0) > 0 && ![...report.branches, ...remoteBranches].some((branch) => branch.result !== undefined)) {
 		return withCommand('Nothing was changed. To apply this plan, run', next);
 	}
+	const unapplied = remoteBranches.filter((branch) => branch.action === 'delete' && branch.result === undefined).length;
 	const count = (test: (branch: CleanReport['branches'][number]) => boolean) => report.branches.filter(test).length;
 	const unpushed = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'dead');
 	const unmerged = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'alive');
@@ -291,9 +299,12 @@ function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | nul
 		...(unmerged > 0 ? [`${unmerged} named but not merged`] : []),
 		...(ignored > 0 ? [`${ignored} whose worktree holds ignored files`] : []),
 	];
-	const changed = count((branch) => branch.reason === 'plan-changed' || branch.reason === 'fetch-failed' || branch.reason === 'worktree-changed');
+	const changed = [...report.branches, ...remoteBranches].filter(
+		(branch) => branch.reason === 'plan-changed' || branch.reason === 'fetch-failed' || branch.reason === 'worktree-changed'
+	).length;
 	const lines = [
 		...(kept.length > 0 ? [`Kept without --force: ${kept.join(', ')}. Each line above gives the command.`] : []),
+		...(unapplied > 0 && remote && next ? [withCommand(`Branches on ${remote.remote} are only deleted with --yes. To delete them, run`, next)] : []),
 		...(changed > 0 && next ? [`${changed} not deleted, as things changed while applying. Review them with: ${next}`] : []),
 	];
 	return lines.length > 0 ? lines.join('\n') : undefined;
@@ -309,13 +320,16 @@ function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: C
 					protectedPatterns: options.protect,
 					github: options.github,
 					fetch: options.fetch,
+					...(report.summary.remote ? { remote: report.summary.remote.remote } : {}),
 				});
 	if (options.json) {
 		const document: CleanDocument = { ...report, next: command };
 		io.stdout(`${JSON.stringify(document, null, 2)}\n`);
 		return;
 	}
-	const lines = formatBranchLines(report);
+	const remoteLines = formatRemoteLines(report);
+	const localLines = formatBranchLines(report);
+	const lines = [...localLines, ...(localLines.length > 0 && remoteLines.length > 0 ? [''] : []), ...remoteLines];
 	const summary = outcome === 'cancelled' ? 'Cancelled. Nothing was deleted.' : formatSummary(report);
 	const next = nextStep(report, outcome, command);
 	if (options.rpc || frontend.canPrompt) {
@@ -437,12 +451,14 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 	try {
 		switch (worktree.subcommand) {
 			case 'list': {
-				const worktrees = await listWorktrees(context);
+				const { document, branches } = await listWorktreeStates(
+					{ ...context, ssh: createSshRunner(), ...(options.github ? { gh: createGhRunner(context.root) } : {}) },
+					{ fetch: options.fetch, github: options.github, protectedPatterns: options.protect }
+				);
 				if (options.json) {
-					const json = worktrees.map(({ path, branch, state }) => ({ path, branch: branch ?? null, state }));
-					io.stdout(`${JSON.stringify(json, null, 2)}\n`);
+					io.stdout(`${JSON.stringify(document, null, 2)}\n`);
 				} else {
-					worktrees.forEach((entry) => io.stdout(describeWorktree(entry)));
+					formatWorktreeLines(document, branches).forEach((line) => io.stdout(`${line}\n`));
 				}
 				return 'ok';
 			}
@@ -508,8 +524,8 @@ async function runRestore(context: WorkflowContext, options: CliOptions, fronten
 			io.stderr('No deleted branches to restore.\n');
 		} else {
 			const now = new Date();
-			const width = Math.max(...entries.map((entry) => entry.branch.length));
-			entries.forEach((entry) => io.stdout(`${entry.branch.padEnd(width)}  ${describeDeletion(entry, now)}\n`));
+			const width = Math.max(...entries.map((entry) => describeDeletionTarget(entry).length));
+			entries.forEach((entry) => io.stdout(`${describeDeletionTarget(entry).padEnd(width)}  ${describeDeletion(entry, now)}\n`));
 			io.stderr('To restore them, run: gsp restore <branch>...\n');
 		}
 		return 'ok';

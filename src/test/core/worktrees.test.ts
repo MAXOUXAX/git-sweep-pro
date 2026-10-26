@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { describeWorktree, listWorktrees, parseWorktrees, pruneWorktrees, removeWorktree, resolveWorktree } from '../../core/worktrees';
+import { listWorktrees, parseWorktrees, pruneWorktrees, removeWorktree, resolveWorktree } from '../../core/worktrees';
 import { createFakeContext } from '../fake-context';
 
 const PORCELAIN = [
@@ -50,11 +50,6 @@ suite('worktrees', () => {
 
 	test('an empty listing parses to no worktree', () => {
 		assert.deepStrictEqual(parseWorktrees(''), []);
-	});
-
-	test('describeWorktree names the branch, or detached, and the state', () => {
-		assert.strictEqual(describeWorktree({ path: '/repo', branch: 'main', state: 'main' }), '/repo  main (main)\n');
-		assert.strictEqual(describeWorktree({ path: '/repo/wt', branch: undefined, state: 'linked' }), '/repo/wt  detached (linked)\n');
 	});
 
 	test('resolveWorktree matches a path, a path relative to the base, or a branch', () => {
