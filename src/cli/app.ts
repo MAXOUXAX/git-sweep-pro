@@ -335,6 +335,9 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 	try {
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
+		if (options.json) {
+			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return EXIT.failed;
 	}
@@ -363,8 +366,14 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 		return { kind: 'clean', outcome };
 	} catch (error) {
 		if (error instanceof PostPrUsageError) {
+			if (options.json) {
+				printJsonError(io, error.message, error.code);
+			}
 			io.stderr(`error: ${error.message}\n`);
 			return EXIT.usage;
+		}
+		if (options.json) {
+			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return EXIT.failed;

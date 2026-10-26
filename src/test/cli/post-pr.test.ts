@@ -297,6 +297,10 @@ suite('cli post-pr (real git)', function () {
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['post-pr', 'feature/nope', '--yes'], io), EXIT.usage);
 		assert.ok(io.err.join('').includes('No local branch named "feature/nope"'), io.err.join(''));
+
+		const json = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', 'feature/nope', '--json'], json), EXIT.usage);
+		assert.strictEqual(JSON.parse(json.out.join('')).error.code, 'unknown-branch');
 	});
 
 	test('in a terminal, asks before deleting; refusing changes nothing', async () => {

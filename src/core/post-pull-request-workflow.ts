@@ -33,7 +33,15 @@ export type PostPrContext = CleanContext & {
 export type PostPrRun = { readonly report: PostPrReport; readonly outcome: CleanOutcome };
 
 /** Arguments that name no branch: the CLI reports them as a usage error. */
-export class PostPrUsageError extends Error {}
+export class PostPrUsageError extends Error {
+	constructor(
+		message: string,
+		/** `unknown-branch` for a merged branch that does not exist. */
+		readonly code: 'unknown-branch' | 'usage' = 'usage'
+	) {
+		super(message);
+	}
+}
 
 function firstLine(message: string): string {
 	return message.split('\n').find((line) => line.trim())?.trim() ?? message;
@@ -197,7 +205,8 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		const remoteHead = (await git(['for-each-ref', '--format=%(symref:lstrip=3)', 'refs/remotes/*/HEAD'])).stdout.split('\n');
 		if (!remoteHead.includes(options.branch)) {
 			throw new PostPrUsageError(
-				`No local branch named "${options.branch}": it may already be deleted. Run "gsp post-pr" on the default branch to update it and clean.`
+				`No local branch named "${options.branch}": it may already be deleted. Run "gsp post-pr" on the default branch to update it and clean.`,
+				'unknown-branch'
 			);
 		}
 	}
