@@ -50,7 +50,10 @@ export type PullRequest = {
 };
 
 /** Why the GitHub signal was not used. */
-export type GitHubSkipReason = 'disabled' | 'no-remote' | 'not-github' | 'gh-missing' | 'gh-unauthenticated' | 'gh-failed';
+export type GitHubSkipReason = 'disabled' | 'no-remote' | 'not-github' | 'gh-missing' | 'gh-unauthenticated' | 'offline' | 'gh-failed';
+
+/** What `gh` and Go's HTTP client print when GitHub cannot be reached. */
+const OFFLINE_ERROR = /error connecting to|dial tcp|no such host|network is unreachable|connection refused|i\/o timeout|TLS handshake timeout/i;
 
 export type GitHubSignal = {
 	readonly repo: GitHubRepo;
@@ -82,11 +85,15 @@ function firstLine(text: string | undefined): string | undefined {
 }
 
 function skipReason(error: unknown): { reason: GitHubSkipReason; detail?: string } {
-	const failure = error as Error & { code?: unknown; stderr?: string };
+	const failure = error as Error & { code?: unknown; stderr?: string; killed?: boolean };
 	if (failure.code === 'ENOENT') {
 		return { reason: 'gh-missing' };
 	}
 	const detail = firstLine(failure.stderr) ?? firstLine(failure.message);
+	// Killed: the runner's timeout ran out, which only a slow or missing network explains.
+	if (failure.killed || OFFLINE_ERROR.test(detail ?? '')) {
+		return { reason: 'offline', detail };
+	}
 	// gh exits with 4 when authentication is required.
 	if (failure.code === 4 || /gh auth login|not logged in|authentication/i.test(detail ?? '')) {
 		return { reason: 'gh-unauthenticated', detail };
