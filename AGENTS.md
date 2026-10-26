@@ -27,6 +27,7 @@ Settled by Maxence on 2026-10-26.
 - `--remote` never force-deletes: it pushes the deletion with a lease on the analysed SHA; a rejected lease is reported as `plan-changed`. Without `origin`, it uses the only remote, else it's a usage error. `branch.<name>.deleteMerged=false` also protects that branch's upstream on the remote.
 - On a GitHub remote, `--remote` deletes nothing when the GitHub signal is unavailable or `--no-github` is passed (open PRs can't be checked). The base branch of an open PR is kept like its head. Naming `develop` lifts its default-name protection locally only; the remote needs the qualified form `origin/develop`.
 - `post-pr` exits 5 whenever the merged branch it was asked to finish is kept (dirty, ignored files, mid-rebase, not proven): for post-pr, 5 means "not finished". Its positional never lifts protection; a protected name there is read as the old `gsp post-pr <default>` form.
+- `--remote` fails closed on hosts it can't classify: unless the remote is known not to be GitHub (local path, `file://`, gitlab.com, bitbucket.org) or `git config git-sweep-pro.forge none` says so, an unresolvable GitHub status skips deletions as `github-unavailable`. URLs are resolved with `insteadOf` and SSH aliases. `--remote` refuses a remote whose push URL differs from its fetch URL.
 - The extension offers `--remote` and the worktree list in 2.0.
 
 ## Release workflow for 2.0
