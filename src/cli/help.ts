@@ -62,7 +62,8 @@ merged, squash- or rebase-merged into the default branch, it is the head of
 a merged pull request, or its upstream is gone and every commit is on a
 remote. Branches with work found nowhere else need --force.
 
-Never deleted: the default branch, protected branches, branches with
+Never deleted: the default branch, protected branches, a branch named
+main, master, trunk or develop unless named exactly, branches with
 "branch.<name>.deleteMerged" set to false, a branch being rebased or
 bisected, the current branch, a branch checked out in the main worktree or
 in a dirty or locked worktree, and a branch another kept branch tracks.

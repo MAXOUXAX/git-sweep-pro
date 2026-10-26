@@ -66,6 +66,7 @@ A branch with commits found nowhere else is skipped with `needs-force`. Only `--
 Whatever the flags, `gsp clean` never deletes:
 
 - the default branch, or a protected branch (`--protect 'release/*'`, `git config --add git-sweep-pro.protected 'release/*'`, or the `gitSweepPro.protectedBranches` setting);
+- a branch named `main`, `master`, `trunk` or `develop`, unless you name it exactly (`gsp clean master`): when the remote's default branch moves, the old one looks merged into the new one. Naming it lifts only this protection: it still needs a proof;
 - a branch with `branch.<name>.deleteMerged` set to `false`;
 - a branch being rebased or bisected, in any worktree;
 - the current branch, or a branch checked out in the main worktree;
@@ -178,7 +179,8 @@ gsp restore feature/x --non-interactive
 | `branches[].reason` | For `skip`: `protected`, `delete-merged-false`, `rebase-in-progress`, `bisect-in-progress`, `current-branch`, `main-worktree`, `locked-worktree`, `dirty-worktree`, `submodules`, `ignored-files`, `needs-force`, `tracked-by-kept-branch`, `not-selected`, and while applying `plan-changed`, `fetch-failed`, `worktree-changed`. Otherwise the same as `verdictReason` |
 | `branches[].verdictReason` | Dead: `empty`, `merged`, `rebase-merged`, `squash-merged`, `pr-merged`, `commits-merged`, `upstream-gone`. Alive: `default-branch`, `open-pr`, `unmerged-commits`, `no-base`, `analysis-failed` (`evidence` is `{ "method": "error", "message" }`) |
 | `branches[].worktree` | `null`, or `path`, `isMain`, `dirty`, `locked`, `prunable`, `inProgress` (`rebase`, `bisect` or `null`) and `ignoredFiles`: `{ count, sample }` for the ignored files removing it would delete (at most 10 in `sample`; a trailing `/` is a whole folder), and `submodules`: whether it holds submodules. Both are `null` when they were not looked for |
-| `branches[].hint` | The command that resolves a skip or applies a planned deletion; for `ignored-files`, it first says what to do by hand: `move what you need out of <path>, then: <command>`. `null` when there is nothing to do, and for `protected` and `delete-merged-false` |
+| `branches[].protected` | Why it is kept whatever its verdict, or `null`: `{ "by": "default-branch" }`, `{ "by": "pattern", "pattern" }`, `{ "by": "branch-config", "key" }` (`deleteMerged` is false) or `{ "by": "default-name" }` (`main`, `master`, `trunk` or `develop`, not named exactly) |
+| `branches[].hint` | The command that resolves a skip or applies a planned deletion; for `ignored-files`, it first says what to do by hand: `move what you need out of <path>, then: <command>`. `null` when there is nothing to do, and for `protected` (except `default-name`: `gsp clean <name>`) and `delete-merged-false` |
 | `branches[].result` | Apply mode, deleted branches only: `deleted`, `worktree-removed` (the worktree went, the branch did not: see `error`) or `failed` (nothing changed: see `error`) |
 | `worktreesPruned` | Registrations whose directory is gone: pruned (apply) or to prune (plan) |
 | `restore` | `gsp restore <names>` for the branches deleted by this run, or `null` |

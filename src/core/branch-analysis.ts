@@ -82,7 +82,16 @@ export type Protection =
 	| { readonly by: 'default-branch' }
 	/** `branch.<name>.deleteMerged` is false (the Git 2.56 opt-out). */
 	| { readonly by: 'branch-config'; readonly key: string }
-	| { readonly by: 'pattern'; readonly pattern: string };
+	| { readonly by: 'pattern'; readonly pattern: string }
+	/** Named like a long-lived branch (see {@link DEFAULT_PROTECTED_NAMES}), and not named exactly by the user. */
+	| { readonly by: 'default-name' };
+
+/**
+ * Names protected besides the detected default branch: when the remote HEAD
+ * moves (main to trunk, say), the old default branch looks merged into the
+ * new one, and must not go with the feature branches.
+ */
+export const DEFAULT_PROTECTED_NAMES: readonly string[] = ['main', 'master', 'trunk', 'develop'];
 
 export type BranchWorktree = {
 	readonly path: string;
@@ -176,6 +185,8 @@ export type AnalyzeOptions = {
 	readonly base?: string;
 	/** Reported in the checks: whether the caller fetched first. */
 	readonly fetched?: boolean;
+	/** Branch names the user gave exactly: they lift the {@link DEFAULT_PROTECTED_NAMES} protection. */
+	readonly named?: readonly string[];
 };
 
 /** Squash proofs give up beyond this many changed files. */
@@ -1035,6 +1046,7 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 	);
 
 	const patterns = [...(options.protectedPatterns ?? []), ...config.protectedPatterns];
+	const named = new Set(options.named ?? []);
 	const protection = (name: string): Protection | null => {
 		if (base && name === base.name) {
 			return { by: 'default-branch' };
@@ -1043,7 +1055,10 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 			return { by: 'branch-config', key: `branch.${name}.deleteMerged` };
 		}
 		const pattern = patterns.find((candidate) => isProtectedBranch(name, [candidate]));
-		return pattern === undefined ? null : { by: 'pattern', pattern: pattern.trim() };
+		if (pattern !== undefined) {
+			return { by: 'pattern', pattern: pattern.trim() };
+		}
+		return DEFAULT_PROTECTED_NAMES.includes(name) && !named.has(name) ? { by: 'default-name' } : null;
 	};
 
 	const branches = selected.map((ref, index): BranchAnalysis => {

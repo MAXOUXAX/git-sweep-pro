@@ -1,4 +1,4 @@
-import type { AliveReason, AnalysisChecks, BranchAnalysis, BranchWorktree, DeadReason, Evidence, UpstreamState } from './branch-analysis';
+import type { AliveReason, AnalysisChecks, BranchAnalysis, BranchWorktree, DeadReason, Evidence, Protection, UpstreamState } from './branch-analysis';
 import { quoteShellArg } from './git-command';
 
 /*
@@ -22,7 +22,7 @@ export type CleanAction = 'delete' | 'keep' | 'skip';
  * which are deliberate.
  */
 export type SkipReason =
-	/** The default branch, or a `--protect` / `git-sweep-pro.protected` pattern. */
+	/** The default branch, a `--protect` / `git-sweep-pro.protected` pattern, or a long-lived name not named exactly (see `protected`). */
 	| 'protected'
 	/** `branch.<name>.deleteMerged` is false (the Git 2.56 opt-out). */
 	| 'delete-merged-false'
@@ -91,6 +91,8 @@ export type CleanBranch = {
 	readonly upstream: string | null;
 	readonly upstreamState: UpstreamState;
 	readonly worktree: CleanWorktree | null;
+	/** Why it is kept whatever its verdict, or null. */
+	readonly protected: Protection | null;
 	/** Deleting it needs `--force` (it is deleted with `--force`, or when picked interactively). */
 	readonly needsForce: boolean;
 	/** The exact command that resolves a skip, or applies a planned deletion; null when there is nothing to do. */
@@ -168,6 +170,10 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 	const { defaultBranch } = options;
 	if (branch.protected?.by === 'default-branch' || branch.protected?.by === 'pattern') {
 		return { reason: 'protected', hint: null };
+	}
+	if (branch.protected?.by === 'default-name') {
+		// Naming it exactly lifts the protection, not the proofs.
+		return { reason: 'protected', hint: cmd('gsp', 'clean', branch.name) };
 	}
 	if (branch.protected?.by === 'branch-config') {
 		return { reason: 'delete-merged-false', hint: null };
@@ -249,6 +255,7 @@ export function decideActions(branches: readonly PlannedBranch[], options: Decid
 			upstream: branch.upstream,
 			upstreamState: branch.upstreamState,
 			worktree: branch.worktree && { ...branch.worktree, ignoredFiles: branch.worktree.ignoredFiles ?? null, submodules: branch.worktree.submodules ?? null },
+			protected: branch.protected,
 			needsForce,
 			hint,
 		});
@@ -438,12 +445,19 @@ function describeIgnored({ count, sample }: IgnoredFiles): string {
 	return `${plural(count, 'ignored file')} (${shown}${count > MAX_SAMPLE ? ', …' : ''})`;
 }
 
+function describeProtection(branch: Pick<CleanBranch, 'verdictReason' | 'protected'>): string {
+	if (branch.verdictReason === 'default-branch' || branch.protected?.by === 'default-branch') {
+		return 'default branch';
+	}
+	return branch.protected?.by === 'default-name' ? 'protected as a long-lived branch name: name it exactly to clean it' : 'protected';
+}
+
 /** Why a candidate is skipped, in words. */
 function describeSkip(branch: CleanBranch): string {
 	const worktree = branch.worktree?.path ?? '';
 	switch (branch.reason) {
 		case 'protected':
-			return branch.verdictReason === 'default-branch' ? 'default branch' : 'protected';
+			return describeProtection(branch);
 		case 'delete-merged-false':
 			return `branch.${branch.name}.deleteMerged is false`;
 		case 'rebase-in-progress':

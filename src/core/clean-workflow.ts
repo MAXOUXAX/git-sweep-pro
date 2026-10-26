@@ -430,6 +430,7 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 					protectedPatterns: options.protectedPatterns,
 					github: options.github,
 					fetched,
+					named: [...named],
 				}
 			)
 		);

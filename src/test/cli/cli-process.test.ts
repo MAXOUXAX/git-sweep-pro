@@ -97,6 +97,7 @@ suite('cli process client (real git)', function () {
 			upstream: 'origin/feature/agent',
 			upstreamState: 'gone',
 			worktree: null,
+			protected: null,
 			needsForce: false,
 			hint: 'gsp clean feature/agent --yes',
 		});

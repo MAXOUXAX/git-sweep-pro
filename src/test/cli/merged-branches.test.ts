@@ -237,6 +237,40 @@ suite('merged branch detection (real git)', function () {
 		);
 	});
 
+	test('main, master, trunk and develop are protected by default; naming one exactly lifts it, not the proofs', async () => {
+		for (const name of ['master', 'trunk', 'develop']) {
+			git(['branch', name, 'main'], fx.repo);
+		}
+		makeLocalBranch('develop-x', 'x.txt', ['x\n']);
+		git(['merge', '-q', '--no-ff', '-m', 'merge develop-x', 'develop-x'], fx.repo);
+		pushMain();
+
+		const plan = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', '--json', '--no-github'], plan), EXIT.notApplied);
+		const planned = JSON.parse(plan.out.join('')) as { branches: Array<{ name: string; action: string; reason: string; protected: unknown; hint: string | null }> };
+		const byName = Object.fromEntries(planned.branches.map((branch) => [branch.name, [branch.action, branch.reason, branch.protected, branch.hint]]));
+		assert.deepStrictEqual(byName, {
+			'develop-x': ['delete', 'merged', null, 'gsp clean develop-x --yes'],
+			develop: ['skip', 'protected', { by: 'default-name' }, 'gsp clean develop'],
+			main: ['keep', 'default-branch', { by: 'default-branch' }, null],
+			master: ['skip', 'protected', { by: 'default-name' }, 'gsp clean master'],
+			trunk: ['skip', 'protected', { by: 'default-name' }, 'gsp clean trunk'],
+		});
+
+		const human = createFakeIo(fx.repo);
+		await runCli(['clean', '--no-github', 'master'], human);
+		assert.ok(human.out.join('').includes('delete  master'), human.out.join(''));
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', 'master', '--yes', '--json', '--no-github'], io), EXIT.ok);
+		assert.ok(!branchExists(fx.repo, 'master'));
+		assert.ok(branchExists(fx.repo, 'trunk') && branchExists(fx.repo, 'develop') && branchExists(fx.repo, 'develop-x'));
+
+		const listed = createFakeIo(fx.repo);
+		await runCli(['clean', '--dry-run', '--no-github', 'trunk'], listed);
+		assert.ok(listed.out.join('').includes('delete  trunk'), listed.out.join(''));
+	});
+
 	test('works on a detached HEAD, and plans merged branches checked out in a linked worktree', async () => {
 		makeLocalBranch('feature/wt', 'w.txt', ['w\n']);
 		git(['merge', '-q', '--no-ff', '-m', 'merge', 'feature/wt'], fx.repo);
