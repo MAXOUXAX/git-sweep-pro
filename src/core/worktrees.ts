@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { RunGit } from './git-command';
 import type { WorkflowContext } from './workflow';
 
 /**
@@ -139,6 +140,31 @@ export function resolveWorktree(worktrees: readonly Worktree[], target: string, 
 	return worktree ? { kind: 'found', worktree } : { kind: 'not-found', target };
 }
 
+/**
+ * True when the linked worktree at `worktreePath` holds submodules, which
+ * `git worktree remove` refuses without `--force`. Same test as Git's:
+ * a `modules` folder in the worktree's Git directory, or a submodule checked
+ * out in it. Read-only.
+ */
+export async function hasSubmodules(git: RunGit, worktreePath: string): Promise<boolean> {
+	const modules = path.resolve(worktreePath, (await git(['-C', worktreePath, 'rev-parse', '--git-path', 'modules'])).stdout.trim());
+	if (fs.existsSync(modules)) {
+		return true;
+	}
+	const { stdout } = await git(['-C', worktreePath, 'ls-files', '--stage', '-z']);
+	return stdout
+		.split('\0')
+		.filter((entry) => entry.startsWith('160000 '))
+		.some((entry) => fs.existsSync(path.join(worktreePath, entry.slice(entry.indexOf('\t') + 1), '.git')));
+}
+
+/**
+ * `git worktree remove`, made to refuse untracked files: Git checks the
+ * worktree with a plain `git status`, which a `status.showUntrackedFiles=no`
+ * config blinds to them, and would then delete them.
+ */
+export const WORKTREE_REMOVE: readonly string[] = ['-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove'];
+
 export type WorktreeRemoval =
 	| { readonly kind: 'removed'; readonly worktree: Worktree }
 	| { readonly kind: 'main'; readonly worktree: Worktree }
@@ -159,6 +185,6 @@ export async function removeWorktree(context: WorkflowContext, target: string, f
 	if (resolution.worktree.state === 'main') {
 		return { kind: 'main', worktree: resolution.worktree };
 	}
-	await context.git(['worktree', 'remove', ...(force ? ['--force'] : []), resolution.worktree.path]);
+	await context.git([...WORKTREE_REMOVE, ...(force ? ['--force'] : []), resolution.worktree.path]);
 	return { kind: 'removed', worktree: resolution.worktree };
 }

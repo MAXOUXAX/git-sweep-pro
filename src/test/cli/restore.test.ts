@@ -33,15 +33,15 @@ suite('restore (real git)', function () {
 
 	const tipOf = (branch: string) => git(['rev-parse', branch], fx.repo).trim();
 
-	test('a branch force-deleted after a refused safe delete is restored with its commits', async () => {
+	test('a branch with unpushed work, deleted with --force, is restored with its commits', async () => {
 		const sha = makeGoneBranchWithCommit('feature/unmerged');
 
-		const sweep = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['--no-confirm'], sweep), EXIT.ok, 'the force-delete offer is refused without --yes');
-		assert.ok(sweep.err.join('').includes('Force-delete them with git branch -D? You can restore them later.'));
-		assert.strictEqual(await runCli(['--yes'], sweep), EXIT.ok);
+		const clean = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['--yes'], clean), EXIT.notApplied, 'unpushed work needs --force');
+		assert.ok(branchExists(fx.repo, 'feature/unmerged'));
+		assert.strictEqual(await runCli(['--yes', '--force'], clean), EXIT.ok);
 		assert.ok(!branchExists(fx.repo, 'feature/unmerged'));
-		assert.ok(sweep.err.join('').includes('To restore them, run: gsp restore feature/unmerged'));
+		assert.ok(clean.out.join('').includes('restore with gsp restore feature/unmerged'));
 
 		const listing = {
 			...createFakeIo(fx.repo, { interactive: true }),
@@ -119,12 +119,11 @@ suite('restore (real git)', function () {
 		const detached = path.join(fx.dir, 'detached');
 		git(['worktree', 'add', '-q', '--detach', detached], fx.repo);
 
-		// Sweep from one linked worktree; the branch lives in another one.
-		assert.strictEqual(await runCli(['--force', '--yes'], createFakeIo(detached)), EXIT.ok);
-		assert.ok(branchExists(fx.repo, 'feature/wt'), '--yes never selects a branch checked out in a worktree');
-		const { prompter } = createFakePrompter({ multiselect: [0], confirm: true });
-		const sweep = { ...createFakeIo(detached, { interactive: true }), loadPrompter: async () => prompter };
-		assert.strictEqual(await runCli(['--force'], sweep), EXIT.ok);
+		// Clean from one linked worktree; the branch lives in another one.
+		const { prompter, seen } = createFakePrompter({ multiselect: [0], confirm: true });
+		const clean = { ...createFakeIo(detached, { interactive: true }), loadPrompter: async () => prompter };
+		assert.strictEqual(await runCli(['--force'], clean), EXIT.ok);
+		assert.deepStrictEqual(seen.initial, [], 'unpushed work is offered with --force, never pre-selected');
 		assert.ok(!branchExists(fx.repo, 'feature/wt'));
 		assert.ok(!fs.existsSync(linked));
 

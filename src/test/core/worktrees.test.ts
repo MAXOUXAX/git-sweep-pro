@@ -115,13 +115,13 @@ suite('worktrees', () => {
 	test('removeWorktree resolves a branch to its path and removes it', async () => {
 		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: PORCELAIN } } });
 		assert.deepStrictEqual(await removeWorktree(context, 'feature/x', false), { kind: 'removed', worktree: LINKED });
-		assert.deepStrictEqual(commands, ['worktree list --porcelain', 'worktree remove /repo/wt']);
+		assert.deepStrictEqual(commands, ['worktree list --porcelain', '-c status.showUntrackedFiles=normal worktree remove /repo/wt']);
 	});
 
 	test('removeWorktree passes --force when asked', async () => {
 		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: PORCELAIN } } });
 		assert.strictEqual((await removeWorktree(context, '/repo/wt', true)).kind, 'removed');
-		assert.deepStrictEqual(commands, ['worktree list --porcelain', 'worktree remove --force /repo/wt']);
+		assert.deepStrictEqual(commands, ['worktree list --porcelain', '-c status.showUntrackedFiles=normal worktree remove --force /repo/wt']);
 	});
 
 	test('removeWorktree refuses the main worktree without running git', async () => {
@@ -141,7 +141,7 @@ suite('worktrees', () => {
 		const porcelain = ['worktree /repo', 'branch refs/heads/main', '', 'worktree /repo/nested/wt', 'branch refs/heads/feature/x', ''].join('\n');
 		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: porcelain } } });
 		assert.strictEqual((await removeWorktree(context, 'wt', false, '/repo/nested')).kind, 'removed');
-		assert.deepStrictEqual(commands, ['worktree list --porcelain', 'worktree remove /repo/nested/wt']);
+		assert.deepStrictEqual(commands, ['worktree list --porcelain', '-c status.showUntrackedFiles=normal worktree remove /repo/nested/wt']);
 	});
 
 	test('removeWorktree refuses an ambiguous target instead of picking one silently', async () => {
@@ -165,7 +165,7 @@ suite('worktrees', () => {
 		const { context } = createFakeContext({
 			git: {
 				'worktree list --porcelain': { stdout: PORCELAIN },
-				'worktree remove /repo/wt': new Error("fatal: '/repo/wt' contains modified or untracked files, use --force to delete it"),
+				'-c status.showUntrackedFiles=normal worktree remove /repo/wt': new Error("fatal: '/repo/wt' contains modified or untracked files, use --force to delete it"),
 			},
 		});
 		await assert.rejects(() => removeWorktree(context, 'feature/x', false), /contains modified or untracked files/);
