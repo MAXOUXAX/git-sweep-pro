@@ -562,6 +562,24 @@ suite('branch analysis (real git)', function () {
 		});
 	});
 
+	test('a branch with plain unmerged work costs a handful of git calls', async () => {
+		const count = 8;
+		for (let index = 0; index < count; index++) {
+			makeBranch(`feature/${index}`, [[`${index}.txt`, '1\n'], [`${index}.txt`, '1\n2\n'], [`${index}.txt`, '1\n2\n3\n']]);
+		}
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		pushMain();
+		let calls = 0;
+		const counting = (args: readonly string[]) => {
+			calls++;
+			return runGit(args);
+		};
+		const result = await analyzeBranches({ git: counting }, { github: false });
+		assert.ok(result.branches.every((branch) => branch.name === 'main' || branch.reason === 'unmerged-commits'));
+		// Merge base, cherry, squash diff and log, unpushed count; plus the shared reads.
+		assert.ok(calls <= 5 * count + 10, `${calls} git calls`);
+	});
+
 	test('only classifies the requested branches, and accepts a base override', async () => {
 		makeBranch('feature/one', [['1.txt', '1\n']]);
 		makeBranch('feature/two', [['2.txt', '2\n']]);

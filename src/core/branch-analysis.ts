@@ -413,6 +413,7 @@ type PullRequestMatch = { readonly pullRequest: PullRequest; readonly match: 'he
 class Prover {
 	private firstParent: Promise<ReadonlySet<string>> | undefined;
 	private pullRequestCommits: Promise<ReadonlyMap<string, PullRequest>> | undefined;
+	private anyMerges: Promise<boolean> | undefined;
 	private readonly verdicts = new Map<string, Promise<Verdict>>();
 
 	constructor(
@@ -488,21 +489,22 @@ class Prover {
 		}
 		commits.reverse();
 		const changes = commits.map((commit) => parseRawChanges(commit.tokens));
-		// Cheap gate before reading any tree: every wanted state must show up in the base's changes.
+		// Cheap gate before reading any tree: every wanted state must show up in the base's changes
+		// (when none touched the files since `since`, the change cannot have landed).
 		// Only sound when the log is complete: a capped one may start after the squash.
 		const complete = commits.length < MAX_SQUASH_CANDIDATES;
 		const reached = new Set(changes.flat().map((change) => `${change.path}\0${change.state}`));
-		if (complete && commits.length > 0 && paths.some((path) => !reached.has(`${path}\0${wanted.get(path)}`))) {
+		if (complete && paths.some((path) => !reached.has(`${path}\0${wanted.get(path)}`))) {
 			return undefined;
 		}
 
-		// The state just before the oldest candidate, or the base itself when no commit touched the files.
-		const start = commits.length > 0 ? commits[0].parent : this.base.tip;
+		// The state just before the oldest candidate.
+		const start = commits[0].parent;
 		const state = start
 			? parseTree(await this.gitRead(['--literal-pathspecs', 'ls-tree', '-r', '-z', '--full-tree', start, '--', ...paths]))
 			: new Map<string, string>();
 		const matches = () => paths.every((path) => (state.get(path) ?? '') === wanted.get(path));
-		if (start && (commits.length === 0 || !complete) && matches()) {
+		if (start && !complete && matches()) {
 			return { squashCommit: start, files: paths.length };
 		}
 		for (const [index, commit] of commits.entries()) {
@@ -636,6 +638,11 @@ class Prover {
 	 * never looks at merges, so patch ids alone would miss that work.
 	 */
 	async mergesOf(tip: string): Promise<{ merges: number; ownChanges: boolean }> {
+		// One look at every local branch first: most repositories have no merge off the base at all.
+		this.anyMerges ??= this.gitRead(['rev-list', '--merges', '--max-count=1', '--branches', '--not', this.base.ref]).then((output) => output.trim() !== '');
+		if (!(await this.anyMerges)) {
+			return { merges: 0, ownChanges: false };
+		}
 		const output = await this.gitRead([
 			'log',
 			'--merges',
@@ -810,8 +817,11 @@ async function proveTip(git: RunGit, prover: Prover, tip: string, isAncestor: bo
 		const { number, headSha } = pr.pullRequest;
 		return { verdict: 'dead', reason: 'pr-merged', evidence: { method: 'pull-request', pullRequest: number, state: 'merged', headSha, match: pr.match } };
 	}
-	// A single commit is the tip itself: already tried above.
-	const proofs = mergeBase && cherry.size > 1 && (await patchIdsCover()) ? await prover.commitsProof(tip, mergeBase, cherry) : undefined;
+	// A single commit is the tip itself: already tried above. The per-commit proof is costly: only for
+	// integration branches (with merges) and branches partly on the base already.
+	const integrates = async () => [...cherry.values()].some(Boolean) || (await mergesOf()).merges > 0;
+	const proofs =
+		mergeBase && cherry.size > 1 && (await integrates()) && (await patchIdsCover()) ? await prover.commitsProof(tip, mergeBase, cherry) : undefined;
 	if (proofs) {
 		return { verdict: 'dead', reason: 'commits-merged', evidence: { method: 'commits', base: base.ref, commits: proofs.length, proofs } };
 	}
