@@ -41,7 +41,7 @@ gsp restore feature/x   # undo: recreate a deleted branch at its last commit
 
 ### Plan, then apply
 
-Without a terminal, `gsp clean` prints the plan and changes nothing unless you pass `--yes`; it ends with the command that applies exactly that plan. In a terminal, it shows a picker with every planned deletion selected; with `--force`, branches that need it are listed too, never selected. `--dry-run` always plans only.
+Without a terminal, `gsp clean` prints the plan and changes nothing unless you pass `--yes`; it ends with the command that applies exactly that plan, naming every planned branch. In a terminal, it shows a picker with every planned deletion selected; with `--force`, branches that need it are listed too, never selected. `--dry-run` always plans only.
 
 Planning is read-only: no fetch, no prune, no change to refs, objects, config or worktrees. To find the branches deleted on the remote, it reads `git ls-remote --heads`. With `--no-fetch`, or when the remote cannot be reached, it uses the local remote-tracking refs, and the JSON says so in `checks.remote`.
 

@@ -266,13 +266,17 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 	}
 }
 
+/** Longer than this, the command to apply a plan is printed on its own line. */
+const COMMAND_INLINE_WIDTH = 80;
+
 /** What to do next when the plan was not applied, or `undefined` when there is nothing to say. */
 function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | null): string | undefined {
 	if (outcome !== 'not-applied') {
 		return undefined;
 	}
 	if (next && report.summary.delete > 0 && !report.branches.some((branch) => branch.result !== undefined)) {
-		return `Nothing was changed. To apply this plan, run: ${next}`;
+		// It names every planned branch, so a long one goes on its own line, whole.
+		return next.length > COMMAND_INLINE_WIDTH ? `Nothing was changed. To apply this plan, run:\n${next}` : `Nothing was changed. To apply this plan, run: ${next}`;
 	}
 	const count = (test: (branch: CleanReport['branches'][number]) => boolean) => report.branches.filter(test).length;
 	const unpushed = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'dead');
