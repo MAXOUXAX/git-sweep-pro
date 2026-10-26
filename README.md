@@ -4,6 +4,56 @@ Delete the local branches whose work is already merged or pushed, and the worktr
 
 It is a command line for you and your coding agents, and a VS Code extension.
 
+## For coding agents
+
+Use `gsp`, not raw Git: it checks the work is safe before deleting anything and records each deletion for `gsp restore`. Don't use `git branch -D`, `git worktree remove` or `git push --delete`.
+
+| Task | Command |
+| --- | --- |
+| After merging a pull request | `gsp post-pr --yes`, from the branch's worktree, or `gsp post-pr <branch> --yes` from the main checkout. Continue in `nextCwd` when it removed the worktree you were in |
+| Clean the repository | `gsp clean --json` to read the plan, then `gsp clean --yes`. Exit code 5: more needs approval, read `next` |
+| Delete one branch | `gsp clean <branch> --yes`. Add `--force` only when the person agreed to lose its unpushed work |
+| Remove a scratch or review worktree | `gsp worktree remove <path>`. Add `--force` when it holds uncommitted work you can throw away |
+| List worktrees | `gsp worktree list --json` |
+| Delete merged branches on the remote | `gsp clean --remote` shows the plan; add `--yes` to apply it |
+| Undo a deletion | `gsp restore <branch>` |
+
+`gsp agents` writes these instructions into a repository's `AGENTS.md` or `CLAUDE.md`, and `gsp agents --check` finds advice there that contradicts gsp (see [With coding agents](#with-coding-agents)).
+
+<details>
+<summary>The note <code>gsp agents</code> writes, to copy into an instruction file outside a repository</summary>
+
+````markdown
+<!-- BEGIN:git-sweep-pro -->
+## Git cleanup
+
+Use `gsp` (git-sweep-pro) for Git cleanup. Don't use `git branch -D`, `git worktree remove` or `git push --delete`: gsp checks the work is safe and records deletions for `gsp restore`.
+
+- After merging a pull request: `gsp post-pr --yes` from the branch's worktree, or `gsp post-pr <branch> --yes` from the main checkout. If it removed the worktree you were in, continue in `nextCwd` (with `--json`) or the directory it prints.
+- Clean the repository: `gsp clean --json` to read the plan, then `gsp clean --yes` to apply it.
+- Delete one branch: `gsp clean <branch> --yes`. Add `--force` only when the person agreed to lose its unpushed work.
+- Remove a scratch or review worktree: `gsp worktree remove <path>`. Add `--force` when it holds uncommitted work you can throw away.
+- List worktrees: `gsp worktree list --json`.
+- Remote branches: `gsp clean --remote` shows the plan; add `--yes` to apply it.
+- Undo a deletion: `gsp restore <branch>`.
+
+Without a terminal, gsp changes nothing unless `--yes` is passed; in a pseudo-terminal, add `--non-interactive`. `--yes` never forces: it deletes only branches whose work exists elsewhere. With `--json`, stdout is one document: each skipped branch has a `reason` and a `hint`, and `next` is the command to run next. Run `gsp sync` (rebase, then force-push with a lease) only when asked.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Done, or nothing to do |
+| 1 | Something failed: read the output |
+| 2 | Invalid arguments, or no such branch, remote or worktree |
+| 3 | `gsp sync` paused on conflicts: resolve and stage them, then `gsp resume` |
+| 4 | Cancelled at a prompt |
+| 5 | Not everything was done: more needs approval (`--yes`, `--force`), or post-pr or worktree remove kept something. Read `next` or the hint |
+
+Run `gsp help` for every command, and `gsp agents --check` to find outdated advice in these files.
+<!-- END:git-sweep-pro -->
+````
+
+</details>
+
 ## Install
 
 **Terminal** (macOS and Linux, needs Node.js, which Homebrew installs):
@@ -29,7 +79,7 @@ gsp clean --json        # the plan as JSON, for scripts and agents
 gsp clean --remote --yes             # also delete the merged branches on origin
 gsp worktree list       # every worktree, its state, and what clean would do
 gsp worktree prune      # forget worktree registrations whose directory is gone
-gsp worktree remove <path|branch>   # remove one linked worktree
+gsp worktree remove <path|branch>   # remove one linked worktree, if nothing would be lost
 gsp post-pr --yes       # after a merged PR: delete its branch and worktree, update main, clean
 gsp sync origin/main    # rebase onto origin/main, then force-push with a lease
 gsp resume              # continue a sync after resolving its conflicts
@@ -74,7 +124,7 @@ Whatever the flags, `gsp clean` never deletes:
 - a branch checked out in a worktree that is locked, has uncommitted changes or holds checked-out submodules (`git worktree remove` refuses those without `--force`);
 - a branch that another kept local branch uses as its upstream.
 
-A dead branch checked out in a clean, unlocked linked worktree is deleted with its worktree (`git worktree remove`, never `--force`). Each skipped branch comes with a hint: the exact command that resolves it. A hint never suggests losing work first: for uncommitted changes, it stashes them, and for ignored files, it asks you to move what you need out of the worktree before forcing.
+A dead branch checked out in a clean, unlocked linked worktree is deleted with its worktree (`git worktree remove`, never `--force`). Each skipped branch comes with a hint: what resolves it, usually one command, sometimes after a step you take by hand (for ignored files, moving what you need out of the worktree). A hint never suggests losing work first: for uncommitted changes, it stashes them, and for ignored files, it asks you to move what you need out of the worktree before forcing.
 
 Removing a worktree deletes its ignored files, and `gsp restore` cannot bring them back. A worktree holding ignored files is skipped with `ignored-files`, and the plan lists them, unless they are all regenerable: a build or an install recreates them. Only `--force` removes it anyway, once you have moved what you need out of it. These folders are regenerable, at any depth, when the whole folder is ignored:
 
@@ -157,10 +207,10 @@ The worktree you ran gsp in was removed. Continue in the main checkout: cd /work
 | --- | --- |
 | 0 | Done, or nothing to do |
 | 1 | At least one action failed; the output says which |
-| 2 | Invalid arguments, or a branch or remote that does not exist |
+| 2 | Invalid arguments, or a branch, remote or worktree that does not exist |
 | 3 | Sync paused on conflicts. Resolve them, stage the files, then run `gsp resume` |
 | 4 | Cancelled at a prompt |
-| 5 | `clean`, `post-pr`: some planned deletions were not applied; the output says why and what to run next (`next` in the JSON). For `post-pr`, 5 also means the branch you asked to finish isn't finished. `sync`, `agents`, `restore`: a confirmation was needed but nobody could answer; rerun with `--yes` |
+| 5 | `clean`, `post-pr`: some planned deletions were not applied; the output says why and what to run next (`next` in the JSON). For `post-pr`, 5 also means the branch you asked to finish isn't finished. `worktree remove`: the worktree was kept; the output says why. `agents --check`: it found outdated advice. `sync`, `agents`, `restore`: a confirmation was needed but nobody could answer; rerun with `--yes` |
 
 ## With coding agents
 
@@ -170,7 +220,9 @@ Codex, Claude Code, Cursor, GitHub Copilot and OpenCode can clean up the workspa
 gsp agents
 ```
 
-It asks which instruction files to update, `AGENTS.md` (Codex, Cursor, GitHub Copilot, OpenCode) and/or `CLAUDE.md` (Claude Code). Running it again updates its own block and leaves the rest of the file alone. To set up both files without a picker: `gsp agents AGENTS.md CLAUDE.md --non-interactive`.
+It asks which instruction files to update, `AGENTS.md` (Codex, Cursor, GitHub Copilot, OpenCode) and/or `CLAUDE.md` (Claude Code). Running it again updates its own block, or replaces an older gsp note (a "Git cleanup" section about gsp, with or without markers), and leaves the rest of the file alone. To set up both files without a picker: `gsp agents AGENTS.md CLAUDE.md --non-interactive`.
+
+Older notes and hand-written rules may still tell agents to use raw Git, or describe gsp as it was. `gsp agents --check` reads the repository's `AGENTS.md` and `CLAUDE.md`, or any file you name (`gsp agents --check ~/.claude/CLAUDE.md`), and prints each line that contradicts gsp with what to write instead: `git branch -D`, `git worktree remove`, `git push --delete`, `--merged`, the 1.x `gsp list --json` fields, "gsp has no worktree command", "`--yes` force-deletes". It changes nothing and exits with 5 when it found something. A line that names gsp or warns against a command (`Don't use git branch -D`) is left alone.
 
 Agents read the plan, then apply it when authorized:
 
@@ -179,6 +231,7 @@ gsp clean --json                  # the plan; exit code 5 when there is somethin
 gsp clean --json --yes            # apply it; the result, with a restore command
 gsp clean --json --remote --yes   # also delete the merged branches on origin
 gsp post-pr --json --yes          # after merging a pull request; "nextCwd" says where to cd
+gsp worktree remove /tmp/review --json   # remove a scratch worktree; exit code 5 when kept
 gsp restore --json                # list recoverable deletions
 gsp restore feature/x --non-interactive
 ```
@@ -187,7 +240,7 @@ gsp restore feature/x --non-interactive
 
 ### JSON
 
-`--json` works with `clean` (and `sweep`, `list`), `post-pr`, `worktree list` and `restore` without branch names. It writes one JSON document to stdout; progress and warnings go to stderr. A fatal error is still one document, `{ "schema": 2, "error": { "message": "…", "code": "…" } }`, with `code` one of `usage`, `no-such-directory`, `unknown-branch`, `unknown-remote`, `push-url-differs`, `not-a-repository` or `failed`.
+`--json` works with `clean` (and `sweep`, `list`), `post-pr`, `worktree list`, `worktree remove`, `restore` without branch names, and `agents --check`. It writes one JSON document to stdout; progress and warnings go to stderr. A fatal error is still one document, `{ "schema": 2, "error": { "message": "…", "code": "…" } }`, with `code` one of `usage`, `no-such-directory`, `unknown-branch`, `unknown-remote`, `push-url-differs`, `not-a-repository`, `unknown-worktree`, `ambiguous-worktree` (a path and a branch naming different worktrees), `main-worktree` or `failed`.
 
 `gsp clean --json` writes a versioned document (`schema` is 2):
 
@@ -249,6 +302,8 @@ Other JSON outputs:
 | Command | JSON value |
 | --- | --- |
 | `gsp worktree list --json` | `{ "schema": 2, "command": "worktree list", "worktrees": [...] }`, main worktree first. Each has `path`, `branch` (during a rebase or a bisect, the branch being worked on; `null` when detached), `head`, `isMain`, `locked`, `prunable`, `dirty`, `inProgress` (`rebase`, `bisect` or `null`), `ignoredFiles` (`{ count, sample }`, as in `gsp clean`; `null` for the main worktree and a prunable one), and what `gsp clean` would do with its branch: `verdict`, `verdictReason`, `action`, `reason` and `hint`, as in `gsp clean --json`. A detached linked worktree has `action: "keep"` and `reason: "detached"`; without a branch otherwise, all are `null`. Read-only, like a plan |
+| `gsp worktree remove --json` | `{ "schema": 2, "command": "worktree remove", "worktree": { "path", "branch" }, "removed", "reason", "ignoredFiles", "hint" }`. `removed` is `false` when the worktree was kept, with `reason` one of `locked-worktree`, `rebase-in-progress`, `bisect-in-progress`, `dirty-worktree`, `submodules` or `ignored-files` (then `ignoredFiles` is `{ count, sample }`), and a `hint`. `--force` lifts every reason but `locked-worktree`. The branch is never deleted |
+| `gsp agents --check --json` | `{ "schema": 2, "command": "agents --check", "files": [...], "findings": [...] }`. Each finding has `file`, `line`, `text`, `rule` (`outdated-note`, `raw-branch-delete`, `raw-worktree-remove`, `raw-push-delete`, `no-worktree-command`, `old-list-json`, `merged-flag` or `yes-forces`) and `suggestion` |
 | `gsp restore --json` | Array of recoverable deletion records, including `branch`, `sha`, `deletedAt`, `source`, and `remote` for a branch deleted on a remote |
 
 `gsp post-pr --json` writes the same `schema` 2, with `"command": "post-pr"`:

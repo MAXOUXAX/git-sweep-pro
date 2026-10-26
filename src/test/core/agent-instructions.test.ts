@@ -48,6 +48,11 @@ suite('agent instructions', () => {
 		assert.ok(AGENT_BLOCK.split('\n').length <= 40);
 	});
 
+	test('the README carries the same note, for files outside a repository', () => {
+		const readme = fs.readFileSync(path.join(__dirname, '../../../README.md'), 'utf8');
+		assert.ok(readme.includes(AGENT_BLOCK), 'copy AGENT_BLOCK into the "For coding agents" section of the README');
+	});
+
 	suite('upsertAgentBlock', () => {
 		test('fills an empty file with the block', () => {
 			assert.strictEqual(upsertAgentBlock(''), `${AGENT_BLOCK}\n`);
