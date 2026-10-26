@@ -1,12 +1,5 @@
 import * as assert from 'assert';
-import {
-	clearAll,
-	describeSweepMode,
-	formatSweepOutcome,
-	formatSweepSummary,
-	invertSelection,
-	selectAll,
-} from '../../core/sweep-selection';
+import { clearAll, invertSelection, selectAll } from '../../core/sweep-selection';
 import type { PickItem } from '../../core/workflow';
 
 const items = (): PickItem[] => [
@@ -52,61 +45,5 @@ suite('sweep selection helpers', () => {
 		assert.deepStrictEqual(selectAll([]), []);
 		assert.deepStrictEqual(clearAll([]), []);
 		assert.deepStrictEqual(invertSelection([]), []);
-	});
-
-	test('describeSweepMode reports the git flags the user sees', () => {
-		assert.strictEqual(describeSweepMode('dryRun'), 'dry run');
-		assert.strictEqual(describeSweepMode('safeDelete'), 'safe delete (-d)');
-		assert.strictEqual(describeSweepMode('forceDelete'), 'force delete (-D)');
-	});
-
-	test('formatSweepSummary omits the zero-count lines', () => {
-		const summary = formatSweepSummary({
-			mergedCount: 0,
-			totalDetected: 3,
-			protectedCount: 0,
-			checkedOutCount: 0,
-			selectedCount: 2,
-			worktreeCount: 0,
-			mode: 'safeDelete',
-		});
-		assert.strictEqual(
-			summary,
-			['Detected: 3 stale branch(es)', 'Selected: 2', 'Mode: safe delete (-d)'].join('\n')
-		);
-	});
-
-	test('formatSweepSummary includes the merged, protected, checked-out and worktree lines', () => {
-		const summary = formatSweepSummary({
-			mergedCount: 2,
-			totalDetected: 5,
-			protectedCount: 2,
-			checkedOutCount: 1,
-			selectedCount: 3,
-			worktreeCount: 1,
-			mode: 'dryRun',
-		});
-		assert.strictEqual(
-			summary,
-			[
-				'Detected: 5 stale and 2 merged branch(es)',
-				'Protected (skipped): 2',
-				'Checked out (skipped): 1',
-				'Selected: 3',
-				'Worktrees to remove: 1',
-				'Mode: dry run',
-			].join('\n')
-		);
-	});
-
-	test('formatSweepOutcome reports deleted, skipped, and failed counts', () => {
-		assert.strictEqual(
-			formatSweepOutcome({ deleted: 3, skipped: 1, failed: 0 }),
-			'Deleted 3 branch(es); 1 skipped, 0 failed.'
-		);
-		assert.strictEqual(
-			formatSweepOutcome({ deleted: 0, skipped: 0, failed: 2 }),
-			'Deleted 0 branch(es); 0 skipped, 2 failed.'
-		);
 	});
 });

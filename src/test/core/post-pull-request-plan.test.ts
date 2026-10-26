@@ -47,7 +47,7 @@ const worktree = (overrides: Partial<NonNullable<BranchAnalysis['worktree']>> = 
 
 const SCOPE: PostPrScope = { protectedPatterns: [], github: true, fetch: true };
 
-const OPTIONS: DecideTargetOptions = { force: false, into: 'main', mainCheckoutDirty: false, remoteAhead: false, scope: SCOPE };
+const OPTIONS: DecideTargetOptions = { force: false, discardChanges: false, into: 'main', mainCheckoutDirty: false, remoteAhead: false, scope: SCOPE };
 
 const update = (overrides: Partial<DefaultBranchUpdate> = {}): DefaultBranchUpdate => ({
 	name: 'main',
@@ -69,7 +69,7 @@ const clean: CleanReport = {
 	branches: [],
 	worktreesPruned: [],
 	restore: null,
-	summary: { delete: 0, deleted: 0, failed: 0, skipped: 0, kept: 0, needsForce: 0, reasons: {} },
+	summary: { delete: 0, deleted: 0, failed: 0, skipped: 0, kept: 0, needsForce: 0, needsDiscardChanges: 0, reasons: {} },
 };
 
 function report(overrides: Partial<PostPrReport> = {}): PostPrReport {
@@ -155,7 +155,11 @@ suite('post-pr plan', () => {
 		const rebasing = decideTarget(branch({ worktree: worktree({ path: '/repo', isMain: true, inProgress: 'rebase' }) }), { ...OPTIONS, force: true });
 		assert.deepStrictEqual([rebasing.action, rebasing.reason, rebasing.worktree?.isMain], ['skip', 'rebase-in-progress', true]);
 		const ignored = decideTarget(branch({ worktree: { ...worktree(), ignoredFiles: { count: 1, sample: ['.env'] } } }), OPTIONS);
-		assert.deepStrictEqual([ignored.action, ignored.reason, ignored.hint], ['skip', 'ignored-files', 'move what you need out of /wt, then: gsp post-pr feature/x --yes --force']);
+		assert.deepStrictEqual([ignored.action, ignored.reason, ignored.hint], ['skip', 'ignored-files', 'move what you need out of /wt, then: gsp post-pr feature/x --yes --discard-changes']);
+		const forcedIgnored = decideTarget(branch({ worktree: { ...worktree(), ignoredFiles: { count: 1, sample: ['.env'] } } }), { ...OPTIONS, force: true });
+		assert.strictEqual(forcedIgnored.reason, 'ignored-files', '--force alone never deletes ignored files');
+		const discarded = decideTarget(branch({ worktree: { ...worktree(), ignoredFiles: { count: 1, sample: ['.env'] } } }), { ...OPTIONS, discardChanges: true });
+		assert.deepStrictEqual([discarded.action, discarded.hint], ['delete', 'gsp post-pr feature/x --yes --discard-changes']);
 		const tracked = decideTarget(branch({ upstreamOf: ['feature/y'] }), OPTIONS);
 		assert.deepStrictEqual([tracked.action, tracked.reason], ['skip', 'tracked-by-kept-branch']);
 	});
@@ -219,6 +223,21 @@ suite('post-pr plan', () => {
 		const kept = report({ mode: 'plan', branch: decideTarget(alive, OPTIONS) });
 		assert.strictEqual(postPrNextCommand(kept, SCOPE), null);
 		assert.ok(hasPendingChanges(kept));
+	});
+
+	test('a kept merged branch gives the step of its hint that loses nothing as next, never one that needs approval', () => {
+		const dirty = decideTarget(branch({ worktree: worktree({ dirty: true }) }), OPTIONS);
+		for (const mode of ['plan', 'apply'] as const) {
+			const kept = report({ mode, branch: dirty });
+			assert.strictEqual(postPrNextCommand(kept, SCOPE), 'git -C /wt stash --include-untracked && gsp post-pr feature/x --yes');
+			assert.deepStrictEqual(formatNextSteps(kept, postPrNextCommand(kept, SCOPE)), [], 'the branch line already gives the hint');
+		}
+		const unpushed = decideTarget(branch({ unpushedCommits: 1 }), { ...OPTIONS, pushRemote: 'origin' });
+		assert.strictEqual(postPrNextCommand(report({ branch: unpushed }), SCOPE), 'git push -u origin feature/x');
+		const ignored = decideTarget(branch({ worktree: { ...worktree(), ignoredFiles: { count: 1, sample: ['.env'] } } }), OPTIONS);
+		assert.strictEqual(postPrNextCommand(report({ branch: ignored }), SCOPE), null);
+		const locked = decideTarget(branch({ worktree: worktree({ locked: true }) }), OPTIONS);
+		assert.strictEqual(postPrNextCommand(report({ branch: locked }), SCOPE), null);
 	});
 
 	test('the next command keeps the options of the run, and plans again what changed while applying', () => {

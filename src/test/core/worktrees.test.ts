@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { listWorktrees, parseWorktrees, pruneWorktrees, removeWorktree, resolveWorktree } from '../../core/worktrees';
+import { listWorktrees, parseWorktrees, pruneWorktrees, removeWorktree, resolveWorktree, worktreeRemoveDocument } from '../../core/worktrees';
 import { createFakeContext } from '../fake-context';
 
 const PORCELAIN = [
@@ -28,6 +28,15 @@ const PORCELAIN = [
 ].join('\n');
 
 const LINKED = { path: '/repo/wt', branch: 'feature/x', state: 'linked' } as const;
+
+/** The read-only checks removeWorktree runs on a linked worktree before removing it. */
+const removalChecks = (at: string) => [
+	`-C ${at} rev-parse --absolute-git-dir`,
+	`-C ${at} --no-optional-locks status --porcelain --untracked-files=normal -z`,
+	`-C ${at} --no-optional-locks status --porcelain --untracked-files=normal --ignored=matching -z`,
+	`-C ${at} rev-parse --git-path modules`,
+	`-C ${at} ls-files --stage -z`,
+];
 
 /** The same listing once Git has forgotten the prunable registration. */
 const AFTER_PRUNE = PORCELAIN.slice(0, PORCELAIN.indexOf('worktree /repo/prunable')).trimEnd();
@@ -109,11 +118,11 @@ suite('worktrees', () => {
 
 	test('removeWorktree resolves a branch to its path and removes it', async () => {
 		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: PORCELAIN } } });
-		assert.deepStrictEqual(await removeWorktree(context, 'feature/x', false), { kind: 'removed', worktree: LINKED });
-		assert.deepStrictEqual(commands, ['worktree list --porcelain', '-c status.showUntrackedFiles=normal worktree remove /repo/wt']);
+		assert.deepStrictEqual(await removeWorktree(context, 'feature/x', false), { kind: 'removed', worktree: LINKED, nextCwd: null });
+		assert.deepStrictEqual(commands, ['worktree list --porcelain', ...removalChecks('/repo/wt'), '-c status.showUntrackedFiles=normal worktree remove /repo/wt']);
 	});
 
-	test('removeWorktree passes --force when asked', async () => {
+	test('removeWorktree passes --force to Git with --discard-changes, and skips the checks it lifts', async () => {
 		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: PORCELAIN } } });
 		assert.strictEqual((await removeWorktree(context, '/repo/wt', true)).kind, 'removed');
 		assert.deepStrictEqual(commands, ['worktree list --porcelain', '-c status.showUntrackedFiles=normal worktree remove --force /repo/wt']);
@@ -129,14 +138,19 @@ suite('worktrees', () => {
 	test('removeWorktree reports an unknown target', async () => {
 		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: PORCELAIN } } });
 		assert.deepStrictEqual(await removeWorktree(context, 'nope', false), { kind: 'not-found', target: 'nope' });
-		assert.deepStrictEqual(commands, ['worktree list --porcelain']);
+		// A detached worktree may be rebasing or bisecting the branch named.
+		assert.deepStrictEqual(commands, ['worktree list --porcelain', '-C /repo/detached rev-parse --absolute-git-dir']);
 	});
 
 	test('removeWorktree resolves a relative target from the invocation directory', async () => {
 		const porcelain = ['worktree /repo', 'branch refs/heads/main', '', 'worktree /repo/nested/wt', 'branch refs/heads/feature/x', ''].join('\n');
 		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: porcelain } } });
 		assert.strictEqual((await removeWorktree(context, 'wt', false, '/repo/nested')).kind, 'removed');
-		assert.deepStrictEqual(commands, ['worktree list --porcelain', '-c status.showUntrackedFiles=normal worktree remove /repo/nested/wt']);
+		assert.deepStrictEqual(commands, [
+			'worktree list --porcelain',
+			...removalChecks('/repo/nested/wt'),
+			'-c status.showUntrackedFiles=normal worktree remove /repo/nested/wt',
+		]);
 	});
 
 	test('removeWorktree refuses an ambiguous target instead of picking one silently', async () => {
@@ -156,7 +170,7 @@ suite('worktrees', () => {
 		assert.deepStrictEqual(commands, ['worktree list --porcelain']);
 	});
 
-	test("removeWorktree surfaces git's refusal for a dirty or locked worktree", async () => {
+	test("removeWorktree surfaces git's refusal when the worktree changes after the checks", async () => {
 		const { context } = createFakeContext({
 			git: {
 				'worktree list --porcelain': { stdout: PORCELAIN },
@@ -164,5 +178,80 @@ suite('worktrees', () => {
 			},
 		});
 		await assert.rejects(() => removeWorktree(context, 'feature/x', false), /contains modified or untracked files/);
+	});
+
+	test('removeWorktree keeps a dirty worktree, with a hint that saves the changes first', async () => {
+		const { context, commands } = createFakeContext({
+			git: {
+				'worktree list --porcelain': { stdout: PORCELAIN },
+				'-C /repo/wt --no-optional-locks status --porcelain --untracked-files=normal -z': { stdout: '?? wip.txt\0R  new.txt\0old.txt\0 M src/a.ts\0' },
+			},
+		});
+		const stash = 'git -C /repo/wt stash --include-untracked && gsp worktree remove /repo/wt';
+		assert.deepStrictEqual(await removeWorktree(context, 'feature/x', false), {
+			kind: 'kept',
+			worktree: LINKED,
+			reason: 'dirty-worktree',
+			hint: `${stash}, or, to delete wip.txt, new.txt, src/a.ts for good: gsp worktree remove /repo/wt --discard-changes`,
+			next: stash,
+			ignoredFiles: [],
+			changedFiles: ['wip.txt', 'new.txt', 'src/a.ts'],
+		});
+		assert.ok(!commands.some((command) => command.includes('worktree remove')));
+	});
+
+	test('removeWorktree keeps a worktree holding ignored files a build does not recreate, and lists them', async () => {
+		const { context } = createFakeContext({
+			git: {
+				'worktree list --porcelain': { stdout: PORCELAIN },
+				'-C /repo/wt --no-optional-locks status --porcelain --untracked-files=normal --ignored=matching -z': { stdout: '!! .env\0!! node_modules/\0!! notes.md\0' },
+			},
+		});
+		const result = await removeWorktree(context, '/repo/wt', false);
+		assert.strictEqual(result.kind, 'kept');
+		const hint = 'move what you need out of /repo/wt (.env, notes.md), then: gsp worktree remove /repo/wt --discard-changes';
+		assert.deepStrictEqual(result.kind === 'kept' && [result.reason, result.ignoredFiles, result.hint, result.next], ['ignored-files', ['.env', 'notes.md'], hint, null]);
+		assert.deepStrictEqual(worktreeRemoveDocument(result as Extract<typeof result, { kind: 'kept' }>), {
+			schema: 2,
+			command: 'worktree remove',
+			worktree: { path: '/repo/wt', branch: 'feature/x' },
+			removed: false,
+			reason: 'ignored-files',
+			ignoredFiles: { count: 2, sample: ['.env', 'notes.md'] },
+			changedFiles: null,
+			hint,
+			next: null,
+			nextCwd: null,
+		});
+	});
+
+	test('removeWorktree keeps a locked worktree, even with --discard-changes', async () => {
+		const { context, commands } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: PORCELAIN } } });
+		const result = await removeWorktree(context, '/repo/locked', true);
+		assert.deepStrictEqual(result.kind === 'kept' && [result.reason, result.hint], [
+			'locked-worktree',
+			'git worktree unlock /repo/locked && gsp worktree remove /repo/locked',
+		]);
+		assert.deepStrictEqual(commands, ['worktree list --porcelain']);
+	});
+
+	test('worktreeRemoveDocument reports a removal', () => {
+		assert.deepStrictEqual(worktreeRemoveDocument({ kind: 'removed', worktree: { path: '/repo/detached', branch: undefined, state: 'linked' }, nextCwd: null }), {
+			schema: 2,
+			command: 'worktree remove',
+			worktree: { path: '/repo/detached', branch: null },
+			removed: true,
+			reason: null,
+			ignoredFiles: null,
+			changedFiles: null,
+			hint: null,
+			next: null,
+			nextCwd: null,
+		});
+	});
+
+	test('removeWorktree tells where to continue when it removed the directory it ran in', async () => {
+		const { context } = createFakeContext({ git: { 'worktree list --porcelain': { stdout: PORCELAIN } } });
+		assert.deepStrictEqual(await removeWorktree(context, '/repo/wt', true, '/repo/wt/src'), { kind: 'removed', worktree: LINKED, nextCwd: '/repo' });
 	});
 });

@@ -2,7 +2,7 @@ import type { AliveReason, DeadReason } from './branch-analysis';
 import { actionLabel, CLEAN_SCHEMA, describeAction, type CleanAction, type CleanBranch, type IgnoredFiles } from './clean-plan';
 import { runCleanWorkflow, type CleanContext } from './clean-workflow';
 import { listIgnoredFiles, summarizeIgnored } from './ignored-files';
-import { parseWorktrees } from './worktrees';
+import { hasSubmodules, parseWorktrees } from './worktrees';
 
 /** One worktree, as `gsp worktree list --json` reports it. */
 export type WorktreeEntry = {
@@ -20,6 +20,8 @@ export type WorktreeEntry = {
 	readonly inProgress: 'rebase' | 'bisect' | null;
 	/** The ignored files removing it would delete, regenerable ones left out; null for the main or a prunable one. */
 	readonly ignoredFiles: IgnoredFiles | null;
+	/** It holds submodules, which removing it deletes; null for the main or a prunable one, or when it could not be read. */
+	readonly submodules: boolean | null;
 	/**
 	 * What the analysis found about the branch, and what `gsp clean` would do
 	 * with it. A detached worktree has no branch to clean: `keep`, reason
@@ -75,6 +77,7 @@ export async function listWorktreeStates(
 		dryRun: true,
 		yes: false,
 		force: false,
+		discardChanges: false,
 		fetch: options.fetch,
 		github: options.github,
 		protectedPatterns: options.protectedPatterns,
@@ -106,6 +109,14 @@ export async function listWorktreeStates(
 							(files) => summarizeIgnored(files),
 							() => null
 						)));
+			const submodules =
+				isMain || prunable
+					? null
+					: (branch?.worktree?.submodules ??
+						(await hasSubmodules(git, worktree.path).then(
+							(found) => found,
+							() => null
+						)));
 			// Linked and on no branch: gsp clean never removes it.
 			const detached = !branch && !worktree.branch && !isMain && !prunable;
 			return {
@@ -118,6 +129,7 @@ export async function listWorktreeStates(
 				dirty,
 				inProgress: branch?.worktree?.inProgress ?? null,
 				ignoredFiles,
+				submodules,
 				verdict: branch?.verdict ?? null,
 				verdictReason: branch?.verdictReason ?? null,
 				action: branch?.action ?? (detached ? 'keep' : null),

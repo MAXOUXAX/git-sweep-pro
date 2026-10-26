@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { modeToCliArgs, parseArgs, settingsToCliArgs, UsageError } from '../../cli/args';
+import { parseArgs, settingsToCliArgs, UsageError } from '../../cli/args';
 import { DEFAULT_SETTINGS } from '../fake-context';
 
 suite('cli args', () => {
@@ -84,18 +84,18 @@ suite('cli args', () => {
 		assert.strictEqual(parseArgs(['sweep', '--json']).json, true);
 		assert.strictEqual(parseArgs(['list', '--json']).json, true);
 		assert.strictEqual(parseArgs(['worktree', 'list', '--json']).json, true);
+		assert.strictEqual(parseArgs(['worktree', 'remove', 'feature/x', '--json']).json, true);
 		assert.strictEqual(parseArgs(['restore', '--json']).json, true);
 		assert.strictEqual(parseArgs(['post-pr', 'feature/x', '--json']).json, true);
 		assert.strictEqual(parseArgs(['--json', '--help']).command, 'help');
 		for (const args of [
 			['worktree', 'prune'],
-			['worktree', 'remove', 'feature/x'],
 			['sync'],
 			['resume'],
 			['restore', 'feature/x'],
 			['agents'],
 		]) {
-			assert.throws(() => parseArgs([...args, '--json']), /--json requires clean, post-pr, worktree list, or restore without branch arguments/);
+			assert.throws(() => parseArgs([...args, '--json']), /--json requires clean, post-pr, worktree list or remove, restore without branch arguments, or agents --check/);
 		}
 	});
 
@@ -151,6 +151,9 @@ suite('cli args', () => {
 		assert.deepStrictEqual(parseArgs(['agents']).positionals, []);
 		assert.deepStrictEqual(parseArgs(['agents', 'AGENTS.md', 'CLAUDE.md']).positionals, ['AGENTS.md', 'CLAUDE.md']);
 		assert.throws(() => parseArgs(['agents', 'README.md']), /Unknown instruction file: README\.md\. Use AGENTS\.md or CLAUDE\.md\./);
+		assert.deepStrictEqual(parseArgs(['agents', '--check', 'docs/README.md']).positionals, ['docs/README.md'], '--check reads any file');
+		assert.strictEqual(parseArgs(['agents', '--check', '--json']).json, true);
+		assert.throws(() => parseArgs(['clean', '--check']), /--check can only be used with agents\./);
 	});
 
 	test('restore takes any number of branches', () => {
@@ -182,11 +185,18 @@ suite('cli args', () => {
 		assert.throws(() => parseArgs(['worktree', 'remove', 'feature/x', '--dry-run']), /--dry-run cannot be used with worktree remove\./);
 	});
 
-	test('--force selects a force delete, and modeToCliArgs maps each mode back to its flags', () => {
+	test('--discard-changes goes with clean, post-pr and worktree remove; worktree remove rejects --force', () => {
+		assert.strictEqual(parseArgs(['clean', '--discard-changes']).discardChanges, true);
+		assert.strictEqual(parseArgs(['post-pr', '--discard-changes']).discardChanges, true);
+		assert.strictEqual(parseArgs(['worktree', 'remove', '/tmp/x', '--discard-changes']).discardChanges, true);
+		assert.strictEqual(parseArgs(['clean']).discardChanges, false);
+		assert.throws(() => parseArgs(['restore', '--discard-changes']), /--discard-changes can only be used with clean, post-pr or worktree remove\./);
+		assert.throws(() => parseArgs(['worktree', 'list', '--discard-changes']), UsageError);
+		assert.throws(() => parseArgs(['worktree', 'remove', '/tmp/x', '--force']), /use --discard-changes\./);
+	});
+
+	test('--force selects a force delete', () => {
 		assert.strictEqual(parseArgs(['-f']).mode, 'forceDelete');
-		assert.deepStrictEqual(modeToCliArgs('dryRun'), ['--dry-run']);
-		assert.deepStrictEqual(modeToCliArgs('safeDelete'), []);
-		assert.deepStrictEqual(modeToCliArgs('forceDelete'), ['--force']);
 	});
 
 	test('settingsToCliArgs mirrors the extension settings', () => {

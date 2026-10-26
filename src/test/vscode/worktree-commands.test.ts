@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import type { WorktreeEntry, WorktreeListDocument } from '../../core/worktree-list';
-import { OPEN_MAIN_CHECKOUT, SHOW_OUTPUT, type PickOption } from '../../vscode/command-ui';
+import type { WorktreeRemoveDocument } from '../../core/worktrees';
+import { COPY_COMMAND, OPEN_MAIN_CHECKOUT, SHOW_OUTPUT, type PickOption } from '../../vscode/command-ui';
 import { describeWorktreeState, removalBlockers, runPruneWorktreesCommand, runRemoveWorktreeCommand, runWorktreeListCommand } from '../../vscode/worktree-commands';
 import { createFakeClient, createFakeUi, deps, ok, worktreeEntry } from './fakes';
 
@@ -11,6 +12,19 @@ const locked = worktreeEntry({ path: '/work/wt-c', branch: 'feature/c', locked: 
 const gone = worktreeEntry({ path: '/work/wt-gone', branch: 'feature/gone', prunable: true, ignoredFiles: null });
 
 const list = (...worktrees: WorktreeEntry[]): WorktreeListDocument => ({ schema: 2, command: 'worktree list', worktrees });
+const removal = (worktree: WorktreeEntry, overrides: Partial<WorktreeRemoveDocument> = {}): WorktreeRemoveDocument => ({
+	schema: 2,
+	command: 'worktree remove',
+	worktree: { path: worktree.path, branch: worktree.branch },
+	removed: true,
+	reason: null,
+	ignoredFiles: null,
+	changedFiles: null,
+	hint: null,
+	next: null,
+	nextCwd: null,
+	...overrides,
+});
 const byLabel = (label: string) => (items: readonly PickOption<unknown>[]) => items.find((item) => item.label.includes(label))?.value;
 
 suite('worktree commands', () => {
@@ -49,24 +63,24 @@ suite('worktree commands', () => {
 	});
 
 	test('Remove Worktree: a clean one after one confirmation, from the main checkout; this window can open the main checkout', async () => {
-		const { client, calls } = createFakeClient([ok(list(main, clean))]);
+		const { client, calls } = createFakeClient([ok(list(main, clean)), ok(removal(clean))]);
 		const fake = createFakeUi({ pickOne: (items) => items[0].value, notify: () => OPEN_MAIN_CHECKOUT });
 
 		await runRemoveWorktreeCommand(deps(client, fake.ui, ['/work/wt-a']), '/work/wt-a');
 
 		assert.deepStrictEqual(fake.confirms, [{ message: 'Remove the worktree /work/wt-a?', detail: 'The branch feature/a stays. To delete it as well, use Sweep Stale Branches.', confirmLabel: 'Remove worktree' }]);
-		assert.deepStrictEqual(calls[1], { cwd: '/repo', args: ['worktree', 'remove', '/work/wt-a'], json: false });
+		assert.deepStrictEqual(calls[1], { cwd: '/repo', args: ['worktree', 'remove', '/work/wt-a'], json: true });
 		assert.deepStrictEqual(fake.notices, [{ kind: 'info', message: 'Removed the worktree /work/wt-a.', actions: [OPEN_MAIN_CHECKOUT] }]);
 		assert.deepStrictEqual(fake.opened, [{ path: '/repo', newWindow: false }]);
 	});
 
-	test('Remove Worktree: ignored files block it; --force only after a second, explicit confirmation', async () => {
-		const forced = createFakeClient([ok(list(main, ignored))]);
+	test('Remove Worktree: ignored files block it; --discard-changes only after a second, explicit confirmation', async () => {
+		const forced = createFakeClient([ok(list(main, ignored)), ok(removal(ignored))]);
 		const forcedUi = createFakeUi({ pickOne: (items) => items[0].value });
 		await runRemoveWorktreeCommand(deps(forced.client, forcedUi.ui), '/repo');
 		assert.deepStrictEqual(forcedUi.confirms.map((c) => c.confirmLabel), ['Remove anyway…', 'Delete for good']);
 		assert.ok(forcedUi.confirms[0].detail.includes('It holds 2 ignored files a build does not recreate: .env, secrets.json.'), forcedUi.confirms[0].detail);
-		assert.deepStrictEqual(forced.calls[1].args, ['worktree', 'remove', '--force', '/work/wt-b']);
+		assert.deepStrictEqual(forced.calls[1].args, ['worktree', 'remove', '--discard-changes', '/work/wt-b']);
 
 		for (const answers of [[false], [true, false]]) {
 			const declined = createFakeClient([ok(list(main, ignored))]);
@@ -88,12 +102,31 @@ suite('worktree commands', () => {
 		await runRemoveWorktreeCommand(deps(none.client, noneUi.ui), '/repo');
 		assert.deepStrictEqual(noneUi.notices.map((n) => n.message), ['There is no linked worktree to remove.']);
 
-		const failing = createFakeClient([ok(list(main, clean))]);
-		failing.runResults.push({ exitCode: 1, errorShown: false });
+		const failing = createFakeClient([ok(list(main, clean)), { kind: 'error', exitCode: 1, message: 'fatal: could not remove it', code: 'failed', shown: false }]);
 		const failingUi = createFakeUi({ pickOne: (items) => items[0].value, notify: () => SHOW_OUTPUT });
 		await runRemoveWorktreeCommand(deps(failing.client, failingUi.ui), '/repo');
-		assert.deepStrictEqual(failingUi.notices, [{ kind: 'error', message: 'gsp worktree remove /work/wt-a failed (exit code 1).', actions: [SHOW_OUTPUT] }]);
+		assert.deepStrictEqual(failingUi.notices, [{ kind: 'error', message: 'fatal: could not remove it', actions: [SHOW_OUTPUT] }]);
 		assert.strictEqual(failingUi.outputShown(), 1);
+	});
+
+	test('Remove Worktree: a worktree that changed since the list says why gsp kept it, and offers the command', async () => {
+		const next = 'git -C /work/wt-a stash --include-untracked && gsp worktree remove /work/wt-a';
+		const kept = removal(clean, { removed: false, reason: 'dirty-worktree', changedFiles: { count: 1, sample: ['wip.txt'] }, hint: `${next}, or …`, next });
+		const { client } = createFakeClient([ok(list(main, clean)), ok(kept, 5)]);
+		const fake = createFakeUi({ pickOne: (items) => items[0].value, notify: () => COPY_COMMAND });
+		await runRemoveWorktreeCommand(deps(client, fake.ui), '/repo');
+		assert.deepStrictEqual(fake.notices, [{ kind: 'warning', message: '/work/wt-a was kept: it has uncommitted changes to 1 file: wip.txt.', actions: [COPY_COMMAND] }]);
+		assert.deepStrictEqual(fake.copied, [next]);
+	});
+
+	test('Remove Worktree: a worktree kept for its submodules also names the ignored files it holds', async () => {
+		const kept = removal(clean, { removed: false, reason: 'submodules', ignoredFiles: { count: 1, sample: ['notes.local'] }, hint: 'check the submodules…', next: null });
+		const { client } = createFakeClient([ok(list(main, clean)), ok(kept, 5)]);
+		const fake = createFakeUi({ pickOne: (items) => items[0].value });
+		await runRemoveWorktreeCommand(deps(client, fake.ui), '/repo');
+		assert.deepStrictEqual(fake.notices, [
+			{ kind: 'warning', message: '/work/wt-a was kept: it holds submodules, and 1 ignored file a build does not recreate: notes.local.', actions: [] },
+		]);
 	});
 
 	test('Prune Worktrees: nothing to prune, or prunes; a list error is shown', async () => {
@@ -117,5 +150,10 @@ suite('worktree commands', () => {
 		]);
 		assert.deepStrictEqual(removalBlockers(worktreeEntry({ path: '/x', dirty: true })), { blockers: ['It has uncommitted changes. Removing it anyway deletes them.'], canForce: true });
 		assert.strictEqual(removalBlockers(worktreeEntry({ path: '/x', inProgress: 'bisect' })).canForce, false);
+		assert.deepStrictEqual(removalBlockers(worktreeEntry({ path: '/x', submodules: true })), {
+			blockers: ['It holds submodules. Removing it anyway deletes what they hold, including their uncommitted changes.'],
+			canForce: true,
+		});
+		assert.deepStrictEqual(describeWorktreeState(worktreeEntry({ path: '/x', submodules: true })), ['Submodules']);
 	});
 });

@@ -1,7 +1,8 @@
 import { EXIT } from '../cli/args';
 import type { WorktreeEntry, WorktreeListDocument } from '../core/worktree-list';
+import type { WorktreeRemoveDocument } from '../core/worktrees';
 import { describeIgnoredFiles, displayPath } from './clean-model';
-import { OPEN_MAIN_CHECKOUT, reportRunError, samePath, SHOW_OUTPUT, type CommandDeps, type Confirmation, type PickOption } from './command-ui';
+import { COPY_COMMAND, OPEN_MAIN_CHECKOUT, reportRunError, samePath, SHOW_OUTPUT, type CommandDeps, type Confirmation, type PickOption } from './command-ui';
 
 /*
  * The worktree commands: list (with what Sweep Stale Branches would do with
@@ -16,7 +17,7 @@ function describeCleanAction(worktree: WorktreeEntry): string | undefined {
 		case 'delete':
 			return 'Sweep Stale Branches would delete its branch and remove it';
 		case 'skip':
-			return worktree.reason === 'needs-force' || worktree.reason === 'ignored-files' ? 'Only a forced delete would remove it' : undefined;
+			return worktree.reason === 'needs-force' ? 'Only a forced delete would remove it' : undefined;
 		default:
 			return undefined;
 	}
@@ -39,6 +40,9 @@ export function describeWorktreeState(worktree: WorktreeEntry): string[] {
 	}
 	if (worktree.dirty) {
 		states.push('Uncommitted changes');
+	}
+	if (worktree.submodules) {
+		states.push('Submodules');
 	}
 	if (worktree.ignoredFiles?.count) {
 		states.push(plural(worktree.ignoredFiles.count, 'ignored file'));
@@ -75,12 +79,39 @@ export function removalBlockers(worktree: WorktreeEntry): { readonly blockers: r
 	if (worktree.dirty) {
 		blockers.push('It has uncommitted changes. Removing it anyway deletes them.');
 	}
+	if (worktree.submodules) {
+		blockers.push('It holds submodules. Removing it anyway deletes what they hold, including their uncommitted changes.');
+	}
 	if (worktree.ignoredFiles?.count) {
 		const them = worktree.ignoredFiles.count === 1 ? 'it' : 'them';
 		blockers.push(`It holds ${plural(worktree.ignoredFiles.count, 'ignored file')} a build does not recreate: ${describeIgnoredFiles(worktree.ignoredFiles)}. Removing the worktree deletes ${them}, and gsp restore can't bring ${them} back.`);
 	}
 	// A lock and an operation in progress are never forced from here.
 	return { blockers, canForce: !worktree.locked && !worktree.inProgress };
+}
+
+/** Why `gsp worktree remove` kept a worktree, in words. */
+export function describeKept(document: WorktreeRemoveDocument): string {
+	switch (document.reason) {
+		case 'locked-worktree':
+			return 'it is locked';
+		case 'rebase-in-progress':
+			return 'a rebase is in progress in it';
+		case 'bisect-in-progress':
+			return 'a bisect is in progress in it';
+		case 'dirty-worktree':
+			return document.changedFiles ? `it has uncommitted changes to ${plural(document.changedFiles.count, 'file')}: ${describeIgnoredFiles(document.changedFiles)}` : 'it has uncommitted changes';
+		case 'submodules':
+			return document.ignoredFiles?.count
+				? `it holds submodules, and ${plural(document.ignoredFiles.count, 'ignored file')} a build does not recreate: ${describeIgnoredFiles(document.ignoredFiles)}`
+				: 'it holds submodules';
+		case 'ignored-files':
+			return document.ignoredFiles
+				? `it holds ${plural(document.ignoredFiles.count, 'ignored file')} a build does not recreate: ${describeIgnoredFiles(document.ignoredFiles)}`
+				: 'it holds ignored files a build does not recreate';
+		case null:
+			return 'gsp did not say why';
+	}
 }
 
 export function confirmRemoval(worktree: WorktreeEntry): Confirmation {
@@ -203,7 +234,7 @@ export async function runRemoveWorktreeCommand(deps: CommandDeps, root: string):
 async function removeWorktree(deps: CommandDeps, document: WorktreeListDocument, worktree: WorktreeEntry): Promise<void> {
 	const { ui } = deps;
 	const { blockers, canForce } = removalBlockers(worktree);
-	let force = false;
+	let discard = false;
 	if (blockers.length > 0 && !canForce) {
 		await ui.notify('warning', `${displayPath(worktree.path)} can't be removed. ${blockers.join(' ')}`);
 		return;
@@ -217,12 +248,12 @@ async function removeWorktree(deps: CommandDeps, document: WorktreeListDocument,
 		if (!anyway) {
 			return;
 		}
-		force = await ui.confirm({
+		discard = await ui.confirm({
 			message: `Delete ${displayPath(worktree.path)} and everything in it?`,
 			detail: `${worktree.branch ? `The branch ${worktree.branch} stays. ` : ''}This can't be undone.`,
 			confirmLabel: 'Delete for good',
 		});
-		if (!force) {
+		if (!discard) {
 			return;
 		}
 	} else if (!(await ui.confirm(confirmRemoval(worktree)))) {
@@ -231,7 +262,18 @@ async function removeWorktree(deps: CommandDeps, document: WorktreeListDocument,
 	const main = document.worktrees.find((entry) => entry.isMain)?.path;
 	// Run from the main checkout: the worktree being removed may be the one this window has open.
 	const current = deps.windowFolders().some((folder) => samePath(folder, worktree.path));
-	if (!(await runOrReport(deps, main ?? worktree.path, ['worktree', 'remove', ...(force ? ['--force'] : []), worktree.path]))) {
+	const args = ['worktree', 'remove', ...(discard ? ['--discard-changes'] : []), worktree.path];
+	const run = await ui.withProgress(`Removing ${displayPath(worktree.path)}`, () => deps.client.json<WorktreeRemoveDocument>(main ?? worktree.path, args));
+	if (run.kind === 'error') {
+		await reportRunError(ui, run);
+		return;
+	}
+	if (!run.document.removed) {
+		// It changed since the list was read: say why gsp kept it.
+		const { next } = run.document;
+		if ((await ui.notify('warning', `${displayPath(worktree.path)} was kept: ${describeKept(run.document)}.`, next ? [COPY_COMMAND] : [])) === COPY_COMMAND && next) {
+			await ui.copy(next);
+		}
 		return;
 	}
 	const choice = await ui.notify('info', `Removed the worktree ${displayPath(worktree.path)}.`, current && main ? [OPEN_MAIN_CHECKOUT] : []);

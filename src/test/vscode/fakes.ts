@@ -55,7 +55,7 @@ export function cleanDocument(branches: readonly CleanBranch[], overrides: Parti
 		branches,
 		worktreesPruned: [],
 		restore: null,
-		summary: { delete: 0, deleted: 0, failed: 0, skipped: 0, kept: 0, needsForce: branches.filter((b) => b.reason === 'needs-force' || b.reason === 'ignored-files').length, reasons: {} },
+		summary: { delete: 0, deleted: 0, failed: 0, skipped: 0, kept: 0, needsForce: branches.filter((b) => b.reason === 'needs-force').length, needsDiscardChanges: branches.filter((b) => b.reason === 'ignored-files').length, reasons: {} },
 		next: null,
 		...overrides,
 	};
@@ -71,6 +71,7 @@ export function worktreeEntry(overrides: Partial<WorktreeEntry> & Pick<WorktreeE
 		dirty: false,
 		inProgress: null,
 		ignoredFiles: { count: 0, sample: [] },
+		submodules: false,
 		verdict: null,
 		verdictReason: null,
 		action: null,

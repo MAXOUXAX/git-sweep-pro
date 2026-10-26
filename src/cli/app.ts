@@ -1,14 +1,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
+import { AGENT_FILE_NAMES, checkAgentAdvice, isAgentFile, runAgentsWorkflow, type AdviceFinding } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion, describeDeletionTarget } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
-import { runGitCommand } from '../core/git-command';
+import { quoteShellArg, runGitCommand } from '../core/git-command';
 import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, nextCommand, withCommand, type CleanDocument, type CleanReport, type JsonErrorCode, type JsonErrorDocument } from '../core/clean-plan';
 import type { CliEvent } from '../core/rpc-protocol';
 import { PushUrlMismatchError, runCleanWorkflow, UnknownBranchError, UnknownRemoteError, type CleanOutcome } from '../core/clean-workflow';
 import { createSshRunner } from '../core/forge';
 import { createGhRunner } from '../core/github-signal';
+import { summarizeIgnored } from '../core/ignored-files';
 import { formatNextSteps, formatPostPrLines, postPrNextCommand, type PostPrDocument, type PostPrReport } from '../core/post-pull-request-plan';
 import { PostPrUsageError, runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import { inspectDeletions, runRestoreWorkflow } from '../core/restore-workflow';
@@ -17,7 +18,7 @@ import type { SyncContext } from '../core/sync-state';
 import { runSyncWorkflow } from '../core/sync-workflow';
 import type { WorkflowContext, WorkflowOutcome } from '../core/workflow';
 import { formatWorktreeLines, listWorktreeStates } from '../core/worktree-list';
-import { pruneWorktrees, removeWorktree } from '../core/worktrees';
+import { pruneWorktrees, removeWorktree, worktreeRemoveDocument, type WorktreeKeptReason, type WorktreeRemoval } from '../core/worktrees';
 import { EXIT, parseArgs, UsageError, type CliOptions } from './args';
 import { createFrontend, type Frontend } from './frontend';
 import { helpFor, USAGE } from './help';
@@ -169,10 +170,14 @@ async function runCommand(options: CliOptions, dir: string, frontend: Frontend, 
 	if (options.command === 'post-pr') {
 		return runPostPr(options, dir, frontend, io);
 	}
-	return { kind: 'workflow', outcome: await runWorkflow(options, dir, frontend, io) };
+	if (options.command === 'agents' && options.check) {
+		return runAgentsCheck(options, dir, frontend, io);
+	}
+	const outcome = await runWorkflow(options, dir, frontend, io);
+	return typeof outcome === 'string' ? { kind: 'workflow', outcome } : outcome;
 }
 
-async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<WorkflowOutcome> {
+async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<WorkflowOutcome | CommandOutcome> {
 	let repository: Repository;
 	try {
 		repository = await openRepository(dir, frontend.trace);
@@ -257,6 +262,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 				dryRun: options.mode === 'dryRun',
 				yes: options.yes,
 				force: options.mode === 'forceDelete',
+				discardChanges: options.discardChanges,
 				fetch: options.fetch,
 				github: options.github,
 				protectedPatterns: options.protect,
@@ -306,16 +312,13 @@ function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | nul
 	const unpushed = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'dead');
 	const unmerged = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'alive');
 	const ignored = count((branch) => branch.reason === 'ignored-files');
-	const kept = [
-		...(unpushed > 0 ? [`${unpushed} with commits found nowhere else`] : []),
-		...(unmerged > 0 ? [`${unmerged} named but not merged`] : []),
-		...(ignored > 0 ? [`${ignored} whose worktree holds ignored files`] : []),
-	];
+	const kept = [...(unpushed > 0 ? [`${unpushed} with commits found nowhere else`] : []), ...(unmerged > 0 ? [`${unmerged} named but not merged`] : [])];
 	const changed = [...report.branches, ...remoteBranches].filter(
 		(branch) => branch.reason === 'plan-changed' || branch.reason === 'fetch-failed' || branch.reason === 'worktree-changed'
 	).length;
 	const lines = [
 		...(kept.length > 0 ? [`Kept without --force: ${kept.join(', ')}. Each line above gives the command.`] : []),
+		...(ignored > 0 ? [`Kept without --discard-changes: ${ignored} whose worktree holds ignored files. Move what you need out first, as each line above says.`] : []),
 		...(unapplied > 0 && remote && next ? [withCommand(`Branches on ${remote.remote} are only deleted with --yes. To delete them, run`, next)] : []),
 		...(changed > 0 && next ? [`${changed} not deleted, as things changed while applying. Review them with: ${next}`] : []),
 	];
@@ -392,6 +395,7 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 				dryRun: options.mode === 'dryRun',
 				yes: options.yes,
 				force: options.mode === 'forceDelete',
+				discardChanges: options.discardChanges,
 				fetch: options.fetch,
 				github: options.github,
 				protectedPatterns: options.protect,
@@ -455,7 +459,7 @@ function printPostPrReport(report: PostPrReport, outcome: CleanOutcome, options:
  * `dir` is the invocation directory, so a relative removal target is read the
  * way the user typed it.
  */
-async function runWorktree(context: WorkflowContext, options: CliOptions, io: CliIo, dir: string): Promise<WorkflowOutcome> {
+async function runWorktree(context: WorkflowContext, options: CliOptions, io: CliIo, dir: string): Promise<WorkflowOutcome | CommandOutcome> {
 	const worktree = options.worktree;
 	if (!worktree) {
 		return 'failed';
@@ -487,29 +491,8 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 				}
 				return 'ok';
 			}
-			case 'remove': {
-				const result = await removeWorktree(context, worktree.target ?? '', options.mode === 'forceDelete', dir);
-				switch (result.kind) {
-					case 'removed':
-						print(`Removed worktree ${result.worktree.path}.`);
-						return 'ok';
-					case 'main':
-						context.ui.showErrorMessage(`Refusing to remove the main worktree (${result.worktree.path}).`, { failed: true });
-						return 'failed';
-					case 'ambiguous': {
-						const [byPath, byBranch] = result.worktrees;
-						context.ui.showErrorMessage(
-							`"${result.target}" is both the worktree ${byPath.path} and the branch ${byBranch.branch} (${byBranch.path}). Remove one by its full path.`,
-							{ failed: true }
-						);
-						return 'failed';
-					}
-					case 'not-found':
-						context.ui.showErrorMessage(`No worktree found for "${result.target}". Run "gsp worktree list" to see them.`, { failed: true });
-						return 'failed';
-				}
-				return 'failed';
-			}
+			case 'remove':
+				return await runWorktreeRemove(context, options, io, dir, worktree.target ?? '');
 		}
 	} catch (error) {
 		if (options.json) {
@@ -518,6 +501,142 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	}
+}
+
+/**
+ * `worktree remove`: removes one linked worktree, or keeps it and says why
+ * and what to run (exit 5). A target that is the main worktree, no worktree,
+ * or two different ones is an invalid argument (exit 2).
+ */
+async function runWorktreeRemove(context: WorkflowContext, options: CliOptions, io: CliIo, dir: string, target: string): Promise<CommandOutcome> {
+	const result = await removeWorktree(context, target, options.discardChanges, dir);
+	const refuse = (message: string, code: JsonErrorCode): CommandOutcome => {
+		if (options.json) {
+			printJsonError(io, options.rpc, message, code);
+		}
+		context.ui.showErrorMessage(message, { failed: true });
+		return EXIT.usage;
+	};
+	switch (result.kind) {
+		case 'main':
+			return refuse(`Refusing to remove the main worktree (${result.worktree.path}).`, 'main-worktree');
+		case 'ambiguous': {
+			const [byPath, byBranch] = result.worktrees;
+			return refuse(
+				`"${result.target}" is both the worktree ${byPath.path} and the branch ${byBranch.branch} (${byBranch.path}). Remove one by its full path.`,
+				'ambiguous-worktree'
+			);
+		}
+		case 'not-found':
+			return refuse(`No worktree found for "${result.target}". Run "gsp worktree list" to see them.`, 'unknown-worktree');
+		case 'removed':
+		case 'kept':
+			break;
+	}
+	if (options.json) {
+		printJson(io, options.rpc, worktreeRemoveDocument(result));
+	}
+	if (result.kind === 'removed') {
+		if (!options.json) {
+			const lines = [`Removed worktree ${result.worktree.path}.`, ...(result.nextCwd ? [`It was the directory you ran gsp in. Continue in the main checkout: cd ${quoteShellArg(result.nextCwd)}`] : [])];
+			// With --rpc, stdout carries only protocol events.
+			lines.forEach((line) => (options.rpc ? context.output.appendLine(line) : io.stdout(`${line}\n`)));
+		}
+		return { kind: 'workflow', outcome: 'ok' };
+	}
+	// Kept is an answer, not a failure: it says why and what to run (exit 5).
+	if (!options.json) {
+		io.stderr(`Kept ${result.worktree.path}: ${KEPT_WORKTREE_MESSAGES[result.reason](result)}\n`);
+		io.stderr(`To remove it: ${result.hint}\n`);
+	}
+	return { kind: 'clean', outcome: 'not-applied' };
+}
+
+const KEPT_WORKTREE_MESSAGES: Record<WorktreeKeptReason, (kept: Extract<WorktreeRemoval, { kind: 'kept' }>) => string> = {
+	'locked-worktree': () => 'it is locked.',
+	'rebase-in-progress': () => 'a rebase is in progress there.',
+	'bisect-in-progress': () => 'a bisect is in progress there.',
+	'dirty-worktree': ({ changedFiles }) => `removing it would delete uncommitted changes or untracked files:\n${listed(changedFiles)}`,
+	submodules: ({ ignoredFiles }) =>
+		ignoredFiles.length > 0
+			? `it holds submodules, which would be deleted with it, and ignored files a build does not recreate:\n${listed(ignoredFiles)}`
+			: 'it holds submodules, which would be deleted with it.',
+	'ignored-files': ({ ignoredFiles }) => `removing it would delete ignored files a build does not recreate:\n${listed(ignoredFiles)}`,
+};
+
+/** Up to {@link IGNORED_SAMPLE_SIZE} files, one per line, then how many more. */
+function listed(files: readonly string[]): string {
+	const { sample, count } = summarizeIgnored(files);
+	return [...sample.map((file) => `  ${file}`), ...(count > sample.length ? [`  and ${count - sample.length} more`] : [])].join('\n');
+}
+
+/** The `--json` document of `gsp agents --check`. */
+type AgentsCheckDocument = {
+	readonly schema: typeof CLEAN_SCHEMA;
+	readonly command: 'agents --check';
+	readonly files: readonly string[];
+	readonly findings: readonly AdviceFinding[];
+};
+
+/**
+ * `agents --check`: reads the files named, or the AGENTS.md and CLAUDE.md
+ * of the repository (of `dir` outside one), and prints each line whose
+ * advice contradicts gsp with what to write instead. Changes nothing; exits
+ * with 5 when it found something.
+ */
+async function runAgentsCheck(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<CommandOutcome> {
+	const root = await openRepository(dir, frontend.trace).then(
+		(repository) => repository.root,
+		() => dir
+	);
+	const named = options.positionals.length > 0;
+	const files = named ? options.positionals : AGENT_FILE_NAMES.filter((file) => fs.existsSync(path.join(root, file)));
+	const absolute = (file: string) => path.resolve(named ? dir : root, file);
+	const fail = (message: string, code: JsonErrorCode) => {
+		if (options.json) {
+			printJsonError(io, options.rpc, message, code);
+		}
+		io.stderr(`error: ${message}\n`);
+		return code === 'usage' ? EXIT.usage : EXIT.failed;
+	};
+	// gsp agents only writes the instruction files at the repository's root.
+	const writable = (file: string) => isAgentFile(path.basename(file)) && absolute(file) === path.join(root, path.basename(file));
+	// A file read twice, as CLAUDE.md linked to AGENTS.md, is reported once.
+	const seen = new Set<string>();
+	const unique: string[] = [];
+	const findings: AdviceFinding[] = [];
+	for (const file of files) {
+		let text: string | undefined;
+		try {
+			if (!fs.statSync(absolute(file), { throwIfNoEntry: false })?.isFile()) {
+				return fail(`No such file: ${file}`, 'usage');
+			}
+			const real = fs.realpathSync(absolute(file));
+			text = seen.has(real) ? undefined : fs.readFileSync(real, 'utf8');
+			seen.add(real);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			return fail(`Cannot read ${file}: ${code === 'EACCES' || code === 'EPERM' ? 'permission denied' : toErrorMessage(error)}`, 'failed');
+		}
+		if (text !== undefined) {
+			unique.push(file);
+			findings.push(...checkAgentAdvice(file, text, writable(file)));
+		}
+	}
+	if (options.json) {
+		printJson(io, options.rpc, { schema: CLEAN_SCHEMA, command: 'agents --check', files: unique, findings } satisfies AgentsCheckDocument);
+	} else {
+		findings.forEach((finding) => io.stdout(`${finding.file}:${finding.line}: ${finding.text.trim()}\n  → ${finding.suggestion}\n`));
+	}
+	if (files.length === 0) {
+		io.stderr(`No ${AGENT_FILE_NAMES.join(' or ')} in ${root}. Name the files to check: gsp agents --check <file>...\n`);
+	} else if (findings.length === 0) {
+		io.stderr(`No outdated gsp advice in ${unique.join(', ')}.\n`);
+	} else {
+		io.stderr(`${findings.length} outdated ${findings.length === 1 ? 'line' : 'lines'}. Update ${findings.length === 1 ? 'it' : 'them'} as suggested.\n`);
+	}
+	// Like a plan that was not applied: something is left for the person to do.
+	return findings.length > 0 ? { kind: 'clean', outcome: 'not-applied' } : { kind: 'workflow', outcome: 'ok' };
 }
 
 /**

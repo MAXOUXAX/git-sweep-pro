@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { branchPickLabel, chooseBranch, findOtherWorktreeBranch, localBranchName, parseBranches, splitRemoteRef, type BranchItem } from '../../core/branch-list';
+import { branchPickLabel, chooseBranch, localBranchName, parseBranches, splitRemoteRef, type BranchItem } from '../../core/branch-list';
 import { createFakeContext } from '../fake-context';
 
 suite('branch-list parseBranches', () => {
@@ -264,14 +264,5 @@ suite('branch-list worktrees', () => {
 			{ label: 'feature/plain', ref: 'feature/plain', isRemote: false },
 			{ label: 'origin/feature/wt', ref: 'origin/feature/wt', isRemote: true },
 		]);
-	});
-
-	test('findOtherWorktreeBranch resolves local and remote items', () => {
-		const items = parseBranches(['+ main', '  dev', '  remotes/origin/main', '  remotes/origin/dev'].join('\n'));
-		const [main, dev, originMain, originDev] = items;
-		assert.strictEqual(findOtherWorktreeBranch(items, main), main);
-		assert.strictEqual(findOtherWorktreeBranch(items, originMain), main);
-		assert.strictEqual(findOtherWorktreeBranch(items, dev), undefined);
-		assert.strictEqual(findOtherWorktreeBranch(items, originDev), undefined);
 	});
 });

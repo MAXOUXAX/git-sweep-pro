@@ -7,7 +7,7 @@ import { branch, cleanDocument, createFakeClient, createFakeUi, deps, ok, remote
 
 const OPTIONS: CleanCommandOptions = { root: '/repo', readOnly: false, force: false, remote: false, confirm: true };
 
-const squashed = branch({ name: 'feature/squash', worktree: { path: '/work/wt-squash', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false } });
+const squashed = branch({ name: 'feature/squash', worktree: { path: '/work/wt-squash', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false, changedFiles: null } });
 const empty = branch({ name: 'feature/empty', reason: 'empty', verdictReason: 'empty' });
 const unpushed = branch({
 	name: 'feature/unpushed',
@@ -47,24 +47,23 @@ suite('clean model', () => {
 		assert.strictEqual(kept.entries[0].description, '1 commit not merged into origin/main');
 	});
 
-	test('force mode offers what only a forced delete removes, never picked', () => {
+	test('force mode offers what only a forced delete removes, never picked; a worktree holding ignored files stays skipped', () => {
 		const ignored = branch({
 			name: 'feature/ignored',
 			action: 'skip',
 			reason: 'ignored-files',
-			worktree: { path: '/work/wt-ignored', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 4, sample: ['.env', 'notes/', 'a.key', 'b.key'] }, submodules: false },
+			worktree: { path: '/work/wt-ignored', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 4, sample: ['.env', 'notes/', 'a.key', 'b.key'] }, submodules: false, changedFiles: null },
 		});
 		const sections = buildCleanSections(cleanDocument([unpushed, ignored, dirty]), { force: true });
 		assert.deepStrictEqual(sections.map((s) => [s.title, s.entries.map((e) => [e.arg, e.selectable, e.picked, e.forced])]), [
-			['Needs a forced delete', [['feature/unpushed', true, false, true], ['feature/ignored', true, false, true]]],
-			['Skipped', [['feature/dirty', false, false, false]]],
+			['Needs a forced delete', [['feature/unpushed', true, false, true]]],
+			['Skipped', [['feature/ignored', false, false, false], ['feature/dirty', false, false, false]]],
 		]);
-		assert.strictEqual(sections[0].entries[1].detail, 'Its worktree holds 4 ignored files: .env, notes/, a.key and 1 more');
+		// --force never deletes what a worktree would lose for good: that takes --discard-changes.
+		assert.strictEqual(sections[1].entries[0].detail, 'Its worktree holds 4 ignored files: .env, notes/, a.key and 1 more');
 
 		const confirmation = confirmLocal(sections[0].entries);
-		assert.strictEqual(confirmation.message, 'Delete 2 branches?');
-		assert.strictEqual(confirmation.confirmLabel, 'Force delete branches');
-		assert.ok(confirmation.detail.includes('Removing /work/wt-ignored deletes 4 ignored files for good: .env, notes/, a.key and 1 more.'), confirmation.detail);
+		assert.strictEqual(confirmation.confirmLabel, 'Force delete branch');
 		assert.ok(confirmation.detail.endsWith('feature/unpushed is not proven merged: undo brings it back only until Git cleans up unreachable commits.'), confirmation.detail);
 	});
 

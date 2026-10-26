@@ -11,22 +11,6 @@ export type SweepSettings = {
 };
 
 /**
- * Names of the local branches whose upstream is gone, from `git for-each-ref`
- * output whose lines start with `<name>\t<track>`, where `<track>` is
- * `[gone]` once the upstream has been deleted. This structured output is
- * stable across Git versions and locales, unlike the human-readable
- * `git branch -vv`. Fields after `<track>` are ignored.
- */
-export function parseGoneBranchRefs(forEachRefOutput: string): string[] {
-	return forEachRefOutput
-		.split('\n')
-		.filter((line) => line.indexOf('\t') >= 0)
-		.map((line) => line.split('\t'))
-		.filter(([name, track]) => name.trim().length > 0 && track.trim() === '[gone]')
-		.map(([name]) => name.trim());
-}
-
-/**
  * Tests a branch name against a single glob-style pattern.
  *
  * Supported wildcards: `*` matches any sequence of characters (including `/`)

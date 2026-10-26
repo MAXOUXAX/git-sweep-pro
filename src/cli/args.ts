@@ -39,8 +39,13 @@ export type CliOptions = {
 	readonly others: readonly string[] | undefined;
 	/** Repository directory (`-C <path>`); defaults to the current directory. */
 	readonly cwd: string | undefined;
-	/** `--dry-run`, `--force`, or a safe delete by default. */
+	/** `--dry-run`, `--force` (lifts the proof that a branch's work exists elsewhere), or a safe delete by default. */
 	readonly mode: SweepMode;
+	/**
+	 * `--discard-changes` (clean, post-pr, worktree remove): a removed worktree
+	 * may take uncommitted changes and ignored files with it, for good.
+	 */
+	readonly discardChanges: boolean;
 	readonly yes: boolean;
 	/** Never load terminal widgets, even when an agent uses a pseudo-terminal. */
 	readonly nonInteractive: boolean;
@@ -60,6 +65,8 @@ export type CliOptions = {
 	 */
 	readonly expect: ReadonlyMap<string, string>;
 	readonly json: boolean;
+	/** `agents --check`: report advice in instruction files that contradicts gsp, change nothing. */
+	readonly check: boolean;
 	readonly verbose: boolean;
 	/** Internal: drive the UI over NDJSON on stdio (used by the VS Code extension). */
 	readonly rpc: boolean;
@@ -83,6 +90,7 @@ export const EXIT = {
 const OPTIONS = {
 	'dry-run': { type: 'boolean', short: 'n', default: false },
 	force: { type: 'boolean', short: 'f', default: false },
+	'discard-changes': { type: 'boolean', default: false },
 	yes: { type: 'boolean', short: 'y', default: false },
 	'non-interactive': { type: 'boolean', default: false },
 	merged: { type: 'boolean', short: 'm', default: false },
@@ -95,6 +103,7 @@ const OPTIONS = {
 	'no-confirm': { type: 'boolean', default: false },
 	'no-github': { type: 'boolean', default: false },
 	json: { type: 'boolean', default: false },
+	check: { type: 'boolean', default: false },
 	cwd: { type: 'string', short: 'C' },
 	into: { type: 'string' },
 	clean: { type: 'string', multiple: true },
@@ -206,9 +215,14 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 	const worktree = command === 'worktree' ? parseWorktreeArgs(args) : undefined;
 	const jsonAllowed =
 		command === 'clean' ||
-		command === 'post-pr' || (worktree !== undefined && worktree.subcommand === 'list') || (command === 'restore' && args.length === 0);
+		command === 'post-pr' || (worktree !== undefined && worktree.subcommand !== 'prune') ||
+		(command === 'restore' && args.length === 0) ||
+		(command === 'agents' && values.check);
 	if (values.json && !jsonAllowed) {
-		throw new UsageError('--json requires clean, post-pr, worktree list, or restore without branch arguments.');
+		throw new UsageError('--json requires clean, post-pr, worktree list or remove, restore without branch arguments, or agents --check.');
+	}
+	if (values.check && command !== 'agents') {
+		throw new UsageError('--check can only be used with agents.');
 	}
 	if (values.into !== undefined && command !== 'post-pr') {
 		throw new UsageError('--into can only be used with post-pr.');
@@ -233,6 +247,14 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 		// `worktree list` ignores it and `worktree prune` uses it as a preview.
 		throw new UsageError('--dry-run cannot be used with worktree remove.');
 	}
+	if (worktree?.subcommand === 'remove' && values.force) {
+		throw new UsageError(
+			'--force cannot be used with worktree remove, which deletes no branch. To delete the uncommitted changes and ignored files of the worktree with it, use --discard-changes.'
+		);
+	}
+	if (values['discard-changes'] && !(command === 'clean' || command === 'post-pr' || worktree?.subcommand === 'remove')) {
+		throw new UsageError('--discard-changes can only be used with clean, post-pr or worktree remove.');
+	}
 	if (values.remote !== undefined && command !== 'clean') {
 		throw new UsageError('--remote can only be used with clean.');
 	}
@@ -254,7 +276,8 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 	if (invalidBranch !== undefined) {
 		throw new UsageError(`Invalid branch name: "${invalidBranch}".`);
 	}
-	const unknownFile = command === 'agents' ? args.find((file) => !isAgentFile(file)) : undefined;
+	// --check reads any file; writing is limited to the instruction files gsp knows.
+	const unknownFile = command === 'agents' && !values.check ? args.find((file) => !isAgentFile(file)) : undefined;
 	if (unknownFile !== undefined) {
 		throw new UsageError(`Unknown instruction file: ${unknownFile}. Use ${AGENT_FILE_NAMES.join(' or ')}.`);
 	}
@@ -268,6 +291,7 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 		others: values['no-clean'] ? [] : values.clean,
 		cwd: values.cwd,
 		mode: values.force ? 'forceDelete' : values['dry-run'] || requested === 'list' ? 'dryRun' : 'safeDelete',
+		discardChanges: values['discard-changes'],
 		yes: values.yes,
 		nonInteractive: values['non-interactive'],
 		fetch: !values['no-fetch'],
@@ -278,6 +302,7 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 		remote: values.remote,
 		expect,
 		json: values.json,
+		check: values.check,
 		verbose: values.verbose,
 		rpc: values.rpc,
 	};
@@ -315,6 +340,7 @@ function helpOptions(topic: CommandName | undefined): CliOptions {
 		others: undefined,
 		cwd: undefined,
 		mode: 'safeDelete',
+		discardChanges: false,
 		yes: false,
 		nonInteractive: false,
 		fetch: true,
@@ -325,16 +351,10 @@ function helpOptions(topic: CommandName | undefined): CliOptions {
 		remote: undefined,
 		expect: new Map(),
 		json: false,
+		check: false,
 		verbose: false,
 		rpc: false,
 	};
-}
-
-const MODE_FLAGS: Record<SweepMode, readonly string[]> = { dryRun: ['--dry-run'], safeDelete: [], forceDelete: ['--force'] };
-
-/** The CLI flags selecting a sweep mode. */
-export function modeToCliArgs(mode: SweepMode): string[] {
-	return [...MODE_FLAGS[mode]];
 }
 
 /** Translates sweep settings (e.g. the VS Code configuration) into CLI flags. */

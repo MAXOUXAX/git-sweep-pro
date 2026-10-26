@@ -3,13 +3,15 @@ import type { CommandName } from './args';
 const EXIT_CODES = `Exit codes:
   0  Done, or nothing to do
   1  At least one action failed (details in the output)
-  2  Invalid arguments, or a branch or remote that does not exist
+  2  Invalid arguments, or a branch, remote or worktree that does not exist
   3  Sync paused on conflicts: resolve them, then run "gsp resume"
   4  Cancelled at a prompt
   5  clean, post-pr: some planned deletions were not applied; the output
      says why and what to run next. For post-pr, 5 also means the branch
-     you asked to finish isn't finished. Other commands: a confirmation
-     was needed but nobody could answer; rerun with --yes`;
+     you asked to finish isn't finished. worktree remove: the worktree was
+     kept, and the output says why. agents --check: it found outdated
+     advice. Other commands: a confirmation was needed but nobody could
+     answer; rerun with --yes`;
 
 const GLOBAL_OPTIONS = `  -C <path>          Run as if started in <path>
       --non-interactive
@@ -19,9 +21,17 @@ const GLOBAL_OPTIONS = `  -C <path>          Run as if started in <path>
 
 export const USAGE = `Usage: gsp [command] [options]
 
-Delete the local branches whose work is already merged or pushed, and the
-worktrees they leave behind. Every deletion can be undone.
+Clean up a Git repository: delete the branches and worktrees whose work is
+already merged or pushed, locally and on the remote, and finish merged pull
+requests. Every branch deletion can be undone.
 Also available as "git-sweep-pro" and "git sweep-pro".
+
+Common tasks:
+  gsp post-pr --yes            After merging a pull request
+  gsp clean --yes              Clean the repository
+  gsp clean --json             Preview the plan as JSON, change nothing
+  gsp worktree remove <path>   Remove a worktree, if nothing would be lost
+  gsp restore <branch>         Undo a deletion
 
 Commands:
   clean [<branch>...]
@@ -31,7 +41,7 @@ Commands:
                      do with its branch
   worktree prune     Forget the worktrees whose directory is gone
   worktree remove <path|branch>
-                     Remove one linked worktree
+                     Remove one linked worktree, if nothing would be lost
   post-pr [<branch>] After a merged pull request: delete its branch and
                      worktree, update the default branch, then clean
   sync [upstream]    Rebase the current branch onto [upstream], then
@@ -43,13 +53,6 @@ Commands:
   help [command], version
 
 Run "gsp <command> --help" for the options of one command.
-
-Common tasks:
-  gsp clean --dry-run          See what would be deleted, change nothing
-  gsp clean --yes              Delete every branch proven merged
-  gsp clean --json             The plan as JSON, for scripts and agents
-  gsp post-pr --yes            Finish the merged pull request of this branch
-  gsp restore <branch>         Undo a deletion
 
 ${EXIT_CODES}`;
 
@@ -71,7 +74,8 @@ main, master, trunk or develop unless named exactly, branches with
 bisected, the current branch, a branch checked out in the main worktree or
 in a dirty or locked worktree, and a branch another kept branch tracks.
 A worktree holding ignored files that a build does not recreate (a .env,
-notes) is kept too, unless --force is given.
+notes) is kept too, unless --discard-changes is given. For a dirty worktree
+or one holding submodules, run "gsp worktree remove" first.
 
 Without a terminal, gsp clean prints the plan and changes nothing unless
 --yes is given. In a terminal, it lets you pick the branches first. The
@@ -82,8 +86,11 @@ Options:
   -n, --dry-run      Print the plan and change nothing (no fetch, no prune)
   -y, --yes          Apply the plan without asking
   -f, --force        Also delete branches with unpushed or unmerged work
-                     (named exactly, or listed as needing --force), and
-                     worktrees holding ignored files
+                     (named exactly, or listed as needing --force).
+                     "gsp restore" brings them back
+      --discard-changes
+                     Also remove worktrees holding ignored files a build
+                     does not recreate. They are deleted for good
       --json         Print the plan or the result as one JSON document
       --remote[=<name>]
                      Also delete the branches on <name> (origin by default)
@@ -125,18 +132,36 @@ const WORKTREE_HELP = `Usage: gsp worktree <list|prune|remove> [options]
   worktree prune     Forget the registrations whose directory is gone; never
                      touches an existing worktree
   worktree remove <path|branch>
-                     Remove one linked worktree, refusing the main one
+                     Remove one linked worktree, with the checks gsp clean
+                     makes: it keeps a worktree that is locked, has a rebase
+                     or bisect in progress, uncommitted changes or untracked
+                     files, submodules, or ignored files a build does not
+                     recreate (a .env, notes), and says why. Its branch
+                     stays; the main worktree is never removed
 
 Options:
-      --json         worktree list: print one JSON document, for scripts
-                     and agents
+      --json         worktree list, worktree remove: print one JSON
+                     document, for scripts and agents
       --no-fetch     worktree list: no "git ls-remote", use the local
                      remote-tracking refs
       --no-github    worktree list: do not ask GitHub through gh
   -n, --dry-run      worktree prune: only print what would be forgotten
-  -f, --force        worktree remove: also remove a dirty worktree. Unlock
-                     a locked one first with "git worktree unlock <path>"
-${GLOBAL_OPTIONS}`;
+      --discard-changes
+                     worktree remove: remove it anyway, deleting for good
+                     its uncommitted changes, untracked and ignored files,
+                     submodules, and a rebase or bisect in progress. A
+                     locked one stays: unlock it with
+                     "git worktree unlock <path>"
+${GLOBAL_OPTIONS}
+
+Common tasks:
+  gsp worktree list --json                 Every worktree and its state
+  gsp worktree remove /tmp/review          Remove a scratch worktree
+  gsp worktree remove /tmp/review --discard-changes
+                                           Also delete what it holds
+  gsp worktree prune                       Forget worktrees already deleted
+
+${EXIT_CODES}`;
 
 const POST_PR_HELP = `Usage: gsp post-pr [<branch>] [options]
 
@@ -148,10 +173,12 @@ would.
 <branch> is deleted only when its work is proven to be in the default
 branch, with the rules of "gsp clean". Otherwise nothing is changed on it,
 gsp says why and what may prove it (fetching, pushing, --into), and exits
-with 5; the same when its worktree has uncommitted changes. A <branch> that
-has no local branch is reported as such, and the rest goes on, when
-gsp deleted it, a remote branch of that name is still listed, or GitHub
-shows its pull request merged (gh pr merge --delete-branch deletes it).
+with 5; the same when its worktree has uncommitted changes, or ignored
+files a build does not recreate (--discard-changes deletes them). A
+<branch> that has no local branch is reported as such, and the rest goes
+on, when gsp deleted it, a remote branch of that name is still listed, or
+GitHub shows its pull request merged (gh pr merge --delete-branch deletes
+it).
 Any other missing <branch> is an error (exit 2).
 
 <branch> never names a protected branch: "gsp post-pr main", the old form
@@ -180,6 +207,9 @@ Options:
   -n, --dry-run      Print the plan and change nothing (no fetch, no switch)
   -y, --yes          Apply without asking
   -f, --force        Delete <branch> even when it is not proven merged
+      --discard-changes
+                     Remove its worktree even when it holds ignored files a
+                     build does not recreate. They are deleted for good
       --json         Print the plan or the result as one JSON document
   -p, --protect <glob>
                      Never delete branches matching <glob> (repeatable)
@@ -227,16 +257,41 @@ recent deletions, or list them when nobody can pick.
 
 Options:
       --json         Without branch names: print the recoverable deletions
-${GLOBAL_OPTIONS}`;
+${GLOBAL_OPTIONS}
+
+Common tasks:
+  gsp restore --json           List the deletions that can be undone
+  gsp restore feature/x        Recreate feature/x
+  gsp restore origin/feature/x Recreate a branch deleted on origin
+
+${EXIT_CODES}`;
 
 const AGENTS_HELP = `Usage: gsp agents [file...] [options]
+       gsp agents --check [file...] [options]
 
 Add a short note about gsp to AGENTS.md (Codex, Cursor, GitHub Copilot,
-OpenCode) and/or CLAUDE.md (Claude Code). Without file names, pick them.
-Running it again updates its own block and leaves the rest alone.
+OpenCode) and/or CLAUDE.md (Claude Code), at the repository's root. Without
+file names, pick them. Running it again updates its own note, or replaces
+a note an older gsp wrote, word for word. It leaves the rest alone, and
+names any other "Git cleanup" section for you to review.
+
+With --check, read the files (any file named, or the repository's AGENTS.md
+and CLAUDE.md) and print each line whose advice contradicts gsp, such as
+"git branch -D" or "git worktree remove", with what to write instead.
+Changes nothing; exits with 5 when it found something.
 
 Options:
-${GLOBAL_OPTIONS}`;
+      --check        Report outdated advice instead of writing the note
+      --json         With --check: print the findings as one JSON document
+${GLOBAL_OPTIONS}
+
+Common tasks:
+  gsp agents AGENTS.md CLAUDE.md       Add or update the note
+  gsp agents --check                   Find outdated advice
+  gsp agents --check ~/.claude/CLAUDE.md
+                                       Check a file outside the repository
+
+${EXIT_CODES}`;
 
 const HELP: Partial<Record<CommandName, string>> = {
 	clean: CLEAN_HELP,
