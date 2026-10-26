@@ -321,10 +321,11 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 		};
 	}
 	if (worktree?.submodules) {
-		// Removing them would delete whatever the submodules hold: let the user check them first.
+		// Removing them would delete whatever the submodules hold, and the ignored files with them: let the user check them first.
+		const ignored = worktree.ignoredFiles && worktree.ignoredFiles.count > 0 ? ` and move what you need out of its ${describeIgnored(worktree.ignoredFiles)}` : '';
 		return {
 			reason: 'submodules',
-			hint: `check the submodules of ${quoteShellArg(worktree.path)} (${cmd('git', '-C', worktree.path, 'submodule', 'foreach', '--recursive', 'git', 'status', '--short')}), then: ${discard}`,
+			hint: `check the submodules of ${quoteShellArg(worktree.path)} (${cmd('git', '-C', worktree.path, 'submodule', 'foreach', '--recursive', 'git', 'status', '--short')})${ignored}, then: ${discard}`,
 		};
 	}
 	if (worktree?.ignoredFiles && worktree.ignoredFiles.count > 0 && !options.discardChanges) {

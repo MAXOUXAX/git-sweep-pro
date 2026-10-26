@@ -557,7 +557,10 @@ const KEPT_WORKTREE_MESSAGES: Record<WorktreeKeptReason, (kept: Extract<Worktree
 	'rebase-in-progress': () => 'a rebase is in progress there.',
 	'bisect-in-progress': () => 'a bisect is in progress there.',
 	'dirty-worktree': ({ changedFiles }) => `removing it would delete uncommitted changes or untracked files:\n${listed(changedFiles)}`,
-	submodules: () => 'it holds submodules, which would be deleted with it.',
+	submodules: ({ ignoredFiles }) =>
+		ignoredFiles.length > 0
+			? `it holds submodules, which would be deleted with it, and ignored files a build does not recreate:\n${listed(ignoredFiles)}`
+			: 'it holds submodules, which would be deleted with it.',
 	'ignored-files': ({ ignoredFiles }) => `removing it would delete ignored files a build does not recreate:\n${listed(ignoredFiles)}`,
 };
 

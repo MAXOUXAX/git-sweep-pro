@@ -33,9 +33,9 @@ const LINKED = { path: '/repo/wt', branch: 'feature/x', state: 'linked' } as con
 const removalChecks = (at: string) => [
 	`-C ${at} rev-parse --absolute-git-dir`,
 	`-C ${at} --no-optional-locks status --porcelain --untracked-files=normal -z`,
+	`-C ${at} --no-optional-locks status --porcelain --untracked-files=normal --ignored=matching -z`,
 	`-C ${at} rev-parse --git-path modules`,
 	`-C ${at} ls-files --stage -z`,
-	`-C ${at} --no-optional-locks status --porcelain --untracked-files=normal --ignored=matching -z`,
 ];
 
 /** The same listing once Git has forgotten the prunable registration. */

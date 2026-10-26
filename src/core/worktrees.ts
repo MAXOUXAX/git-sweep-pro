@@ -296,14 +296,17 @@ async function removalBlocker(git: RunGit, worktree: Worktree, discardChanges: b
 		const stash = `${command('git', '-C', at, 'stash', '--include-untracked')} && ${remove()}`;
 		return kept('dirty-worktree', `${stash}, or, to delete ${listFew(changed)} for good: ${discard}`, stash, { changed });
 	}
+	const ignored = await listIgnoredFiles(git, at);
 	if (await hasSubmodules(git, at)) {
+		// --discard-changes deletes the ignored files too: name them with the submodules.
+		const also = ignored.length > 0 ? ` and move what you need out of it (${listFew(ignored)})` : '';
 		return kept(
 			'submodules',
-			`check the submodules of ${quoteShellArg(at)} (${command('git', '-C', at, 'submodule', 'foreach', '--recursive', 'git', 'status', '--short')}), then: ${discard}`,
-			null
+			`check the submodules of ${quoteShellArg(at)} (${command('git', '-C', at, 'submodule', 'foreach', '--recursive', 'git', 'status', '--short')})${also}, then: ${discard}`,
+			null,
+			{ ignored }
 		);
 	}
-	const ignored = await listIgnoredFiles(git, at);
 	if (ignored.length > 0) {
 		return kept('ignored-files', `move what you need out of ${quoteShellArg(at)} (${listFew(ignored)}), then: ${discard}`, null, { ignored });
 	}
@@ -374,7 +377,7 @@ export type WorktreeRemoveDocument = {
 	readonly removed: boolean;
 	/** Why it was kept; null once removed. */
 	readonly reason: WorktreeKeptReason | null;
-	/** The ignored files that kept it, regenerable ones left out; null unless the reason is `ignored-files`. */
+	/** The ignored files removing it would delete, regenerable ones left out; null unless the reason is `ignored-files` or `submodules`. */
 	readonly ignoredFiles: IgnoredFiles | null;
 	/** The uncommitted changes and untracked files that kept it; null unless the reason is `dirty-worktree`. */
 	readonly changedFiles: IgnoredFiles | null;
@@ -394,7 +397,7 @@ export function worktreeRemoveDocument(removal: Extract<WorktreeRemoval, { kind:
 		worktree: { path: removal.worktree.path, branch: removal.worktree.branch ?? null },
 		removed: !kept,
 		reason: kept?.reason ?? null,
-		ignoredFiles: kept?.reason === 'ignored-files' ? summarizeIgnored(kept.ignoredFiles) : null,
+		ignoredFiles: kept?.reason === 'ignored-files' || kept?.reason === 'submodules' ? summarizeIgnored(kept.ignoredFiles) : null,
 		changedFiles: kept?.reason === 'dirty-worktree' ? summarizeIgnored(kept.changedFiles) : null,
 		hint: kept?.hint ?? null,
 		next: kept?.next ?? null,

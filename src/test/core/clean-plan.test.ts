@@ -157,6 +157,18 @@ suite('clean plan', () => {
 		assert.strictEqual(none[0].action, 'delete');
 	});
 
+	test('a worktree with submodules names its ignored files too, since removing it deletes them', () => {
+		const sub = (ignoredFiles: { count: number; sample: string[] }) =>
+			branch('feature/sub', { worktree: { ...worktree({ path: '/wt/sub' }), ignoredFiles, submodules: true } });
+		const status = 'git -C /wt/sub submodule foreach --recursive git status --short';
+		assert.deepStrictEqual(actions(decide([sub({ count: 1, sample: ['notes.md'] })])), {
+			'feature/sub': ['skip', 'submodules', `check the submodules of /wt/sub (${status}) and move what you need out of its 1 ignored file (notes.md), then: gsp worktree remove /wt/sub --discard-changes && gsp clean feature/sub --yes`],
+		});
+		assert.deepStrictEqual(actions(decide([sub({ count: 0, sample: [] })])), {
+			'feature/sub': ['skip', 'submodules', `check the submodules of /wt/sub (${status}), then: gsp worktree remove /wt/sub --discard-changes && gsp clean feature/sub --yes`],
+		});
+	});
+
 	test('the needs-force reason says whether the work is unpushed or not merged', () => {
 		const decided = decide(
 			[branch('feature/gone', { reason: 'upstream-gone', unpushedCommits: 2 }), branch('feature/wip', { verdict: 'alive', reason: 'unmerged-commits', evidence: null })],
