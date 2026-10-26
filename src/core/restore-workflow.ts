@@ -1,5 +1,5 @@
 import { deletionLabel, describeDeletion, describeDeletionTarget, latestDeletions, type DeletedBranch } from './deletion-log';
-import { describeGitFailure, toErrorMessage } from './errors';
+import { describeGitFailure, gitFailureReason, toErrorMessage } from './errors';
 import { quoteShellArg } from './git-command';
 import type { WorkflowContext, WorkflowOutcome } from './workflow';
 
@@ -54,7 +54,11 @@ async function restoreRemoteBranch({ git, output, deletionLog }: WorkflowContext
 	try {
 		await git(['push', `--force-with-lease=${ref}:`, entry.remote, `${entry.sha}:${ref}`]);
 	} catch (error) {
-		return toErrorMessage(error);
+		const stderr = (error as { stderr?: unknown }).stderr;
+		// The lease is rejected: someone pushed a branch of that name since.
+		return /stale info/.test(`${typeof stderr === 'string' ? stderr : ''}${toErrorMessage(error)}`)
+			? `a branch named ${entry.branch} exists on ${entry.remote} again; it was not overwritten`
+			: gitFailureReason(error);
 	}
 	output.appendLine(`Restored ${entry.branch} on ${entry.remote} at ${entry.sha.slice(0, 7)}.`);
 	try {
@@ -175,7 +179,6 @@ export async function runRestoreWorkflow(
 			if (reason === undefined) {
 				restored.push(branch);
 			} else {
-				output.appendLine(`[restore-failed] ${branch}: ${reason}`);
 				failed.push(`${branch} (${reason})`);
 			}
 		}

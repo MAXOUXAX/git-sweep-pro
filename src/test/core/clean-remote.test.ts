@@ -153,9 +153,13 @@ suite('clean --remote (real git)', function () {
 		pushBranch('other', 'o.txt', ['o\n']);
 		git(['push', '-q', 'origin', 'origin/other:refs/heads/feature/sq'], fx.repo);
 		const other = git(['rev-parse', 'origin/other'], fx.repo).trim();
+		git(['update-ref', '-d', 'refs/remotes/origin/feature/sq'], fx.repo);
 
 		const restore = contextFor({ deletionLog: fake.context.deletionLog });
 		assert.strictEqual(await runRestoreWorkflow(restore.context, ['origin/feature/sq']), 'failed');
+		assert.deepStrictEqual(restore.errorMessages, [
+			'Restored 0 of 1 branch(es). Could not restore origin/feature/sq (remote) (a branch named feature/sq exists on origin again; it was not overwritten).',
+		]);
 		assert.ok(remoteHeads().includes(`feature/sq ${other}`));
 		assert.strictEqual(fake.context.deletionLog.list().length, 1, 'still recorded');
 	});
