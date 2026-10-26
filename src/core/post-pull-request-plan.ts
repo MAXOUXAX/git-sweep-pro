@@ -163,13 +163,13 @@ export function decideTarget(branch: PlannedBranch, options: DecideTargetOptions
 
 /** What may still prove a branch merged without `--force`, as a command, or undefined when nothing can. */
 function proveFirst(branch: PlannedBranch, options: DecideTargetOptions): string | undefined {
+	// Fetching may prove the merge: right after it, the commits of a branch whose upstream is pruned are found nowhere else yet.
+	if (options.remoteAhead) {
+		return postPrCommand(options.scope, branch.name, '--yes');
+	}
 	// Commits found nowhere else are lost on deletion: they go to the remote first.
 	if (branch.unpushedCommits > 0) {
 		return options.pushRemote === undefined ? undefined : cmd('git', 'push', '-u', options.pushRemote, branch.name);
-	}
-	// Fetching may prove the merge.
-	if (options.remoteAhead) {
-		return postPrCommand(options.scope, branch.name, '--yes');
 	}
 	if (options.mergedElsewhere !== undefined) {
 		return postPrCommand({ ...options.scope, into: options.mergedElsewhere }, branch.name, '--yes');

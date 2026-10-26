@@ -274,6 +274,12 @@ suite('cli post-pr (real git)', function () {
 		assert.ok(out.includes('origin/main has new commits that are not fetched yet'), out);
 		assert.ok(out.includes('Nothing was changed. To apply this plan, run: gsp post-pr feature/x --yes'), out);
 		assert.ok(!out.includes('--yes --force'), 'never suggests --force before fetching');
+
+		// Its upstream pruned, its commit is found nowhere else until the merge is fetched: still fetch first, never push.
+		git(['update-ref', '-d', 'refs/remotes/origin/feature/x'], fx.repo);
+		const pruned = createFakeIo(wt);
+		assert.strictEqual(await runCli(['post-pr', '--json'], pruned), EXIT.notApplied, pruned.err.join(''));
+		assert.strictEqual(json(pruned.out).branch?.hint, 'gsp post-pr feature/x --yes');
 		assert.ok(branchExists(fx.repo, 'feature/x'));
 	});
 

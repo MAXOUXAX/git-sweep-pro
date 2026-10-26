@@ -126,10 +126,11 @@ suite('post-pr plan', () => {
 		);
 		assert.strictEqual(decideTarget(alive, scoped).hint, "gsp -C '/my repo' post-pr feature/x --into main --no-github --yes --force");
 
-		// Unpushed commits on top of a merged tip go to the remote first, even when the remote has new commits.
+		// Unpushed commits on top of a merged tip go to the remote first, once fetching can't prove them merged.
 		const unpushed = branch({ unpushedCommits: 1 });
-		const pushFirst = decideTarget(unpushed, { ...OPTIONS, remoteAhead: true, mergedElsewhere: 'develop', pushRemote: 'origin' });
+		const pushFirst = decideTarget(unpushed, { ...OPTIONS, mergedElsewhere: 'develop', pushRemote: 'origin' });
 		assert.deepStrictEqual([pushFirst.reason, pushFirst.hint], ['needs-force', 'git push -u origin feature/x']);
+		assert.strictEqual(decideTarget(unpushed, { ...OPTIONS, remoteAhead: true, pushRemote: 'origin' }).hint, 'gsp post-pr feature/x --yes');
 		assert.strictEqual(decideTarget(unpushed, OPTIONS).hint, 'gsp post-pr feature/x --yes --force');
 	});
 
