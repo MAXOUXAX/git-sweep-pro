@@ -74,18 +74,26 @@ suite('cli args', () => {
 		assert.strictEqual(parseArgs(['list', '--json']).json, true);
 		assert.strictEqual(parseArgs(['worktree', 'list', '--json']).json, true);
 		assert.strictEqual(parseArgs(['restore', '--json']).json, true);
+		assert.strictEqual(parseArgs(['post-pr', 'feature/x', '--json']).json, true);
 		assert.strictEqual(parseArgs(['--json', '--help']).command, 'help');
 		for (const args of [
 			['worktree', 'prune'],
 			['worktree', 'remove', 'feature/x'],
-			['post-pr', 'main'],
 			['sync'],
 			['resume'],
 			['restore', 'feature/x'],
 			['agents'],
 		]) {
-			assert.throws(() => parseArgs([...args, '--json']), /--json requires clean, worktree list, or restore without branch arguments/);
+			assert.throws(() => parseArgs([...args, '--json']), /--json requires clean, post-pr, worktree list, or restore without branch arguments/);
 		}
+	});
+
+	test('--into names the branch post-pr merged into, and nothing else takes it', () => {
+		assert.strictEqual(parseArgs(['post-pr', '--into', 'develop']).into, 'develop');
+		assert.strictEqual(parseArgs(['post-pr']).into, undefined);
+		assert.throws(() => parseArgs(['clean', '--into', 'develop']), /--into can only be used with post-pr/);
+		assert.throws(() => parseArgs(['post-pr', '--into']), /requires a value/);
+		assert.throws(() => parseArgs(['post-pr', 'a', 'b']), /Unexpected argument: b/);
 	});
 
 	test('sync --continue is an alias of resume', () => {

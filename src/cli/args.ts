@@ -29,6 +29,8 @@ export type CliOptions = {
 	readonly positionals: readonly string[];
 	/** The `worktree` subcommand and its target, when {@link command} is `worktree`. */
 	readonly worktree: WorktreeArgs | undefined;
+	/** `post-pr --into <branch>`: the branch the pull request was merged into; the default branch when undefined. */
+	readonly into: string | undefined;
 	/** Repository directory (`-C <path>`); defaults to the current directory. */
 	readonly cwd: string | undefined;
 	/** `--dry-run`, `--force`, or a safe delete by default. */
@@ -77,6 +79,7 @@ const OPTIONS = {
 	'no-github': { type: 'boolean', default: false },
 	json: { type: 'boolean', default: false },
 	cwd: { type: 'string', short: 'C' },
+	into: { type: 'string' },
 	verbose: { type: 'boolean', short: 'v', default: false },
 	help: { type: 'boolean', short: 'h', default: false },
 	version: { type: 'boolean', default: false },
@@ -172,9 +175,13 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 	}
 	const worktree = command === 'worktree' ? parseWorktreeArgs(args) : undefined;
 	const jsonAllowed =
-		command === 'clean' || (worktree !== undefined && worktree.subcommand === 'list') || (command === 'restore' && args.length === 0);
+		command === 'clean' ||
+		command === 'post-pr' || (worktree !== undefined && worktree.subcommand === 'list') || (command === 'restore' && args.length === 0);
 	if (values.json && !jsonAllowed) {
-		throw new UsageError('--json requires clean, worktree list, or restore without branch arguments.');
+		throw new UsageError('--json requires clean, post-pr, worktree list, or restore without branch arguments.');
+	}
+	if (values.into !== undefined && command !== 'post-pr') {
+		throw new UsageError('--into can only be used with post-pr.');
 	}
 	if (command === 'restore' && (values['dry-run'] || values.force)) {
 		// Restore never overwrites a branch, so there is nothing to force or to preview.
@@ -193,7 +200,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 	if (command !== 'worktree' && args.length > maxPositionals) {
 		throw new UsageError(`Unexpected argument: ${args[maxPositionals]}`);
 	}
-	const invalidBranch = command === 'clean' ? args.find((arg) => arg.startsWith('-') || arg.trim() === '') : undefined;
+	const invalidBranch = command === 'clean' || command === 'post-pr' ? args.find((arg) => arg.startsWith('-') || arg.trim() === '') : undefined;
 	if (invalidBranch !== undefined) {
 		throw new UsageError(`Invalid branch name: "${invalidBranch}".`);
 	}
@@ -207,6 +214,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 		helpTopic: undefined,
 		positionals: args,
 		worktree,
+		into: values.into,
 		cwd: values.cwd,
 		mode: values.force ? 'forceDelete' : values['dry-run'] || requested === 'list' ? 'dryRun' : 'safeDelete',
 		yes: values.yes,
@@ -229,6 +237,7 @@ function helpOptions(topic: CommandName | undefined): CliOptions {
 		helpTopic: topic,
 		positionals: [],
 		worktree: undefined,
+		into: undefined,
 		cwd: undefined,
 		mode: 'safeDelete',
 		yes: false,
