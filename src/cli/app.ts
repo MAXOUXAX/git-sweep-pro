@@ -4,18 +4,19 @@ import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
-import { describeMergedBranch } from '../core/merged-branches';
+import { CLEAN_SCHEMA, formatBranchLines, formatSummary, nextCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
+import { runCleanWorkflow, UnknownBranchError, type CleanOutcome } from '../core/clean-workflow';
+import { createGhRunner } from '../core/github-signal';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import { inspectDeletions, runRestoreWorkflow } from '../core/restore-workflow';
-import { findStaleBranches, noBranchesFound } from '../core/stale-branches';
-import { runSweepWorkflow } from '../core/sweep-workflow';
 import { runResumeWorkflow } from '../core/sync-resume-workflow';
 import type { SyncContext } from '../core/sync-state';
 import { runSyncWorkflow } from '../core/sync-workflow';
 import type { WorkflowContext, WorkflowOutcome } from '../core/workflow';
 import { describeWorktree, listWorktrees, pruneWorktrees, removeWorktree } from '../core/worktrees';
-import { EXIT, parseArgs, USAGE, UsageError, type CliOptions } from './args';
+import { EXIT, parseArgs, UsageError, type CliOptions } from './args';
 import { createFrontend, type Frontend } from './frontend';
+import { helpFor, USAGE } from './help';
 import type { CliIo } from './io';
 import { createFileStateStore, stateFilePath } from './state-store';
 
@@ -24,9 +25,23 @@ export const PROTECTED_CONFIG_KEY = 'git-sweep-pro.protected';
 
 const EXIT_CODES: Record<WorkflowOutcome, number> = {
 	ok: EXIT.ok,
-	cancelled: EXIT.ok,
+	cancelled: EXIT.cancelled,
 	failed: EXIT.failed,
 	paused: EXIT.paused,
+};
+
+const CLEAN_EXIT_CODES: Record<CleanOutcome, number> = {
+	done: EXIT.ok,
+	'not-applied': EXIT.notApplied,
+	cancelled: EXIT.cancelled,
+	failed: EXIT.failed,
+};
+
+const CLEAN_OUTCOMES: Record<CleanOutcome, WorkflowOutcome> = {
+	done: 'ok',
+	'not-applied': 'ok',
+	cancelled: 'cancelled',
+	failed: 'failed',
 };
 
 function readVersion(): string {
@@ -71,6 +86,9 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 		options = parseArgs(argv);
 	} catch (error) {
 		if (error instanceof UsageError) {
+			if (argv.includes('--json')) {
+				printJsonError(io, error.message, 'usage');
+			}
 			io.stderr(`error: ${error.message}\n\n${USAGE}\n`);
 			return EXIT.usage;
 		}
@@ -78,7 +96,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	}
 
 	if (options.command === 'help') {
-		io.stdout(`${USAGE}\n`);
+		io.stdout(`${helpFor(options.helpTopic)}\n`);
 		return EXIT.ok;
 	}
 	if (options.command === 'version') {
@@ -88,51 +106,76 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 
 	const requestedDir = path.resolve(io.cwd, options.cwd ?? '.');
 	if (!fs.existsSync(requestedDir)) {
+		if (options.json) {
+			printJsonError(io, `no such directory: ${requestedDir}`, 'no-such-directory');
+		}
 		io.stderr(`error: no such directory: ${requestedDir}\n`);
 		return EXIT.failed;
+	}
+
+	if (options.merged) {
+		io.stderr('note: --merged is deprecated and does nothing: merged branches are always cleaned.\n');
 	}
 
 	const frontend = await createFrontend(options, io);
 	frontend.intro?.(`gsp ${options.command}`);
 	const outcome = await runCommand(options, requestedDir, frontend, io);
-	frontend.outro?.(outcome);
-	if (options.nonInteractive && outcome === 'cancelled') {
-		return EXIT.cancelled;
+	const workflowOutcome = typeof outcome === 'number' ? 'failed' : outcome.kind === 'clean' ? CLEAN_OUTCOMES[outcome.outcome] : outcome.outcome;
+	frontend.outro?.(workflowOutcome);
+	if (typeof outcome === 'number') {
+		return outcome;
 	}
-	return EXIT_CODES[outcome];
+	if (outcome.kind === 'clean') {
+		return CLEAN_EXIT_CODES[outcome.outcome];
+	}
+	// Nobody could answer: the prompt was refused for lack of --yes, not cancelled.
+	return outcome.outcome === 'cancelled' && !frontend.canPrompt ? EXIT.notApplied : EXIT_CODES[outcome.outcome];
 }
 
-async function runCommand(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<WorkflowOutcome> {
+/** Why a command stopped before producing its JSON document. */
+type JsonErrorCode = 'usage' | 'no-such-directory' | 'unknown-branch' | 'not-a-repository' | 'failed';
+
+/**
+ * With `--json`, a fatal error is still one JSON document on stdout, so a
+ * script parsing it gets the reason, not an empty string. The message also
+ * goes to stderr as usual.
+ */
+function printJsonError(io: CliIo, message: string, code: JsonErrorCode): void {
+	io.stdout(`${JSON.stringify({ schema: CLEAN_SCHEMA, error: { message, code } }, null, 2)}\n`);
+}
+
+/** {@link printJsonError} for a failed Git command, or any other error. */
+function printJsonGitError(io: CliIo, error: unknown): void {
+	const message = toErrorMessage(error);
+	printJsonError(io, describeGitFailure(message)[0], message.toLowerCase().includes('not a git repository') ? 'not-a-repository' : 'failed');
+}
+
+/** How a command ended: a workflow outcome, a `clean` outcome, or an exit code decided on the spot. */
+type CommandOutcome = { readonly kind: 'workflow'; readonly outcome: WorkflowOutcome } | { readonly kind: 'clean'; readonly outcome: CleanOutcome } | number;
+
+async function runCommand(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<CommandOutcome> {
+	if (options.command === 'clean') {
+		return runClean(options, dir, frontend, io);
+	}
+	return { kind: 'workflow', outcome: await runWorkflow(options, dir, frontend, io) };
+}
+
+async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<WorkflowOutcome> {
 	let repository: Repository;
 	try {
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return 'failed';
 	}
 
-	const { root, gitDir, commonDir, protectedPatterns } = repository;
-	const context: WorkflowContext = {
-		root,
-		settings: {
-			protectedBranches: [...options.protect, ...protectedPatterns],
-			autoFetchPrune: options.fetch,
-			confirmBeforeDelete: options.confirm,
-			includeMergedBranches: options.merged,
-		},
-		git: (args) => runGitCommand(args, root, { appendLine: frontend.trace }),
-		output: frontend.output,
-		ui: frontend.ui,
-		// Branches are shared by every worktree, and so is their undo history.
-		deletionLog: createDeletionLog(createFileStateStore(stateFilePath(commonDir))),
-	};
-
+	const { gitDir } = repository;
+	const context = createContext(repository, options, frontend);
 	const [requested] = options.positionals;
 	switch (options.command) {
-		case 'sweep':
-			return runSweepWorkflow(context, options.mode);
-		case 'list':
-			return runList(context, options, io);
 		case 'worktree':
 			return runWorktree(context, options, io, dir);
 		case 'post-pr':
@@ -153,40 +196,143 @@ async function runCommand(options: CliOptions, dir: string, frontend: Frontend, 
 			};
 			return options.command === 'sync' ? runSyncWorkflow(syncContext, requested) : runResumeWorkflow(syncContext);
 		}
+		case 'clean':
 		case 'help':
 		case 'version':
 			return 'ok';
 	}
 }
 
-/** `list`: prints stale branches without touching them (`--json` for scripts). */
-async function runList(context: WorkflowContext, options: CliOptions, io: CliIo): Promise<WorkflowOutcome> {
-	try {
-		const found = await findStaleBranches(context);
-		const { stale, protected: protectedStale, checkedOut, merged, worktrees } = found;
-		const withWorktree = (branch: string, note?: string) => {
-			const worktree = worktrees.get(branch);
-			const notes = [note, worktree && `worktree ${worktree}`].filter(Boolean);
-			return notes.length > 0 ? `${branch} (${notes.join(', ')})\n` : `${branch}\n`;
-		};
+function createContext({ root, commonDir, protectedPatterns }: Repository, options: CliOptions, frontend: Frontend): WorkflowContext {
+	return {
+		root,
+		settings: {
+			protectedBranches: [...options.protect, ...protectedPatterns],
+			autoFetchPrune: options.fetch,
+			confirmBeforeDelete: options.confirm,
+			// Only post-pr still runs the previous sweep; it never offered merged branches.
+			includeMergedBranches: false,
+		},
+		git: (args) => runGitCommand(args, root, { appendLine: frontend.trace }),
+		output: frontend.output,
+		ui: frontend.ui,
+		// Branches are shared by every worktree, and so is their undo history.
+		deletionLog: createDeletionLog(createFileStateStore(stateFilePath(commonDir))),
+	};
+}
 
-		if (options.json) {
-			const json = { stale, protected: protectedStale, checkedOut, merged, worktrees: Object.fromEntries(worktrees) };
-			io.stdout(`${JSON.stringify(json, null, 2)}\n`);
-		} else if (stale.length === 0 && protectedStale.length === 0 && checkedOut.length === 0 && merged.length === 0) {
-			io.stderr(`${noBranchesFound(context.settings, found)}\n`);
-		} else {
-			stale.forEach((branch) => io.stdout(withWorktree(branch)));
-			merged.forEach((branch) => io.stdout(withWorktree(branch.name, describeMergedBranch(branch))));
-			checkedOut.forEach((branch) =>
-				io.stdout(branch.where === 'current' ? `${branch.name} (current branch)\n` : `${branch.name} (main worktree ${branch.worktreePath})\n`)
-			);
-			protectedStale.forEach((branch) => io.stdout(`${branch} (protected)\n`));
-		}
-		return 'ok';
+/**
+ * `clean` (and its aliases `sweep` and `list`): plans, picks when someone can
+ * answer, applies, then reports. With `--json`, the report is the only thing
+ * on stdout; in a terminal, one line per branch and a summary line.
+ */
+async function runClean(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<CommandOutcome> {
+	let repository: Repository;
+	try {
+		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
-		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
-		return 'failed';
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
+		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
+		return EXIT.failed;
+	}
+	const context = createContext(repository, options, frontend);
+	try {
+		const { report, outcome } = await runCleanWorkflow(
+			{ ...context, ...(options.github ? { gh: createGhRunner(repository.root) } : {}) },
+			{
+				patterns: options.positionals,
+				dryRun: options.mode === 'dryRun',
+				yes: options.yes,
+				force: options.mode === 'forceDelete',
+				fetch: options.fetch,
+				github: options.github,
+				protectedPatterns: options.protect,
+				canPrompt: frontend.canPrompt && !options.json,
+				confirm: options.confirm,
+			}
+		);
+		printCleanReport(report, outcome, options, frontend, io);
+		return { kind: 'clean', outcome };
+	} catch (error) {
+		if (error instanceof UnknownBranchError) {
+			if (options.json) {
+				printJsonError(io, error.message, 'unknown-branch');
+			}
+			io.stderr(`error: ${error.message}\n`);
+			return EXIT.usage;
+		}
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
+		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
+		return EXIT.failed;
+	}
+}
+
+/** Longer than this, the command to apply a plan is printed on its own line. */
+const COMMAND_INLINE_WIDTH = 80;
+
+/** What to do next when the plan was not applied, or `undefined` when there is nothing to say. */
+function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | null): string | undefined {
+	if (outcome !== 'not-applied') {
+		return undefined;
+	}
+	if (next && report.summary.delete > 0 && !report.branches.some((branch) => branch.result !== undefined)) {
+		// It names every planned branch, so a long one goes on its own line, whole.
+		return next.length > COMMAND_INLINE_WIDTH ? `Nothing was changed. To apply this plan, run:\n${next}` : `Nothing was changed. To apply this plan, run: ${next}`;
+	}
+	const count = (test: (branch: CleanReport['branches'][number]) => boolean) => report.branches.filter(test).length;
+	const unpushed = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'dead');
+	const unmerged = count((branch) => branch.reason === 'needs-force' && branch.verdict === 'alive');
+	const ignored = count((branch) => branch.reason === 'ignored-files');
+	const kept = [
+		...(unpushed > 0 ? [`${unpushed} with commits found nowhere else`] : []),
+		...(unmerged > 0 ? [`${unmerged} named but not merged`] : []),
+		...(ignored > 0 ? [`${ignored} whose worktree holds ignored files`] : []),
+	];
+	const changed = count((branch) => branch.reason === 'plan-changed' || branch.reason === 'fetch-failed' || branch.reason === 'worktree-changed');
+	const lines = [
+		...(kept.length > 0 ? [`Kept without --force: ${kept.join(', ')}. Each line above gives the command.`] : []),
+		...(changed > 0 && next ? [`${changed} not deleted, as things changed while applying. Review them with: ${next}`] : []),
+	];
+	return lines.length > 0 ? lines.join('\n') : undefined;
+}
+
+function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: CliOptions, frontend: Frontend, io: CliIo): void {
+	const command =
+		outcome === 'cancelled'
+			? null
+			: nextCommand(report, {
+					...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+					patterns: options.positionals,
+					protectedPatterns: options.protect,
+					github: options.github,
+					fetch: options.fetch,
+				});
+	if (options.json) {
+		const document: CleanDocument = { ...report, next: command };
+		io.stdout(`${JSON.stringify(document, null, 2)}\n`);
+		return;
+	}
+	const lines = formatBranchLines(report);
+	const summary = outcome === 'cancelled' ? 'Cancelled. Nothing was deleted.' : formatSummary(report);
+	const next = nextStep(report, outcome, command);
+	if (options.rpc || frontend.canPrompt) {
+		lines.forEach((line) => frontend.output.appendLine(line));
+		const message = next ? `${summary}\n${next}` : summary;
+		if (outcome === 'failed') {
+			frontend.ui.showErrorMessage(message, { seeOutput: true });
+		} else {
+			frontend.ui.showInformationMessage(message, report.mode === 'plan' ? { dryRun: true } : undefined);
+		}
+		return;
+	}
+	lines.forEach((line) => io.stdout(`${line}\n`));
+	io.stdout(`${summary}\n`);
+	if (next) {
+		io.stdout(`${next}\n`);
 	}
 }
 
@@ -249,6 +395,9 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 			}
 		}
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	}
@@ -278,6 +427,9 @@ async function runRestore(context: WorkflowContext, options: CliOptions, fronten
 		}
 		return 'ok';
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	}

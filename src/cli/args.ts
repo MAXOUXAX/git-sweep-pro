@@ -2,7 +2,7 @@ import { parseArgs as parseArgv, type ParseArgsOptionsConfig } from 'node:util';
 import { AGENT_FILE_NAMES, isAgentFile } from '../core/agent-instructions';
 import type { SweepMode, SweepSettings } from '../core/sweep-logic';
 
-export const COMMANDS = ['sweep', 'list', 'worktree', 'post-pr', 'sync', 'resume', 'restore', 'agents', 'help', 'version'] as const;
+export const COMMANDS = ['clean', 'sweep', 'list', 'worktree', 'post-pr', 'sync', 'resume', 'restore', 'agents', 'help', 'version'] as const;
 export type CommandName = (typeof COMMANDS)[number];
 
 export const WORKTREE_SUBCOMMANDS = ['list', 'prune', 'remove'] as const;
@@ -14,9 +14,18 @@ export type WorktreeArgs = {
 	readonly target: string | undefined;
 };
 
+/** Commands that run `clean`: `sweep` is an alias, `list` an alias of `clean --dry-run`. */
+const CLEAN_ALIASES: readonly CommandName[] = ['clean', 'sweep', 'list'];
+
 export type CliOptions = {
-	readonly command: CommandName;
-	/** Positional arguments after the command (the branch for `post-pr`/`sync`, the branches for `restore`, the files for `agents`). */
+	/** The command to run; `sweep` and `list` are read as `clean`. */
+	readonly command: Exclude<CommandName, 'sweep' | 'list'>;
+	/** The command whose help `help` prints (`gsp help clean`, `gsp clean --help`); `undefined` for the overview. */
+	readonly helpTopic: CommandName | undefined;
+	/**
+	 * Positional arguments after the command: branch names or globs for `clean`,
+	 * the branch for `post-pr`/`sync`, the branches for `restore`, the files for `agents`.
+	 */
 	readonly positionals: readonly string[];
 	/** The `worktree` subcommand and its target, when {@link command} is `worktree`. */
 	readonly worktree: WorktreeArgs | undefined;
@@ -29,8 +38,10 @@ export type CliOptions = {
 	readonly nonInteractive: boolean;
 	readonly fetch: boolean;
 	readonly confirm: boolean;
-	/** Also offer branches already merged into the default branch whose upstream is not gone. */
+	/** Deprecated `--merged`: merged branches are always candidates now. Accepted so old scripts keep working. */
 	readonly merged: boolean;
+	/** Ask GitHub for merged pull requests through `gh` (`--no-github` turns it off). */
+	readonly github: boolean;
 	readonly protect: readonly string[];
 	readonly json: boolean;
 	readonly verbose: boolean;
@@ -47,8 +58,10 @@ export const EXIT = {
 	usage: 2,
 	/** A sync stopped on rebase conflicts; run `resume` once they are resolved. */
 	paused: 3,
-	/** Explicit non-interactive runs distinguish cancellation from success. */
+	/** Someone at the keyboard cancelled a prompt. */
 	cancelled: 4,
+	/** The plan holds deletions that were not applied: no `--yes`, `--dry-run`, or `--force` missing. */
+	notApplied: 5,
 } as const;
 
 const OPTIONS = {
@@ -61,6 +74,7 @@ const OPTIONS = {
 	// Declared explicitly: `allowNegative` needs Node 22.4, and VS Code 1.92 runs Node 20.14.
 	'no-fetch': { type: 'boolean', default: false },
 	'no-confirm': { type: 'boolean', default: false },
+	'no-github': { type: 'boolean', default: false },
 	json: { type: 'boolean', default: false },
 	cwd: { type: 'string', short: 'C' },
 	verbose: { type: 'boolean', short: 'v', default: false },
@@ -137,7 +151,19 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 	}
 	const args = named ? rest : positionals;
 
-	let command: CommandName = values.help ? 'help' : values.version ? 'version' : (named ?? 'sweep');
+	const requested: CommandName = named ?? 'clean';
+	if (values.help || requested === 'help') {
+		const topic = values.help ? named : COMMANDS.find((name) => name === args[0]);
+		if (!values.help && args[0] !== undefined && topic === undefined) {
+			throw new UsageError(`Unknown command: ${args[0]}`);
+		}
+		return helpOptions(topic);
+	}
+	if (values.version || requested === 'version') {
+		return { ...helpOptions(undefined), command: 'version' };
+	}
+	const isClean = CLEAN_ALIASES.includes(requested);
+	let command: CliOptions['command'] = isClean ? 'clean' : (requested as CliOptions['command']);
 	if (command === 'sync' && values.continue) {
 		command = 'resume';
 	}
@@ -146,12 +172,9 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 	}
 	const worktree = command === 'worktree' ? parseWorktreeArgs(args) : undefined;
 	const jsonAllowed =
-		command === 'help' ||
-		command === 'list' ||
-		(worktree !== undefined && worktree.subcommand === 'list') ||
-		(command === 'restore' && args.length === 0);
+		command === 'clean' || (worktree !== undefined && worktree.subcommand === 'list') || (command === 'restore' && args.length === 0);
 	if (values.json && !jsonAllowed) {
-		throw new UsageError('--json requires list, worktree list, or restore without branch arguments.');
+		throw new UsageError('--json requires clean, worktree list, or restore without branch arguments.');
 	}
 	if (command === 'restore' && (values['dry-run'] || values.force)) {
 		// Restore never overwrites a branch, so there is nothing to force or to preview.
@@ -163,9 +186,16 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 		// `worktree list` ignores it and `worktree prune` uses it as a preview.
 		throw new UsageError('--dry-run cannot be used with worktree remove.');
 	}
-	const maxPositionals = command === 'restore' || command === 'agents' ? Infinity : command === 'post-pr' || command === 'sync' ? 1 : 0;
+	if (requested === 'list' && values.force) {
+		throw new UsageError('list only plans: --force cannot be used with it.');
+	}
+	const maxPositionals = command === 'restore' || command === 'agents' || command === 'clean' ? Infinity : command === 'post-pr' || command === 'sync' ? 1 : 0;
 	if (command !== 'worktree' && args.length > maxPositionals) {
 		throw new UsageError(`Unexpected argument: ${args[maxPositionals]}`);
+	}
+	const invalidBranch = command === 'clean' ? args.find((arg) => arg.startsWith('-') || arg.trim() === '') : undefined;
+	if (invalidBranch !== undefined) {
+		throw new UsageError(`Invalid branch name: "${invalidBranch}".`);
 	}
 	const unknownFile = command === 'agents' ? args.find((file) => !isAgentFile(file)) : undefined;
 	if (unknownFile !== undefined) {
@@ -174,19 +204,43 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 
 	return {
 		command,
+		helpTopic: undefined,
 		positionals: args,
 		worktree,
 		cwd: values.cwd,
-		mode: values.force ? 'forceDelete' : values['dry-run'] ? 'dryRun' : 'safeDelete',
+		mode: values.force ? 'forceDelete' : values['dry-run'] || requested === 'list' ? 'dryRun' : 'safeDelete',
 		yes: values.yes,
 		nonInteractive: values['non-interactive'],
 		fetch: !values['no-fetch'],
 		confirm: !values['no-confirm'],
 		merged: values.merged,
+		github: !values['no-github'],
 		protect: values.protect,
 		json: values.json,
 		verbose: values.verbose,
 		rpc: values.rpc,
+	};
+}
+
+/** Options of a `help` run: nothing else is read. */
+function helpOptions(topic: CommandName | undefined): CliOptions {
+	return {
+		command: 'help',
+		helpTopic: topic,
+		positionals: [],
+		worktree: undefined,
+		cwd: undefined,
+		mode: 'safeDelete',
+		yes: false,
+		nonInteractive: false,
+		fetch: true,
+		confirm: true,
+		merged: false,
+		github: true,
+		protect: [],
+		json: false,
+		verbose: false,
+		rpc: false,
 	};
 }
 
@@ -203,79 +257,6 @@ export function settingsToCliArgs(settings: SweepSettings): string[] {
 		...settings.protectedBranches.flatMap((pattern) => ['--protect', pattern]),
 		...(settings.autoFetchPrune ? [] : ['--no-fetch']),
 		...(settings.confirmBeforeDelete ? [] : ['--no-confirm']),
-		...(settings.includeMergedBranches ? ['--merged'] : []),
 	];
 }
 
-export const USAGE = `Usage: gsp [command] [options]
-
-Safely prune local branches whose remote upstream is gone.
-Also available as "git-sweep-pro" and "git sweep-pro".
-
-Commands:
-  sweep              Detect stale branches, pick, confirm and delete them
-                     (default); also prunes the worktree registrations whose
-                     directory is gone and removes the worktree of a stale
-                     branch it deletes
-  list               Print stale (and, with --merged, merged) branches without
-                     deleting anything
-  worktree list      List every worktree with its branch and state (main,
-                     linked, locked, prunable)
-  worktree prune     Forget the worktree registrations whose directory is gone
-                     (never touches an existing worktree)
-  worktree remove <path|branch>
-                     Remove one linked worktree, refusing the main one.
-                     --force removes a dirty worktree; unlock a locked one
-                     first with "git worktree unlock <path>"
-  post-pr [branch]   After a merged PR: switch to [branch], delete the old branch,
-                     sweep, then pull
-  sync [upstream]    Rebase the current branch onto [upstream] and force-push
-                     with --force-with-lease (stashes local changes)
-  resume             Continue a sync paused on conflicts (alias: sync --continue)
-  restore [branch...]
-                     Recreate branches deleted by gsp at their last
-                     commit; without arguments, pick among recent deletions
-  agents [file...]   Tell coding agents to use gsp: add a short note to AGENTS.md
-                     (Codex, Cursor, GitHub Copilot, OpenCode) and/or CLAUDE.md
-                     (Claude Code); without arguments, pick the files
-  help, version
-
-Options:
-  -n, --dry-run      Only report what would be deleted or pruned
-  -f, --force        Delete with "git branch -D" instead of "-d" (for
-                     "worktree remove", pass --force to "git worktree remove")
-  -m, --merged       Also offer local branches already merged into the default
-                     branch, even squash-merged ones; never pre-selected
-  -y, --yes          Accept pre-selected branches and confirm every prompt
-                     (including the force-delete fallback for unmerged branches)
-      --non-interactive
-                     Never prompt, even in a terminal; use safe defaults and
-                     refuse confirmations unless --yes is given
-  -p, --protect <glob>
-                     Never delete branches matching <glob> (repeatable; also read
-                     from "git config --get-all git-sweep-pro.protected")
-      --no-fetch     Skip "git fetch -p" and use local ref state
-      --no-confirm   Do not ask before deleting
-      --json         JSON output without terminal widgets (list, worktree list,
-                     or restore without branch arguments); diagnostics go to
-                     stderr
-  -C <path>          Run as if started in <path>
-  -v, --verbose      Echo every git command and its output
-  -h, --help         Show this help
-
-Without a terminal (scripts, coding agents), prompts take their defaults and
-confirmations are refused unless --yes is given:
-  gsp list --json           See what a sweep would offer, without deleting
-  gsp worktree list --json  See every worktree and its state
-  gsp worktree prune        Forget registrations whose directory is gone
-  gsp --non-interactive --yes
-                            Run without terminal widgets, including in a PTY
-  gsp --yes                 Delete the pre-selected stale branches (never the
-                            merged ones or those checked out in a worktree)
-  gsp post-pr main --yes    After a merged PR: switch to main, clean up, pull
-  gsp sync origin/main      Rebase onto origin/main, then force-push with a lease
-  gsp restore <branch>      Undo a deletion
-
-Exit codes: 0 done (or nothing to do), 1 failed, 2 invalid arguments,
-3 sync paused on conflicts (resolve them, then run "gsp resume"),
-4 cancelled when --non-interactive is given (otherwise cancellation exits 0).`;

@@ -160,8 +160,8 @@ suite('E2E (multi-root): sweep targets the selected repository', () => {
 			...rest: unknown[]
 		) => {
 			const items = rest.filter((r): r is string => typeof r === 'string');
-			if (items.includes('Delete (safe -d)')) {
-				return Promise.resolve('Delete (safe -d)');
+			if (items.includes('Delete Proven Branches')) {
+				return Promise.resolve('Delete Proven Branches');
 			}
 			infoMessages.push(message);
 			return Promise.resolve(undefined);
@@ -211,7 +211,7 @@ suite('E2E (multi-root): sweep targets the selected repository', () => {
 			'the unselected repository (repoA) must be left untouched'
 		);
 		assert.ok(
-			infoMessages.some((m) => m.includes('Deleted 1 branch')),
+			infoMessages.some((m) => m.includes('1 deleted')),
 			`expected a deletion confirmation; got ${JSON.stringify(infoMessages)}`
 		);
 		assert.deepStrictEqual(errorMessages, [], 'no error messages expected');

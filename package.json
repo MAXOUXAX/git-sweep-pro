@@ -1,7 +1,7 @@
 {
   "name": "git-sweep-pro",
   "displayName": "Git Sweep Pro",
-  "description": "Safely prune the local Git branches whose remote branch is gone, from VS Code or the gsp command line, for you and your coding agents. Dry runs, protected branches, undo.",
+  "description": "Delete the local Git branches whose work is already merged or pushed, and their worktrees, from VS Code or the gsp command line, for you and your coding agents. Read-only plans, protected branches, undo.",
   "repository": {
     "url": "git+https://github.com/MAXOUXAX/git-sweep-pro",
     "type": "git"
@@ -110,11 +110,11 @@
           ],
           "enumDescriptions": [
             "Only report the branches that would be deleted.",
-            "Delete branches with git branch -d (refuses unmerged branches).",
-            "Delete branches with git branch -D (force, even if unmerged)."
+            "Offer the branches whose work is proven merged or pushed, all pre-selected.",
+            "Also offer the branches whose commits are found nowhere else, never pre-selected."
           ],
           "default": "safeDelete",
-          "description": "Default execution mode presented first in the Run command's mode picker."
+          "description": "The mode offered first by the Run command: Dry Run, Delete Proven Branches, or Also Offer Branches with Unpushed Work."
         },
         "gitSweepPro.protectedBranches": {
           "type": "array",
@@ -137,7 +137,8 @@
         "gitSweepPro.includeMergedBranches": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Also offer local branches whose work is already in the remote default branch (merged, rebase-merged or squash-merged) even though their upstream is not gone — e.g. branches that were never pushed or whose remote branch was kept. They are listed but never pre-selected."
+          "markdownDescription": "Also offer local branches whose work is already in the remote default branch (merged, rebase-merged or squash-merged) even though their upstream is not gone — e.g. branches that were never pushed or whose remote branch was kept. They are listed but never pre-selected.",
+          "markdownDeprecationMessage": "Merged branches are always offered now, and pre-selected when their work is proven merged. This setting does nothing."
         },
         "gitSweepPro.cli.addToTerminalPath": {
           "type": "boolean",
