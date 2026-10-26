@@ -81,11 +81,11 @@ suite('Extension Test Suite', () => {
 	});
 
 	test('resolveSweepModeAction maps safe delete action', () => {
-		assert.strictEqual(resolveSweepModeAction('Delete (safe -d)'), 'safeDelete');
+		assert.strictEqual(resolveSweepModeAction('Delete Proven Branches'), 'safeDelete');
 	});
 
 	test('resolveSweepModeAction maps force delete action', () => {
-		assert.strictEqual(resolveSweepModeAction('Delete (force -D)'), 'forceDelete');
+		assert.strictEqual(resolveSweepModeAction('Also Offer Branches with Unpushed Work'), 'forceDelete');
 	});
 
 	test('resolveSweepModeAction returns undefined for cancel/unknown values', () => {
@@ -95,24 +95,24 @@ suite('Extension Test Suite', () => {
 
 	test('resolveSweepModeAction is strict about exact labels', () => {
 		assert.strictEqual(resolveSweepModeAction('dry run'), undefined);
-		assert.strictEqual(resolveSweepModeAction(' Delete (safe -d) '), undefined);
+		assert.strictEqual(resolveSweepModeAction(' Delete Proven Branches '), undefined);
 	});
 
 	test('orderModeActions puts the configured default first', () => {
 		assert.deepStrictEqual(orderModeActions('safeDelete'), [
-			'Delete (safe -d)',
-			'Delete (force -D)',
+			'Delete Proven Branches',
+			'Also Offer Branches with Unpushed Work',
 			'Dry Run',
 		]);
 		assert.deepStrictEqual(orderModeActions('forceDelete'), [
-			'Delete (force -D)',
-			'Delete (safe -d)',
+			'Also Offer Branches with Unpushed Work',
+			'Delete Proven Branches',
 			'Dry Run',
 		]);
 		assert.deepStrictEqual(orderModeActions('dryRun'), [
 			'Dry Run',
-			'Delete (safe -d)',
-			'Delete (force -D)',
+			'Delete Proven Branches',
+			'Also Offer Branches with Unpushed Work',
 		]);
 	});
 

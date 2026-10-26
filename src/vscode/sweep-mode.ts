@@ -2,8 +2,8 @@ import type { SweepMode } from '../core/sweep-logic';
 
 const MODE_ACTION_LABELS: Record<SweepMode, string> = {
 	dryRun: 'Dry Run',
-	safeDelete: 'Delete (safe -d)',
-	forceDelete: 'Delete (force -D)',
+	safeDelete: 'Delete Proven Branches',
+	forceDelete: 'Also Offer Branches with Unpushed Work',
 };
 
 /**

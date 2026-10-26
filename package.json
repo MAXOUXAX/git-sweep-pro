@@ -110,11 +110,11 @@
           ],
           "enumDescriptions": [
             "Only report the branches that would be deleted.",
-            "Delete the branches whose work is proven merged or pushed.",
-            "Also offer the branches whose commits are found nowhere else."
+            "Offer the branches whose work is proven merged or pushed, all pre-selected.",
+            "Also offer the branches whose commits are found nowhere else, never pre-selected."
           ],
           "default": "safeDelete",
-          "description": "Default execution mode presented first in the Run command's mode picker."
+          "description": "The mode offered first by the Run command: Dry Run, Delete Proven Branches, or Also Offer Branches with Unpushed Work."
         },
         "gitSweepPro.protectedBranches": {
           "type": "array",

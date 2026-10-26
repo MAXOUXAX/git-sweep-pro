@@ -217,8 +217,8 @@ suite('E2E: sweep against a real git repository', () => {
 			...rest: unknown[]
 		) => {
 			const items = rest.filter((r): r is string => typeof r === 'string');
-			if (items.includes('Delete (safe -d)')) {
-				return Promise.resolve('Delete (safe -d)');
+			if (items.includes('Delete Proven Branches')) {
+				return Promise.resolve('Delete Proven Branches');
 			}
 			infoMessages.push(message);
 			return Promise.resolve(undefined);
