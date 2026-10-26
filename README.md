@@ -41,11 +41,13 @@ gsp restore feature/x   # undo: recreate a deleted branch at its last commit
 
 ### Plan, then apply
 
-Without a terminal, `gsp clean` prints the plan and changes nothing unless you pass `--yes`. In a terminal, it shows a picker with every planned deletion selected; branches that need `--force` are listed but not selected. `--dry-run` always plans only.
+Without a terminal, `gsp clean` prints the plan and changes nothing unless you pass `--yes`; it ends with the command that applies exactly that plan. In a terminal, it shows a picker with every planned deletion selected; with `--force`, branches that need it are listed too, never selected. `--dry-run` always plans only.
 
 Planning is read-only: no fetch, no prune, no change to refs, objects, config or worktrees. To find the branches deleted on the remote, it reads `git ls-remote --heads`. With `--no-fetch`, or when the remote cannot be reached, it uses the local remote-tracking refs, and the JSON says so in `checks.remote`.
 
-Applying runs `git fetch --prune` first (skipped with `--no-fetch`), forgets worktree registrations whose directory is gone, analyses the branches again, then deletes.
+The plan is made first, read-only, even when applying. Once you approve it (picker and confirmation, or `--yes`), `gsp clean` runs `git fetch --prune` (skipped with `--no-fetch`), analyses the branches again, and deletes only the approved branches that are still proven: a branch whose state changed is skipped with `plan-changed`, and one whose worktree changed with `worktree-changed`. Then it forgets the worktree registrations whose directory is gone. Cancelling the picker changes nothing.
+
+If the fetch fails, a branch proven only by its gone upstream is skipped with `fetch-failed`: the local remote-tracking refs may be out of date.
 
 ### What gets deleted
 
@@ -57,17 +59,24 @@ Applying runs `git fetch --prune` first (skipped with `--no-fetch`), forgets wor
 - its tip is the head of a merged pull request (GitHub, through `gh`, when it is signed in; `--no-github` turns it off);
 - its upstream is gone and every commit is on a remote.
 
-A branch with commits found nowhere else is skipped with `needs-force`. Only `--force` deletes it, and only `--force` on a branch you name deletes a branch whose work is not merged. A glob never forces.
+A branch with commits found nowhere else is skipped with `needs-force`. Only `--force` deletes it, and only `--force` on a branch you name deletes a branch whose work is not merged. A glob never turns an unmerged branch into a candidate.
 
 Whatever the flags, `gsp clean` never deletes:
 
 - the default branch, or a protected branch (`--protect 'release/*'`, `git config --add git-sweep-pro.protected 'release/*'`, or the `gitSweepPro.protectedBranches` setting);
 - a branch with `branch.<name>.deleteMerged` set to `false`;
+- a branch being rebased or bisected, in any worktree;
 - the current branch, or a branch checked out in the main worktree;
 - a branch checked out in a worktree that is locked or has uncommitted changes;
 - a branch that another kept local branch uses as its upstream.
 
-A dead branch checked out in a clean, unlocked linked worktree is deleted with its worktree (`git worktree remove`, never `--force`). Each skipped branch comes with a hint: the exact command that resolves it.
+A dead branch checked out in a clean, unlocked linked worktree is deleted with its worktree (`git worktree remove`, never `--force`). Each skipped branch comes with a hint: the exact command that resolves it. A hint never suggests losing work first: for uncommitted changes, it stashes them.
+
+Removing a worktree deletes its ignored files, and `gsp restore` cannot bring them back. A worktree holding ignored files is skipped with `ignored-files`, and the plan lists them, unless they are all in folders that a build or an install recreates. Only `--force` removes it anyway. These folders are regenerable, at any depth:
+
+`node_modules`, `.pnpm-store`, `vendor/bundle`, `dist`, `build`, `out`, `.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.cache`, `.parcel-cache`, `.vite`, `coverage`, `target`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.venv`, `venv`, `.gradle`, `.dart_tool`, `DerivedData`
+
+and so are `*.tsbuildinfo` and `.DS_Store` files.
 
 Every deletion is recorded: `gsp restore <branch>` recreates any of the last 100 deleted branches, tracking its upstream again if it still exists, until Git garbage-collects its commits (two weeks by default).
 
@@ -76,7 +85,7 @@ Every deletion is recorded: `gsp restore <branch>` recreates any of the last 100
 One line per branch, then one summary line:
 
 ```text
-deleted feature/empty   no commits beyond origin/main
+deleted feature/empty   already in origin/main
 deleted feature/squash  squash-merged into origin/main, removed worktree /work/wt-squash
 skip    feature/gone    needs --force (upstream origin/feature/gone is gone, 2 commits found nowhere else) → gsp clean feature/gone --yes --force
 keep    feature/wip     1 commit not merged into origin/main
@@ -93,7 +102,7 @@ keep    main            default branch
 | 2 | Invalid arguments, or a branch that does not exist |
 | 3 | Sync paused on conflicts. Resolve them, stage the files, then run `gsp resume` |
 | 4 | Cancelled at a prompt |
-| 5 | Deletions planned but not applied: no `--yes`, `--dry-run`, or `--force` missing. Nothing was changed by those |
+| 5 | `clean`: some planned deletions were not applied (no `--yes`, or `--force` needed); the output says what was done. `sync`, `agents`, `restore`, `post-pr`: a confirmation was needed but nobody could answer; rerun with `--yes` |
 
 ## With coding agents
 
@@ -118,7 +127,7 @@ gsp restore feature/x --non-interactive
 
 ### JSON
 
-`--json` works with `clean` (and `sweep`, `list`), `worktree list` and `restore` without branch names. It writes one JSON document to stdout; progress and warnings go to stderr.
+`--json` works with `clean` (and `sweep`, `list`), `worktree list` and `restore` without branch names. It writes one JSON document to stdout; progress and warnings go to stderr. A fatal error is still one document, `{ "schema": 2, "error": { "message": "…", "code": "…" } }`, with `code` one of `usage`, `no-such-directory`, `unknown-branch`, `not-a-repository` or `failed`.
 
 `gsp clean --json` writes a versioned document (`schema` is 2):
 
@@ -145,7 +154,7 @@ gsp restore feature/x --non-interactive
       "unpushedCommits": 0,
       "upstream": "origin/feature/squash",
       "upstreamState": "gone",
-      "worktree": { "path": "/work/wt-squash", "isMain": false, "dirty": false, "locked": false, "prunable": false },
+      "worktree": { "path": "/work/wt-squash", "isMain": false, "dirty": false, "locked": false, "prunable": false, "inProgress": null, "ignoredFiles": { "count": 0, "sample": [] } },
       "needsForce": false,
       "hint": "gsp clean feature/squash --yes"
     }
@@ -161,9 +170,10 @@ gsp restore feature/x --non-interactive
 | `mode` | `plan` (nothing changed) or `apply` |
 | `checks.remote.source` | `fetch` (apply), `ls-remote` (plan), or `local-refs` with a `reason`: `no-fetch`, `no-remote` or `unreachable` |
 | `branches[].action` | `delete`, `keep` (its work exists nowhere else) or `skip` (a rule or a missing flag stops it) |
-| `branches[].reason` | For `skip`: `protected`, `delete-merged-false`, `current-branch`, `main-worktree`, `locked-worktree`, `dirty-worktree`, `needs-force`, `tracked-by-kept-branch`, `not-selected`. Otherwise the same as `verdictReason` |
-| `branches[].verdictReason` | Dead: `empty`, `merged`, `rebase-merged`, `squash-merged`, `pr-merged`, `commits-merged`, `upstream-gone`. Alive: `default-branch`, `open-pr`, `unmerged-commits`, `no-base` |
-| `branches[].hint` | The command that resolves a skip or applies a planned deletion; `null` when there is nothing to do, and for protected branches |
+| `branches[].reason` | For `skip`: `protected`, `delete-merged-false`, `rebase-in-progress`, `bisect-in-progress`, `current-branch`, `main-worktree`, `locked-worktree`, `dirty-worktree`, `ignored-files`, `needs-force`, `tracked-by-kept-branch`, `not-selected`, and while applying `plan-changed`, `fetch-failed`, `worktree-changed`. Otherwise the same as `verdictReason` |
+| `branches[].verdictReason` | Dead: `empty`, `merged`, `rebase-merged`, `squash-merged`, `pr-merged`, `commits-merged`, `upstream-gone`. Alive: `default-branch`, `open-pr`, `unmerged-commits`, `no-base`, `analysis-failed` (`evidence` is `{ "method": "error", "message" }`) |
+| `branches[].worktree` | `null`, or `path`, `isMain`, `dirty`, `locked`, `prunable`, `inProgress` (`rebase`, `bisect` or `null`) and `ignoredFiles`: `{ count, sample }` for the ignored files removing it would delete (at most 10 in `sample`; a trailing `/` is a whole folder), or `null` when they were not looked for |
+| `branches[].hint` | The command that resolves a skip or applies a planned deletion; `null` when there is nothing to do, and for `protected` and `delete-merged-false` |
 | `branches[].result` | Apply mode, deleted branches only: `deleted`, `worktree-removed` (the worktree went, the branch did not: see `error`) or `failed` (nothing changed: see `error`) |
 | `worktreesPruned` | Registrations whose directory is gone: pruned (apply) or to prune (plan) |
 | `restore` | `gsp restore <names>` for the branches deleted by this run, or `null` |
