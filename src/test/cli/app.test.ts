@@ -401,10 +401,12 @@ suite('cli app (real git)', function () {
 			assert.ok(io.out.join('').includes(`→ git worktree unlock ${fs.realpathSync(locked)}`));
 		});
 
-		test('a worktree with uncommitted changes is kept, and so is its branch', async () => {
+		test('a worktree with uncommitted changes is kept, and so is its branch, even when status hides untracked files', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');
 			fs.writeFileSync(path.join(wt, 'wip.txt'), 'work in progress\n');
+			// Hidden from git status, but still lost with the worktree.
+			git(['config', 'status.showUntrackedFiles', 'no'], fx.repo);
 
 			const io = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['--yes'], io), EXIT.ok);
@@ -685,6 +687,8 @@ suite('cli app (real git)', function () {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');
 			fs.writeFileSync(path.join(wt, 'wip.txt'), 'work in progress\n');
+			// Hidden from git status, but still lost with the worktree.
+			git(['config', 'status.showUntrackedFiles', 'no'], fx.repo);
 
 			const refused = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt'], refused), EXIT.failed);

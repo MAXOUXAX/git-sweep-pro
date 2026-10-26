@@ -51,6 +51,8 @@ suite('clean workflow (real git)', function () {
 		makeGoneBranch(fx.repo, 'feature/wt');
 		const wt = path.join(fx.dir, 'wt');
 		git(['worktree', 'add', '-q', wt, 'feature/wt'], fx.repo);
+		// The new file is untracked: it must count even when status hides untracked files.
+		git(['config', 'status.showUntrackedFiles', 'no'], fx.repo);
 
 		// The last check before deleting reads the branch tip: someone starts working in the worktree meanwhile.
 		const { context } = contextFor({

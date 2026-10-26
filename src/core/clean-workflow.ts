@@ -219,7 +219,7 @@ async function worktreeUnchanged(git: RunGit, branch: CleanBranch, path: string 
 	if (holders.length !== 1 || holders[0].path !== path || holders[0].state !== 'linked') {
 		return false;
 	}
-	const status = await git(['-C', path, '--no-optional-locks', 'status', '--porcelain']);
+	const status = await git(['-C', path, '--no-optional-locks', 'status', '--porcelain', '--untracked-files=normal']);
 	if (status.stdout.trim()) {
 		return false;
 	}
