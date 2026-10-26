@@ -29,7 +29,7 @@ gsp clean --json        # the plan as JSON, for scripts and agents
 gsp worktree list       # every worktree, its branch and its state
 gsp worktree prune      # forget worktree registrations whose directory is gone
 gsp worktree remove <path|branch>   # remove one linked worktree
-gsp post-pr main        # after a merged PR: switch to main, delete the old branch, clean, pull
+gsp post-pr --yes       # after a merged PR: delete its branch and worktree, update main, clean
 gsp sync origin/main    # rebase onto origin/main, then force-push with a lease
 gsp resume              # continue a sync after resolving its conflicts
 gsp restore feature/x   # undo: recreate a deleted branch at its last commit
@@ -84,6 +84,32 @@ keep    main            default branch
 2 deleted (1 empty, 1 squash-merged) · 1 skipped (1 needs --force) · restore with gsp restore feature/empty feature/squash
 ```
 
+### After a merged pull request
+
+`gsp post-pr` finishes a merged pull request: it deletes the branch and the linked worktree it is checked out in, fast-forwards the default branch, then cleans the other merged branches as `gsp clean --yes` would. It plans first and needs `--yes` without a terminal, like `gsp clean`.
+
+```sh
+gsp post-pr --yes                 # from the branch's worktree, or the main checkout on that branch
+gsp post-pr feature/x --yes       # from anywhere else
+gsp post-pr --dry-run             # preview, change nothing
+```
+
+- The branch is deleted only when its work is proven to be in the default branch, with the same rules as `gsp clean`. Otherwise nothing changes on it, gsp says why (for example `1 commit not merged into origin/main`) and exits with 5. `--force` deletes it anyway, unless it is protected.
+- Run from the branch's own linked worktree, gsp removes that worktree, carries on from the main checkout and ends with `cd <main checkout>`.
+- When the branch is checked out in the main checkout, gsp switches that checkout to the default branch first, and refuses when it has uncommitted changes.
+- The default branch is fast-forwarded with `git merge --ff-only` where it is checked out, when that worktree is clean, or moved as a ref when it is checked out nowhere. A dirty checkout is reported, never an error.
+- `--into <branch>` names the branch the pull request was merged into, when it is not the default branch.
+
+```text
+deleted feature/x  squash-merged into origin/main, removed worktree /work/wt-x
+main: fast-forwarded to origin/main (0e61ced..fcd9e89) in /work/repo
+Other branches: nothing to clean.
+Undo with: gsp restore feature/x
+The worktree you ran gsp in was removed. Continue in the main checkout: cd /work/repo
+```
+
+`gsp post-pr main`, the old form naming the branch to switch to, still works and prints a deprecation note.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -93,7 +119,7 @@ keep    main            default branch
 | 2 | Invalid arguments, or a branch that does not exist |
 | 3 | Sync paused on conflicts. Resolve them, stage the files, then run `gsp resume` |
 | 4 | Cancelled at a prompt |
-| 5 | Deletions planned but not applied: no `--yes`, `--dry-run`, or `--force` missing. Nothing was changed by those |
+| 5 | Deletions planned but not applied: no `--yes`, `--dry-run`, or `--force` missing. Nothing was changed by those. For `post-pr`: also when the merged branch was not deleted |
 
 ## With coding agents
 
@@ -110,6 +136,7 @@ Agents read the plan, then apply it when authorized:
 ```sh
 gsp clean --json                  # the plan; exit code 5 when there is something to delete
 gsp clean --json --yes            # apply it; the result, with a restore command
+gsp post-pr --json --yes          # after merging a pull request; "nextCwd" says where to cd
 gsp restore --json                # list recoverable deletions
 gsp restore feature/x --non-interactive
 ```
@@ -118,7 +145,7 @@ gsp restore feature/x --non-interactive
 
 ### JSON
 
-`--json` works with `clean` (and `sweep`, `list`), `worktree list` and `restore` without branch names. It writes one JSON document to stdout; progress and warnings go to stderr.
+`--json` works with `clean` (and `sweep`, `list`), `post-pr`, `worktree list` and `restore` without branch names. It writes one JSON document to stdout; progress and warnings go to stderr.
 
 `gsp clean --json` writes a versioned document (`schema` is 2):
 
@@ -175,7 +202,18 @@ Other JSON outputs:
 | `gsp worktree list --json` | Array of worktrees, each with `path`, `branch` (`null` when detached) and `state` (`main`, `linked`, `prunable` or `locked`) |
 | `gsp restore --json` | Array of recoverable deletion records, including `branch`, `sha`, `deletedAt` and `source` |
 
-`sync` rebases and force-pushes with a lease. `post-pr` switches branches, deletes the old branch, cleans and pulls. Agents should run these commands only when authorized.
+`gsp post-pr --json` writes the same `schema` 2, with `"command": "post-pr"`:
+
+| Field | Value |
+| --- | --- |
+| `branch` | The merged branch, as an entry of `branches` above, or `null` when there is none to finish (run on the default branch) |
+| `worktree` | `path` where the branch was checked out (or `null`), `removed` (its linked worktree went with it), `switched` (it was the main checkout, switched to the default branch) |
+| `defaultBranch` | `name`, `from` and `to` (tips before and of the remote branch), `upstream`, `where` (the worktree fast-forwarded, or `null` when only the ref moves), `updated`, and `reason` when not updated: `up-to-date`, `not-applied` (plan), `no-remote`, `not-local`, `dirty`, `diverged` or `failed`, with a `hint`. `remoteAhead` (plan): the remote has commits not fetched yet, so the plan may change |
+| `clean` | The clean step that follows, as the `gsp clean --json` document, without the merged branch |
+| `nextCwd` | The main checkout, when the worktree gsp ran in was removed; otherwise `null` |
+| `restore` | `gsp restore <names>` for every branch this run deleted, or `null` |
+
+`sync` rebases and force-pushes with a lease. Agents should run it only when authorized.
 
 ## In VS Code
 
