@@ -557,4 +557,26 @@ suite('cli post-pr (real git)', function () {
 		assert.ok(fs.existsSync(wt));
 		assert.ok(branchExists(fx.repo, 'feature/x'));
 	});
+
+	test('in a terminal, a branch only the fetch proves merged is not deleted without being asked', async () => {
+		const wt = addFeatureWorktree('feature/x');
+		makeGoneBranch(fx.repo, 'feature/old');
+
+		const fake = createFakePrompter({ confirm: true });
+		// The question is about feature/old only; the pull request is merged while it waits for an answer.
+		const prompter = {
+			...fake.prompter,
+			confirm: async (message: string, label: string) => {
+				squashMergeOnRemote('feature/x');
+				return fake.prompter.confirm(message, label);
+			},
+		};
+		const io = { ...createFakeIo(wt, { interactive: true }), loadPrompter: async () => prompter };
+		assert.strictEqual(await runCli(['post-pr', '--no-github'], io), EXIT.notApplied, io.err.join(''));
+		assert.ok(fake.calls.includes('confirm Finish'), fake.calls.join('\n'));
+		assert.ok(fake.calls.some((call) => call.includes('feature/x  changed since the plan was made')), fake.calls.join('\n'));
+		assert.ok(fs.existsSync(wt));
+		assert.ok(branchExists(fx.repo, 'feature/x'));
+		assert.ok(!branchExists(fx.repo, 'feature/old'));
+	});
 });

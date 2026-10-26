@@ -516,10 +516,15 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	// branch is decided again after the fetch: its worktree is checked against the ignored files only.
 	const shown = { branches: others, ignored: [plannedIgnored, fetchedIgnored] };
 	others = holdToPlan(others, decideOthers(refreshed.planned), remote, !options.yes);
-	const fresh = await decide(analysed, false);
-	target = fresh && holdToPlan([fresh], [fresh], remote)[0];
-	// Every proof compares with the default branch: when the fetch changed it, nothing is deleted.
 	const review = postPrCommand(scope, targetName ?? noLocal, '--dry-run');
+	const fresh = await decide(analysed, false);
+	// Asked in a terminal, it is deleted only when the question named it: one the fetch alone proves is planned again.
+	const approved = target && finishing ? [{ ...target, action: 'delete' as const }] : [];
+	target = fresh && holdToPlan(approved, [fresh], remote, !options.yes)[0];
+	if (target?.reason === 'plan-changed') {
+		target = { ...target, hint: review };
+	}
+	// Every proof compares with the default branch: when the fetch changed it, nothing is deleted.
 	const held = holdToBase([...(target ? [target] : []), ...others], base, analysis.checks.base, review);
 	[target, others] = target ? [held.branches[0], held.branches.slice(1)] : [null, held.branches];
 	if (held.message) {
