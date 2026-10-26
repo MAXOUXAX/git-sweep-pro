@@ -177,6 +177,17 @@ suite('post-pr plan', () => {
 		assert.ok(!hasPendingChanges(report({ mode: 'plan' })));
 	});
 
+	test('a plan gives a next command exactly when applying it would change something, and then exits 5', () => {
+		const remoteAhead = report({ mode: 'plan', defaultBranch: update({ updated: false, reason: 'up-to-date', remoteAhead: true }) });
+		assert.strictEqual(postPrNextCommand(remoteAhead, { protectedPatterns: [], github: true, fetch: true }), 'gsp post-pr --yes');
+		assert.ok(hasPendingChanges(remoteAhead));
+		// A kept merged branch is not finished: 5, though only its own hint can lift it.
+		const alive = branch({ verdict: 'alive', reason: 'unmerged-commits', evidence: { method: 'unique-commits', base: BASE, commits: 2 } });
+		const kept = report({ mode: 'plan', branch: decideTarget(alive, OPTIONS) });
+		assert.strictEqual(postPrNextCommand(kept, { protectedPatterns: [], github: true, fetch: true }), null);
+		assert.ok(hasPendingChanges(kept));
+	});
+
 	test('the next command keeps the options of the run, and plans again what changed while applying', () => {
 		const scope: PostPrScope = { cwd: '/my repo', into: 'develop', protectedPatterns: ['release/*'], github: false, fetch: false };
 		const planned = report({ mode: 'plan', branch: decideTarget(branch(), OPTIONS) });

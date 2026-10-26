@@ -157,11 +157,27 @@ export function formatDefaultBranch(update: DefaultBranchUpdate): string | undef
 	}
 }
 
-/** True when the report holds changes that were planned but not carried out. */
+/** Plan mode: whether applying the plan would change something. */
+function wouldChange(report: PostPrReport): boolean {
+	const target = isGone(report.branch) ? null : report.branch;
+	return (
+		target?.action === 'delete' ||
+		report.defaultBranch.reason === 'not-applied' ||
+		// Fetching updates the default branch, and may prove the merged branch.
+		report.defaultBranch.remoteAhead ||
+		report.clean.branches.some((branch) => branch.action === 'delete' && branch.result === undefined)
+	);
+}
+
+/**
+ * True when the report holds changes that were planned but not carried out:
+ * whatever applying the plan would change (then `next` says how), the merged
+ * branch kept, or other branches that need `--force`.
+ */
 export function hasPendingChanges(report: PostPrReport): boolean {
 	return (
+		(report.mode === 'plan' && wouldChange(report)) ||
 		(report.branch !== null && !isGone(report.branch) && report.branch.result !== 'deleted') ||
-		report.defaultBranch.reason === 'not-applied' ||
 		report.clean.branches.some((branch) => (branch.action === 'delete' && branch.result === undefined) || branch.reason === 'needs-force')
 	);
 }
@@ -238,12 +254,7 @@ export function postPrNextCommand(report: PostPrReport, scope: PostPrScope): str
 			...flags
 		);
 	if (report.mode === 'plan') {
-		const applies =
-			target?.action === 'delete' ||
-			report.defaultBranch.reason === 'not-applied' ||
-			report.defaultBranch.remoteAhead ||
-			report.clean.branches.some((branch) => branch.action === 'delete' && branch.result === undefined);
-		return applies ? rerun('--yes', ...(target?.action === 'delete' && target.needsForce ? ['--force'] : [])) : null;
+		return wouldChange(report) ? rerun('--yes', ...(target?.action === 'delete' && target.needsForce ? ['--force'] : [])) : null;
 	}
 	return heldBack(report) > 0 ? rerun('--dry-run') : null;
 }
