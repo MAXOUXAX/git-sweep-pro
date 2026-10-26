@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { COPY_COMMAND, OPEN_MAIN_CHECKOUT, SHOW_OUTPUT, UNDO } from '../../vscode/command-ui';
-import { describePostPrResult, postPrPreview, runPostPrCommand } from '../../vscode/post-pr-command';
+import { cleanArgs, describePostPrResult, postPrPreview, runPostPrCommand } from '../../vscode/post-pr-command';
 import { branch, cleanDocument, createFakeClient, createFakeUi, deps, ok, postPrDocument } from './fakes';
 
 const wtWorktree = { path: '/work/wt-x', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false };
@@ -27,7 +27,7 @@ suite('Finish Merged Pull Request command', () => {
 
 		await runPostPrCommand(deps(client, fake.ui, ['/work/wt-x']), '/work/wt-x');
 
-		assert.deepStrictEqual(calls.map((call) => call.args), [['post-pr', '--dry-run'], ['post-pr', '--yes', 'feature/x']]);
+		assert.deepStrictEqual(calls.map((call) => call.args), [['post-pr', '--dry-run'], ['post-pr', '--yes', 'feature/x', '--clean', 'feature/old']]);
 		assert.deepStrictEqual(fake.confirms, [
 			{
 				message: 'Finish feature/x?',
@@ -35,7 +35,7 @@ suite('Finish Merged Pull Request command', () => {
 					'Deletes feature/x: squash-merged into origin/main.',
 					'Removes its worktree /work/wt-x.',
 					'Updates main to origin/main.',
-					'Also deletes 1 other merged branch: feature/old, and any other branch proven merged after fetching.',
+					'Also deletes 1 other merged branch: feature/old.',
 					'This window has that worktree open. You can open the main checkout afterwards.',
 				].join('\n'),
 				confirmLabel: 'Finish',
@@ -86,13 +86,13 @@ suite('Finish Merged Pull Request command', () => {
 					'origin/main has new commits. Finishing fetches them first, and deletes feature/x only if they prove it merged.',
 					'If they do, it also removes its worktree /work/wt-x.',
 					'Updates main too.',
-					'Also deletes 1 other merged branch: feature/old, and any other branch proven merged after fetching.',
+					'Also deletes 1 other merged branch: feature/old.',
 					'This window has that worktree open. If it is removed, you can open the main checkout afterwards.',
 				].join('\n'),
 				confirmLabel: 'Fetch and finish',
 			},
 		]);
-		assert.deepStrictEqual(calls[1].args, ['post-pr', '--yes', 'feature/x']);
+		assert.deepStrictEqual(calls[1].args, ['post-pr', '--yes', 'feature/x', '--clean', 'feature/old']);
 		assert.deepStrictEqual(fake.notices, [
 			{ kind: 'info', message: 'Finished feature/x: deleted it and its worktree. Updated main. Also deleted 1 other merged branch.', actions: [OPEN_MAIN_CHECKOUT, UNDO] },
 		]);
@@ -122,7 +122,7 @@ suite('Finish Merged Pull Request command', () => {
 		assert.deepStrictEqual(fake.notices, [{ kind: 'warning', message: 'feature/x is not finished: its worktree has uncommitted changes.', actions: [COPY_COMMAND] }]);
 	});
 
-	test('the preview lists at most eight other branches; without a fetch, it promises none', () => {
+	test('the preview lists at most eight other branches', () => {
 		const many = cleanDocument(Array.from({ length: 10 }, (_, i) => branch({ name: `b${i}` })), { checks: { ...cleanDocument([]).checks, remote: { source: 'local-refs', reason: 'no-fetch' } } });
 		const preview = postPrPreview(postPrDocument({ clean: many }), false);
 		assert.strictEqual(preview?.detail, 'Also deletes 10 other merged branches: b0, b1, b2, b3, b4, b5, b6, b7 and 2 more.');
@@ -137,9 +137,14 @@ suite('Finish Merged Pull Request command', () => {
 		const preview = postPrPreview(postPrDocument({ clean: cleanDocument([branch({ name: 'a' })]) }), false);
 		assert.deepStrictEqual(preview, {
 			message: 'Update main and clean merged branches?',
-			detail: 'Also deletes 1 other merged branch: a, and any other branch proven merged after fetching.',
+			detail: 'Also deletes 1 other merged branch: a.',
 			confirmLabel: 'Update and clean',
 		});
+	});
+
+	test('applying deletes only the other branches the preview listed, none when it listed none', () => {
+		assert.deepStrictEqual(cleanArgs(postPrDocument({ clean: cleanDocument([branch({ name: 'a' }), branch({ name: 'b', action: 'skip', reason: 'needs-force' })]) })), ['--clean', 'a']);
+		assert.deepStrictEqual(cleanArgs(postPrDocument({ branch: merged })), ['--no-clean']);
 	});
 
 	test('a declined preview changes nothing; a failure shows the output', async () => {
@@ -163,7 +168,7 @@ suite('Finish Merged Pull Request command', () => {
 		const switched = postPrPreview(postPrDocument({ branch: merged, worktree: { path: '/repo', removed: false, switched: true } }), false);
 		assert.strictEqual(
 			switched?.detail,
-			'Deletes feature/x: squash-merged into origin/main.\nSwitches the main checkout to main first.\nAlso deletes any other branch proven merged after fetching.'
+			'Deletes feature/x: squash-merged into origin/main.\nSwitches the main checkout to main first.'
 		);
 		const dirty = describePostPrResult(postPrDocument({ mode: 'apply', branch: { ...merged, result: 'deleted' }, defaultBranch: { ...plan.defaultBranch, reason: 'dirty', where: '/repo' } }));
 		assert.strictEqual(dirty, 'Finished feature/x: deleted it. main was not updated: its checkout has uncommitted changes.');
