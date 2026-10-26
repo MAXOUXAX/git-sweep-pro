@@ -453,6 +453,42 @@ suite('cli app (real git)', function () {
 			assert.ok(!branchExists(fx.repo, 'feature/env'));
 		});
 
+		test('a folder is regenerable only when Git reports it whole; secret-like files never are', async () => {
+			fs.writeFileSync(path.join(fx.repo, '.gitignore'), 'credentials.json\nnode_modules/\ndist/\n');
+			fs.mkdirSync(path.join(fx.repo, 'tools', 'build'), { recursive: true });
+			fs.writeFileSync(path.join(fx.repo, 'tools', 'build', 'run.sh'), 'echo\n');
+			git(['add', '.gitignore', 'tools'], fx.repo);
+			git(['commit', '-q', '-m', 'tools'], fx.repo);
+			git(['push', '-q', 'origin', 'main'], fx.repo);
+			const files: Record<string, string[]> = {
+				'feature/build': ['tools/build/credentials.json'],
+				'feature/dist': ['dist/app.js', 'dist/.env'],
+				'feature/deps': ['node_modules/pkg/.env', 'node_modules/pkg/index.js'],
+			};
+			for (const [branch, paths] of Object.entries(files)) {
+				makeGoneBranch(fx.repo, branch);
+				const wt = addWorktree(branch);
+				for (const file of paths) {
+					fs.mkdirSync(path.dirname(path.join(wt, file)), { recursive: true });
+					fs.writeFileSync(path.join(wt, file), 'x\n');
+				}
+			}
+
+			const plan = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--json'], plan), EXIT.notApplied);
+			const ignored = Object.fromEntries(
+				(JSON.parse(plan.out.join('')).branches as Array<{ name: string; reason: string; worktree: { ignoredFiles: unknown } | null }>)
+					.filter((branch) => branch.name !== 'main')
+					.map((branch) => [branch.name, [branch.reason, branch.worktree?.ignoredFiles]])
+			);
+			assert.deepStrictEqual(ignored, {
+				'feature/build': ['ignored-files', { count: 1, sample: ['tools/build/credentials.json'] }],
+				'feature/dist': ['ignored-files', { count: 1, sample: ['dist/.env'] }],
+				// Packages ship their own `.env` files: dependency folders are not searched.
+				'feature/deps': ['empty', { count: 0, sample: [] }],
+			});
+		});
+
 		test('a clean worktree in the middle of a rebase is never removed, nor its branch deleted, even with --force', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');

@@ -243,12 +243,14 @@ suite('clean workflow', () => {
 		assert.strictEqual(gitFailureReason('plain'), 'plain');
 	});
 
-	test('regenerable folders and files, at any depth', () => {
+	test('regenerable folders, at any depth, only as whole entries; secret-like names never', () => {
 		for (const regenerable of ['node_modules/', 'packages/app/node_modules/', 'vendor/bundle/', 'dist/', 'web/.next/', 'tsconfig.tsbuildinfo', 'a/.DS_Store', '.venv/', 'target/']) {
 			assert.strictEqual(isRegenerable(regenerable), true, regenerable);
 		}
-		for (const kept of ['.env', 'notes.md', 'vendor/', 'secrets/', 'distribution/', 'build.log.bak', '.DS_Store/']) {
-			assert.strictEqual(isRegenerable(kept), false, kept);
+		const kept = ['.env', 'notes.md', 'vendor/', 'secrets/', 'distribution/', 'build.log.bak', '.DS_Store/', 'tools/build/credentials.json', 'dist/app.js', 'build/cache/'];
+		const secrets = ['dist/.env', '.env.local', 'node_modules/.npmrc', 'certs/server.PEM', 'tls.key', 'aws-credentials.tsbuildinfo', 'my-secret.tsbuildinfo', '.netrc'];
+		for (const path of [...kept, ...secrets]) {
+			assert.strictEqual(isRegenerable(path), false, path);
 		}
 	});
 });

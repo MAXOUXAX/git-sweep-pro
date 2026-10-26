@@ -72,11 +72,13 @@ Whatever the flags, `gsp clean` never deletes:
 
 A dead branch checked out in a clean, unlocked linked worktree is deleted with its worktree (`git worktree remove`, never `--force`). Each skipped branch comes with a hint: the exact command that resolves it. A hint never suggests losing work first: for uncommitted changes, it stashes them, and for ignored files, it asks you to move what you need out of the worktree before forcing.
 
-Removing a worktree deletes its ignored files, and `gsp restore` cannot bring them back. A worktree holding ignored files is skipped with `ignored-files`, and the plan lists them, unless they are all in folders that a build or an install recreates. Only `--force` removes it anyway, once you have moved what you need out of it. These folders are regenerable, at any depth:
+Removing a worktree deletes its ignored files, and `gsp restore` cannot bring them back. A worktree holding ignored files is skipped with `ignored-files`, and the plan lists them, unless they are all regenerable: a build or an install recreates them. Only `--force` removes it anyway, once you have moved what you need out of it. These folders are regenerable, at any depth, when the whole folder is ignored:
 
 `node_modules`, `.pnpm-store`, `vendor/bundle`, `dist`, `build`, `out`, `.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.cache`, `.parcel-cache`, `.vite`, `coverage`, `target`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.venv`, `venv`, `.gradle`, `.dart_tool`, `DerivedData`
 
-and so are `*.tsbuildinfo` and `.DS_Store` files.
+and so are `*.tsbuildinfo` and `.DS_Store` files. An ignored file inside a tracked folder with one of these names (`tools/build/credentials.json`) is not.
+
+Secret-like files are never regenerable, wherever they are: `.env`, `.env.*`, `*.pem`, `*.key`, `*credentials*`, `*secret*`, `.npmrc` and `.netrc`. Inside an ignored build or cache folder, `gsp clean` also looks for `.env`, `.env.*`, `*.pem`, `*.key`, `.npmrc` and `.netrc` files (a compiler never writes one there). Dependency folders (`node_modules`, `.pnpm-store`, `vendor/bundle`, `.venv`, `venv`) are not searched: packages ship such files of their own.
 
 Every deletion is recorded: `gsp restore <branch>` recreates any of the last 100 deleted branches, tracking its upstream again if it still exists, until Git garbage-collects its commits (two weeks by default).
 
