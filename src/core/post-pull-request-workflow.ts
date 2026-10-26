@@ -533,6 +533,13 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 
 	const worktree = targetWorktree();
 	if (target?.action === 'delete' && worktree?.isMain) {
+		// The branch may have moved since the analysis: switching the checkout away from it must not be for nothing.
+		const tip = (await readTips(git, [`refs/heads/${target.name}`])).get(`refs/heads/${target.name}`);
+		if (tip !== target.tip) {
+			target = { ...target, action: 'skip', reason: 'plan-changed', hint: review };
+		}
+	}
+	if (target?.action === 'delete' && worktree?.isMain) {
 		try {
 			await ui.withProgress({ title: `Switching ${worktree.path} to ${into}` }, () => switchMainCheckout(context.gitAt(worktree.path), into, worktrees));
 			switched = true;
