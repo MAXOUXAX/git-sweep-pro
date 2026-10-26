@@ -32,7 +32,7 @@ import {
 import { canRecordDeletions, createDeletionRecorder, type DeletionRecorder } from './deletion-log';
 import { gitFailureReason, toErrorMessage } from './errors';
 import type { RunGit } from './git-command';
-import type { RunSsh } from './forge';
+import { sameRepository, type RunSsh } from './forge';
 import type { GitHubSkipReason, RunGh } from './github-signal';
 import { listIgnoredFiles, summarizeIgnored } from './ignored-files';
 import { isNotFullyMergedError } from './sweep-logic';
@@ -123,17 +123,21 @@ export class PushUrlMismatchError extends Error {
 		readonly pushUrl: string
 	) {
 		super(
-			`${remote} fetches from ${fetchUrl} but pushes to ${pushUrl}, so gsp can't check the branches it would delete there. Clean a remote whose fetch and push URLs are the same.`
+			`${remote} fetches from ${fetchUrl} but pushes to ${pushUrl}, another repository, so gsp can't check the branches it would delete there. Point both URLs to the same repository.`
 		);
 	}
 }
 
-/** Fails with {@link PushUrlMismatchError} when `remote` pushes to another URL than it fetches from, rewrites applied. */
-async function checkPushUrl(git: RunGit, remote: string): Promise<void> {
+/**
+ * Fails with {@link PushUrlMismatchError} when `remote` pushes to another
+ * repository than it fetches from, rewrites applied. The URLs may differ:
+ * `https` to fetch and SSH to push the same repository is fine.
+ */
+async function checkPushUrl(git: RunGit, ssh: RunSsh | undefined, remote: string): Promise<void> {
 	const [fetchUrl, pushUrl] = await Promise.all([git(['remote', 'get-url', remote]), git(['remote', 'get-url', '--push', remote])]).then((urls) =>
 		urls.map(({ stdout }) => stdout.trim())
 	);
-	if (fetchUrl !== pushUrl) {
+	if (!(await sameRepository(ssh, fetchUrl, pushUrl))) {
 		throw new PushUrlMismatchError(remote, fetchUrl, pushUrl);
 	}
 }
@@ -871,7 +875,7 @@ export async function planBranches(context: CleanContext, options: BranchReadOpt
 	const configured = await readRemotes(git);
 	const cleaned = options.remote === undefined ? undefined : resolveRemote(configured, options.remote);
 	if (cleaned !== undefined) {
-		await checkPushUrl(git, cleaned);
+		await checkPushUrl(git, context.ssh, cleaned);
 	}
 	const upstreams = await readUpstreams(git);
 	const remotes = await remotesToCheck(git, upstreams, cleaned);

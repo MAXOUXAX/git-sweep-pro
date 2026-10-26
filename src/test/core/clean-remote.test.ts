@@ -690,10 +690,29 @@ suite('clean --remote (real git)', function () {
 			(error: unknown) =>
 				error instanceof PushUrlMismatchError &&
 				error.message ===
-					`origin fetches from ${fx.remote} but pushes to ${elsewhere}, so gsp can't check the branches it would delete there. Clean a remote whose fetch and push URLs are the same.`
+					`origin fetches from ${fx.remote} but pushes to ${elsewhere}, another repository, so gsp can't check the branches it would delete there. Point both URLs to the same repository.`
 		);
 		const { outcome } = await runCleanWorkflow(contextFor().context, { ...APPLY, remote: undefined });
 		assert.notStrictEqual(outcome, undefined);
+	});
+
+	test('a remote that fetches over https and pushes over SSH to the same repository is cleaned', async () => {
+		pushBranch('feature/done', 'd.txt', ['d\n']);
+		squashIntoMain('feature/done');
+		git(['remote', 'set-url', 'origin', 'https://GitHub.com/Acme/Widgets'], fx.repo);
+		git(['config', 'url.git@work:.pushInsteadOf', 'https://GitHub.com/'], fx.repo);
+		const ssh: RunSsh = async (args) => ({ stdout: `hostname ${args[1] === 'work' ? 'github.com' : args[1]}\n`, stderr: '' });
+		assert.strictEqual(git(['remote', 'get-url', '--push', 'origin'], fx.repo).trim(), 'git@work:Acme/Widgets');
+		// Read-only and offline: the check comes first, and nothing reaches GitHub.
+		const { report } = await runCleanWorkflow({ ...contextFor().context, ssh }, { ...APPLY, dryRun: true, fetch: false, github: false });
+		assert.strictEqual(report.mode, 'plan');
+		assert.ok(report.remoteBranches?.some((branch) => branch.name === 'feature/done'));
+	});
+
+	test('a remote that pushes to another repository on the same server is not cleaned', async () => {
+		git(['remote', 'set-url', 'origin', 'https://github.com/acme/widgets.git'], fx.repo);
+		git(['config', 'remote.origin.pushurl', 'git@github.com:acme/widgets-fork.git'], fx.repo);
+		await assert.rejects(runCleanWorkflow(contextFor().context, { ...APPLY, dryRun: true, fetch: false, github: false }), PushUrlMismatchError);
 	});
 
 	test('more open pull requests than gsp lists: nothing is deleted', async () => {

@@ -34,12 +34,13 @@ export type Forge =
 
 export type RemoteUrl =
 	| { readonly local: true }
-	| { readonly local: false; readonly host: string; readonly ssh: boolean; readonly owner?: string; readonly name?: string };
+	| { readonly local: false; readonly host: string; readonly ssh: boolean; readonly path: string; readonly owner?: string; readonly name?: string };
 
 /**
  * Reads a remote URL: `scheme://[user@]host[:port]/path`, the SSH form
- * `[user@]host:path`, or else a local path. `owner` and `name` are the last
- * two segments of the path, without `.git`.
+ * `[user@]host:path`, or else a local path. `path` is the repository path,
+ * without `.git` and outer slashes; `owner` and `name` are its last two
+ * segments.
  */
 export function parseRemoteUrl(url: string): RemoteUrl {
 	const trimmed = url.trim();
@@ -52,7 +53,7 @@ export function parseRemoteUrl(url: string): RemoteUrl {
 	const [host, path, ssh] = scheme ? [scheme[2], scheme[3] ?? '', /ssh/i.test(scheme[1])] : [scp![1], scp![2], true];
 	const segments = path.replace(/\.git\/*$|\/+$/g, '').split('/').filter(Boolean);
 	const [owner, name] = segments.length >= 2 ? segments.slice(-2) : [];
-	return { local: false, host: host.toLowerCase(), ssh, ...(owner && name ? { owner, name } : {}) };
+	return { local: false, host: host.toLowerCase(), ssh, path: segments.join('/'), ...(owner && name ? { owner, name } : {}) };
 }
 
 /** The `hostname` that `ssh -G` resolved an alias to. */
@@ -76,11 +77,8 @@ async function ghLoggedIn(gh: RunGh, host: string): Promise<boolean> {
 
 type ForgeContext = { readonly git: RunGit; readonly gh?: RunGh; readonly ssh?: RunSsh };
 
-async function forgeOfUrl({ gh, ssh }: ForgeContext, url: string, setting: ForgeSetting | undefined): Promise<Forge> {
-	const parsed = parseRemoteUrl(url);
-	if (parsed.local) {
-		return { kind: 'other' };
-	}
+/** The server a remote URL points to: an SSH alias goes through `ssh -G`, and `ssh.github.com` is github.com. */
+async function resolveHost(ssh: RunSsh | undefined, parsed: { readonly host: string; readonly ssh: boolean }): Promise<string> {
 	let host = parsed.host;
 	if (parsed.ssh && ssh && !host.startsWith('-')) {
 		// An alias from ~/.ssh/config ("git@work:org/repo"): unresolved, the alias stays the host.
@@ -89,9 +87,33 @@ async function forgeOfUrl({ gh, ssh }: ForgeContext, url: string, setting: Forge
 			() => host
 		);
 	}
-	if (host === 'ssh.github.com') {
-		host = 'github.com';
+	return host === 'ssh.github.com' ? 'github.com' : host;
+}
+
+/**
+ * Whether two remote URLs, `insteadOf` applied, point to the same
+ * repository: the same server (SSH aliases resolved) and the same path,
+ * whatever the protocol, the case or a `.git` suffix. Local paths must be
+ * the same.
+ */
+export async function sameRepository(ssh: RunSsh | undefined, first: string, second: string): Promise<boolean> {
+	if (first === second) {
+		return true;
 	}
+	const [a, b] = [parseRemoteUrl(first), parseRemoteUrl(second)];
+	if (a.local || b.local || !a.path || a.path.toLowerCase() !== b.path.toLowerCase()) {
+		return false;
+	}
+	const [hostA, hostB] = await Promise.all([resolveHost(ssh, a), resolveHost(ssh, b)]);
+	return hostA === hostB;
+}
+
+async function forgeOfUrl({ gh, ssh }: ForgeContext, url: string, setting: ForgeSetting | undefined): Promise<Forge> {
+	const parsed = parseRemoteUrl(url);
+	if (parsed.local) {
+		return { kind: 'other' };
+	}
+	const host = await resolveHost(ssh, parsed);
 	const repo = parsed.owner && parsed.name ? { host, owner: parsed.owner, name: parsed.name } : undefined;
 	if (setting === 'github' || isGitHubHost(host)) {
 		return repo ? { kind: 'github', repo } : { kind: 'unknown', host };

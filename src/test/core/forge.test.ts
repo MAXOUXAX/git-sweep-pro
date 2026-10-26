@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { identifyForge, parseRemoteUrl, parseSshHostname, type RunSsh } from '../../core/forge';
+import { identifyForge, parseRemoteUrl, parseSshHostname, sameRepository, type RunSsh } from '../../core/forge';
 import type { RunGit } from '../../core/git-command';
 import type { RunGh } from '../../core/github-signal';
 
@@ -10,20 +10,36 @@ const gitUsing =
 
 suite('forge', () => {
 	test('reads the host, owner and name of every URL form, and knows a local path', () => {
-		assert.deepStrictEqual(parseRemoteUrl('https://github.com/acme/widgets.git'), { local: false, host: 'github.com', ssh: false, owner: 'acme', name: 'widgets' });
-		assert.deepStrictEqual(parseRemoteUrl('git@Work:acme/widgets.git'), { local: false, host: 'work', ssh: true, owner: 'acme', name: 'widgets' });
+		assert.deepStrictEqual(parseRemoteUrl('https://github.com/acme/widgets.git'), { local: false, host: 'github.com', ssh: false, path: 'acme/widgets', owner: 'acme', name: 'widgets' });
+		assert.deepStrictEqual(parseRemoteUrl('git@Work:acme/widgets.git'), { local: false, host: 'work', ssh: true, path: 'acme/widgets', owner: 'acme', name: 'widgets' });
 		assert.deepStrictEqual(parseRemoteUrl('ssh://git@ssh.github.com:443/acme/widgets/'), {
 			local: false,
 			host: 'ssh.github.com',
 			ssh: true,
+			path: 'acme/widgets',
 			owner: 'acme',
 			name: 'widgets',
 		});
-		assert.deepStrictEqual(parseRemoteUrl('https://git.example.com/group/sub/widgets'), { local: false, host: 'git.example.com', ssh: false, owner: 'sub', name: 'widgets' });
-		assert.deepStrictEqual(parseRemoteUrl('https://git.example.com/widgets.git'), { local: false, host: 'git.example.com', ssh: false });
+		assert.deepStrictEqual(parseRemoteUrl('https://git.example.com/group/sub/widgets'), { local: false, host: 'git.example.com', ssh: false, path: 'group/sub/widgets', owner: 'sub', name: 'widgets' });
+		assert.deepStrictEqual(parseRemoteUrl('https://git.example.com/widgets.git'), { local: false, host: 'git.example.com', ssh: false, path: 'widgets' });
 		for (const local of ['/srv/git/widgets.git', '../widgets', 'file:///srv/git/widgets.git', 'C:\\repos\\widgets', 'widgets']) {
 			assert.deepStrictEqual(parseRemoteUrl(local), { local: true }, local);
 		}
+	});
+
+	test('two URLs are the same repository whatever the protocol, the case, a .git suffix or an SSH alias', async () => {
+		const ssh: RunSsh = async (args) => ({ stdout: `hostname ${args[1] === 'work' ? 'github.com' : args[1]}\n`, stderr: '' });
+		const same = (a: string, b: string) => sameRepository(ssh, a, b);
+		assert.ok(await same('https://github.com/acme/widgets', 'git@github.com:acme/widgets.git'));
+		assert.ok(await same('https://GitHub.com/Acme/Widgets.git', 'ssh://git@ssh.github.com:443/acme/widgets/'));
+		assert.ok(await same('https://github.com/acme/widgets', 'git@work:acme/widgets.git'));
+		assert.ok(await same('/srv/git/widgets.git', '/srv/git/widgets.git'));
+		assert.ok(!(await same('https://github.com/acme/widgets', 'git@github.com:acme/widgets-fork.git')));
+		assert.ok(!(await same('https://github.com/acme/widgets', 'git@github.com:other/widgets.git')));
+		assert.ok(!(await same('https://github.com/acme/widgets', 'git@gitlab.com:acme/widgets.git')));
+		assert.ok(!(await same('https://git.example.com/group/sub/widgets', 'git@git.example.com:other/sub/widgets.git')));
+		assert.ok(!(await same('https://github.com/acme/widgets', '/srv/git/widgets.git')));
+		assert.ok(!(await same('/srv/git/widgets.git', '/srv/git/other.git')));
 	});
 
 	test('reads the host name ssh -G resolved an alias to', () => {
