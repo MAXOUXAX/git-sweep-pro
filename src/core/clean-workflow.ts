@@ -619,7 +619,8 @@ const GITHUB_SKIPS: Record<GitHubSkipReason, string> = {
 function remoteBlocker(check: CleanedRemoteCheck, scope: CleanScope): RemoteBlocker | undefined {
 	const review = (changed: Partial<CleanScope>) => scopedCommand({ ...scope, ...changed }, scope.patterns, ['--dry-run']);
 	if (check.defaultBranch === null) {
-		return { reason: 'remote-default-unknown', hint: scope.fetch ? null : review({ fetch: true }) };
+		// Without --no-fetch, gsp asks the server.
+		return { reason: 'remote-default-unknown', hint: scope.fetch ? null : scopedCommand({ ...scope, fetch: true }, scope.patterns, []) };
 	}
 	if (check.github && !check.github.used) {
 		const { reason } = check.github;

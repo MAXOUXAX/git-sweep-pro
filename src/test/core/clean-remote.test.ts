@@ -423,15 +423,17 @@ suite('clean --remote (real git)', function () {
 
 	test('when the server names no default branch, or is not asked, nothing on that remote is deleted', async () => {
 		const init = git(['rev-parse', 'main'], fx.repo).trim();
-		const upstream = addRemote('upstream', { trunkx: init, 'feature/old': init }, 'trunkx');
+		const upstream = addRemote('upstream', { trunkx: init, 'feature/old': init, main: init }, 'trunkx');
 		git(['symbolic-ref', 'HEAD', 'refs/heads/nope'], path.join(fx.dir, 'upstream.git'));
 
 		const fake = contextFor();
 		const { report, outcome } = await runCleanWorkflow(fake.context, { ...APPLY, remote: 'upstream' });
 		assert.strictEqual(outcome, 'done');
 		assert.deepStrictEqual(report.checks.cleanedRemote?.defaultBranch, null);
+		// What is kept for its own reason stays kept.
 		assert.deepStrictEqual(actions(report.remoteBranches), {
 			'feature/old': ['skip', 'remote-default-unknown', null],
+			main: ['keep', 'default-branch', null],
 			trunkx: ['skip', 'remote-default-unknown', null],
 		});
 		assert.ok(upstream.has('trunkx') && upstream.has('feature/old'));
@@ -439,10 +441,12 @@ suite('clean --remote (real git)', function () {
 		assert.deepStrictEqual(formatRemoteLines(report).slice(1), [
 			'skip    feature/old  the default branch of upstream is unknown (no default branch to compare with)',
 			'skip    trunkx       the default branch of upstream is unknown (no default branch to compare with)',
+			'keep    main         default branch',
 		]);
 
+		// Without --no-fetch, gsp asks the server.
 		const offline = await runCleanWorkflow(contextFor().context, { ...PLAN, remote: 'upstream', fetch: false });
-		assert.deepStrictEqual(actions(offline.report.remoteBranches)['feature/old'], ['skip', 'remote-default-unknown', 'gsp clean --no-github --remote=upstream --dry-run']);
+		assert.deepStrictEqual(actions(offline.report.remoteBranches)['feature/old'], ['skip', 'remote-default-unknown', 'gsp clean --no-github --remote=upstream']);
 	});
 
 	test('on a GitHub remote, nothing is deleted when its open pull requests cannot be checked', async () => {

@@ -373,8 +373,9 @@ export function remoteBranchArg(branch: Pick<CleanRemoteBranch, 'remote' | 'name
  * head or base of an open pull request (alive), or the upstream of a local
  * branch that is kept. `deletedLocals` are the local branches deleted (or
  * planned for deletion) in the same run: they no longer hold their upstream.
- * A `blocker` skips every branch (`remote-default-unknown`) or every one that
- * would be deleted (`github-unavailable`).
+ * A `blocker` skips every branch that would be deleted, and, when the
+ * remote's default branch is unknown (`remote-default-unknown`), every one
+ * left unjudged for want of it; what is kept for its own reason stays kept.
  */
 export function decideRemoteActions(
 	branches: readonly (RemoteBranchAnalysis & { readonly trackedBy: readonly string[] })[],
@@ -383,7 +384,7 @@ export function decideRemoteActions(
 ): CleanRemoteBranch[] {
 	return branches.map((branch): CleanRemoteBranch => {
 		const decided = decideRemoteAction(branch, deletedLocals);
-		if (blocker && (blocker.reason === 'remote-default-unknown' || decided.action === 'delete')) {
+		if (blocker && (decided.action === 'delete' || (blocker.reason === 'remote-default-unknown' && decided.reason === 'no-base'))) {
 			return { ...decided, action: 'skip', reason: blocker.reason, hint: blocker.hint };
 		}
 		return decided;
