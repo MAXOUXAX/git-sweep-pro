@@ -116,6 +116,10 @@ export type BranchAnalysis = {
 	 * from the base, that no proof covers: 0 for every proven branch. A dead
 	 * `upstream-gone` branch with unpushed commits holds work found nowhere else.
 	 * Also 0 when counting failed, which makes the branch `analysis-failed`.
+	 *
+	 * Counted against the local remote-tracking refs, which this module never
+	 * updates: a ref still listed after its remote branch was deleted hides
+	 * commits found nowhere else. Only exact right after `git fetch --prune`.
 	 */
 	readonly unpushedCommits: number;
 	readonly protected: Protection | null;
