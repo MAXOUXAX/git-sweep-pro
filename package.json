@@ -1,7 +1,7 @@
 {
   "name": "git-sweep-pro",
   "displayName": "Git Sweep Pro",
-  "description": "Safely prune the local Git branches whose remote branch is gone, from VS Code or the gsp command line, for you and your coding agents. Dry runs, protected branches, undo.",
+  "description": "Delete the local Git branches whose work is already merged or pushed, and their worktrees, from VS Code or the gsp command line, for you and your coding agents. Read-only plans, protected branches, undo.",
   "repository": {
     "url": "git+https://github.com/MAXOUXAX/git-sweep-pro",
     "type": "git"
