@@ -653,6 +653,12 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(await runCli(['clean', '--remote=upstream', '--json'], unknown), EXIT.usage);
 			assert.strictEqual(JSON.parse(unknown.out.join('')).error.code, 'unknown-remote');
 
+			git(['config', 'remote.origin.pushurl', `${fx.remote}-elsewhere`], fx.repo);
+			const pushElsewhere = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['clean', '--remote', '--json'], pushElsewhere), EXIT.usage);
+			assert.strictEqual(JSON.parse(pushElsewhere.out.join('')).error.code, 'push-url-differs');
+			git(['config', '--unset', 'remote.origin.pushurl'], fx.repo);
+
 			const applied = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['clean', 'feature/r', '--remote', '--yes', '--no-github'], applied), EXIT.ok);
 			assert.ok(applied.out.join('').includes('on origin: 1 deleted · restore with gsp restore origin/feature/r'), applied.out.join(''));

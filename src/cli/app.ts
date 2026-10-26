@@ -5,7 +5,7 @@ import { createDeletionLog, describeDeletion, describeDeletionTarget } from '../
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
 import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, nextCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
-import { runCleanWorkflow, UnknownBranchError, UnknownRemoteError, type CleanOutcome } from '../core/clean-workflow';
+import { PushUrlMismatchError, runCleanWorkflow, UnknownBranchError, UnknownRemoteError, type CleanOutcome } from '../core/clean-workflow';
 import { createSshRunner } from '../core/forge';
 import { createGhRunner } from '../core/github-signal';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
@@ -135,7 +135,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 }
 
 /** Why a command stopped before producing its JSON document. */
-type JsonErrorCode = 'usage' | 'no-such-directory' | 'unknown-branch' | 'unknown-remote' | 'not-a-repository' | 'failed';
+type JsonErrorCode = 'usage' | 'no-such-directory' | 'unknown-branch' | 'unknown-remote' | 'push-url-differs' | 'not-a-repository' | 'failed';
 
 /**
  * With `--json`, a fatal error is still one JSON document on stdout, so a
@@ -255,9 +255,10 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		printCleanReport(report, outcome, options, frontend, io);
 		return { kind: 'clean', outcome };
 	} catch (error) {
-		if (error instanceof UnknownBranchError || error instanceof UnknownRemoteError) {
+		if (error instanceof UnknownBranchError || error instanceof UnknownRemoteError || error instanceof PushUrlMismatchError) {
 			if (options.json) {
-				printJsonError(io, error.message, error instanceof UnknownBranchError ? 'unknown-branch' : 'unknown-remote');
+				const code = error instanceof UnknownBranchError ? 'unknown-branch' : error instanceof UnknownRemoteError ? 'unknown-remote' : 'push-url-differs';
+				printJsonError(io, error.message, code);
 			}
 			io.stderr(`error: ${error.message}\n`);
 			return EXIT.usage;

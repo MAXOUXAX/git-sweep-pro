@@ -115,6 +115,29 @@ export class UnknownRemoteError extends Error {
 	}
 }
 
+/** `--remote` names a remote that pushes elsewhere than it fetches from: what gsp reads is not what it would delete. A usage error. */
+export class PushUrlMismatchError extends Error {
+	constructor(
+		readonly remote: string,
+		readonly fetchUrl: string,
+		readonly pushUrl: string
+	) {
+		super(
+			`${remote} fetches from ${fetchUrl} but pushes to ${pushUrl}, so gsp can't check the branches it would delete there. Clean a remote whose fetch and push URLs are the same.`
+		);
+	}
+}
+
+/** Fails with {@link PushUrlMismatchError} when `remote` pushes to another URL than it fetches from, rewrites applied. */
+async function checkPushUrl(git: RunGit, remote: string): Promise<void> {
+	const [fetchUrl, pushUrl] = await Promise.all([git(['remote', 'get-url', remote]), git(['remote', 'get-url', '--push', remote])]).then((urls) =>
+		urls.map(({ stdout }) => stdout.trim())
+	);
+	if (fetchUrl !== pushUrl) {
+		throw new PushUrlMismatchError(remote, fetchUrl, pushUrl);
+	}
+}
+
 async function readRemotes(git: RunGit): Promise<string[]> {
 	return (await git(['remote'])).stdout.split('\n').filter(Boolean);
 }
@@ -675,6 +698,9 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	const { git, ui, output } = context;
 	const configured = await readRemotes(git);
 	const cleaned = options.remote === undefined ? undefined : resolveRemote(configured, options.remote);
+	if (cleaned !== undefined) {
+		await checkPushUrl(git, cleaned);
+	}
 	const apply = !options.dryRun && (options.yes || options.canPrompt);
 	const mode: CleanMode = apply ? 'apply' : 'plan';
 	const scope: CleanScope = {

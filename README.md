@@ -103,6 +103,8 @@ git config git-sweep-pro.forge none     # a self-hosted server that is not GitHu
 git config git-sweep-pro.forge github   # a GitHub server gh can't recognise
 ```
 
+`--remote` refuses a remote that pushes elsewhere than it fetches from (`remote.<name>.pushurl`, `pushInsteadOf`): gsp would check one repository and delete in another.
+
 The plan reads the remote with `git ls-remote`, and changes nothing. A tip this repository has not fetched yet cannot be proven: the branch is kept until the next run. Once approved, `gsp clean` fetches, checks again, then deletes each branch with `git push --force-with-lease=refs/heads/<branch>:<tip> <remote> :refs/heads/<branch>`: a branch someone pushed to since it was analysed is skipped with `plan-changed`.
 
 Each remote deletion is recorded too: `gsp restore origin/<branch>` pushes it back at its recorded commit, unless a branch of that name exists there again. Lists show it as `origin/<branch> (remote)`; when a local branch was literally named `origin/<branch>` too, pick the one to restore from `gsp restore`.
@@ -157,7 +159,7 @@ gsp restore feature/x --non-interactive
 
 ### JSON
 
-`--json` works with `clean` (and `sweep`, `list`), `worktree list` and `restore` without branch names. It writes one JSON document to stdout; progress and warnings go to stderr. A fatal error is still one document, `{ "schema": 2, "error": { "message": "…", "code": "…" } }`, with `code` one of `usage`, `no-such-directory`, `unknown-branch`, `unknown-remote`, `not-a-repository` or `failed`.
+`--json` works with `clean` (and `sweep`, `list`), `worktree list` and `restore` without branch names. It writes one JSON document to stdout; progress and warnings go to stderr. A fatal error is still one document, `{ "schema": 2, "error": { "message": "…", "code": "…" } }`, with `code` one of `usage`, `no-such-directory`, `unknown-branch`, `unknown-remote`, `push-url-differs`, `not-a-repository` or `failed`.
 
 `gsp clean --json` writes a versioned document (`schema` is 2):
 

@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { execFileSync } from 'node:child_process';
 import * as path from 'node:path';
 import { formatRemoteLines, formatSummary, type CleanRemoteBranch } from '../../core/clean-plan';
-import { holdRemoteToFetch, runCleanWorkflow, UnknownRemoteError, type CleanOptions } from '../../core/clean-workflow';
+import { holdRemoteToFetch, PushUrlMismatchError, runCleanWorkflow, UnknownRemoteError, type CleanOptions } from '../../core/clean-workflow';
 import type { RunSsh } from '../../core/forge';
 import type { RunGh } from '../../core/github-signal';
 import { runRestoreWorkflow } from '../../core/restore-workflow';
@@ -680,6 +680,20 @@ suite('clean --remote (real git)', function () {
 		assert.deepStrictEqual(report.checks.cleanedRemote?.github, { used: true, repo: 'acme/widgets', parent: 'mid/widgets', source: 'root/widgets', openPullRequests: 1 });
 		assert.deepStrictEqual(actions(report.remoteBranches)['feature/deep'], ['keep', 'open-pr', null]);
 		assert.ok(remoteHas('feature/deep'));
+	});
+
+	test('a remote that pushes elsewhere than it fetches from is not cleaned', async () => {
+		const elsewhere = path.join(fx.dir, 'elsewhere.git');
+		git(['config', 'remote.origin.pushurl', elsewhere], fx.repo);
+		await assert.rejects(
+			runCleanWorkflow(contextFor().context, APPLY),
+			(error: unknown) =>
+				error instanceof PushUrlMismatchError &&
+				error.message ===
+					`origin fetches from ${fx.remote} but pushes to ${elsewhere}, so gsp can't check the branches it would delete there. Clean a remote whose fetch and push URLs are the same.`
+		);
+		const { outcome } = await runCleanWorkflow(contextFor().context, { ...APPLY, remote: undefined });
+		assert.notStrictEqual(outcome, undefined);
 	});
 
 	test('more open pull requests than gsp lists: nothing is deleted', async () => {
