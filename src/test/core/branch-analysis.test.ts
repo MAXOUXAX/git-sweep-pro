@@ -222,6 +222,26 @@ suite('branch analysis (real git)', function () {
 		assert.strictEqual(branches['feature/wip'].unpushedCommits, 1);
 	});
 
+	test('a patch that only matches the base ignoring whitespace is not rebase-merged', async () => {
+		commitFile(fx.repo, 'a.js', 'a();\nc();\nb();\n', 'add a.js');
+		makeBranch('feature/indent', [['a.js', 'a();\nif (x) {\n  c();\n}\nb();\n']]);
+		makeBranch('feature/same', [['a.js', 'a();\nif (y) {\n    c();\n}\nb();\n']]);
+		// main lands the same lines, indented with a tab, then the exact change of feature/same.
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		commitFile(fx.repo, 'a.js', 'a();\nif (x) {\n\tc();\n}\nb();\n', 'tab indented');
+		git(['revert', '--no-edit', 'HEAD'], fx.repo);
+		git(['cherry-pick', 'feature/same'], fx.repo);
+		commitFile(fx.repo, 'a.js', 'a();\nif (y) {\n    c();\n}\nb();\nlater();\n', 'later');
+		pushMain();
+		// Git's own patch ids call it upstream.
+		assert.match(git(['cherry', 'origin/main', 'feature/indent'], fx.repo), /^- /);
+
+		const branches = byName(await analyze());
+		assert.strictEqual(`${branches['feature/indent'].verdict} ${branches['feature/indent'].reason}`, 'alive unmerged-commits');
+		assert.strictEqual(branches['feature/indent'].unpushedCommits, 1);
+		assert.strictEqual(`${branches['feature/same'].verdict} ${branches['feature/same'].reason}`, 'dead rebase-merged');
+	});
+
 	test('an integration branch whose two pull requests were squashed separately', async () => {
 		makeBranch('feature/a', [['a.txt', 'a1\n'], ['a.txt', 'a1\na2\n']]);
 		makeBranch('feature/b', [['b.txt', 'b1\n'], ['b.txt', 'b1\nb2\n']]);

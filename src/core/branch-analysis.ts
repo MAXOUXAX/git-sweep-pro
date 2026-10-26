@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { RunGit } from './git-command';
 import { loadGitHubSignal, parseGitHubRemote, type GitHubSignal, type GitHubSkipReason, type PullRequest, type RunGh } from './github-signal';
 import { branchMatchesPattern, isProtectedBranch } from './sweep-logic';
@@ -17,7 +18,7 @@ export type UpstreamState = 'tracking' | 'gone' | 'none';
  * Why a branch is dead:
  * - `empty`: it points at a commit of the base's own history, so it adds nothing;
  * - `merged`: its tip is reachable from the base (a merge commit brought it in);
- * - `rebase-merged`: each of its commits has an equivalent patch on the base;
+ * - `rebase-merged`: each of its commits has exactly the same patch on the base, whitespace included;
  * - `squash-merged`: the base reached the exact content of every file it changed;
  * - `pr-merged`: its tip is the head of a pull request merged into the default branch, or behind it;
  * - `commits-merged`: each of its own commits is proven merged separately (integration branches);
@@ -340,6 +341,66 @@ function parseTree(output: string): Map<string, string> {
 	return files;
 }
 
+/** Shows commits as `commit <sha>` and their patch, the same way whatever the user's diff and log configuration. */
+const PATCH_ARGS = [
+	'--format=commit %H',
+	'--patch',
+	'--no-color',
+	'--no-ext-diff',
+	'--no-textconv',
+	'--no-renames',
+	'--no-relative',
+	'--no-show-signature',
+	'--full-index',
+	'--src-prefix=a/',
+	'--dst-prefix=b/',
+];
+
+type Patch = { readonly key: string; readonly paths: readonly string[] };
+
+/**
+ * Parses {@link PATCH_ARGS} output into each commit's patch, reduced to what
+ * makes it the same change anywhere in history: hunk positions and blob ids
+ * are dropped (they move with the surrounding file), whitespace is kept.
+ * Blob ids stay for binary files, whose changes the diff does not show.
+ */
+function parsePatches(output: string): Map<string, Patch> {
+	const commits: Array<{ sha: string; files: string[][] }> = [];
+	for (const line of output.split('\n')) {
+		const header = /^commit ([0-9a-f]{40,64})$/.exec(line);
+		if (header) {
+			commits.push({ sha: header[1], files: [] });
+		} else if (line.startsWith('diff --git ')) {
+			commits.at(-1)?.files.push([line]);
+		} else if (line) {
+			commits.at(-1)?.files.at(-1)?.push(line);
+		}
+	}
+	return new Map(
+		commits.map(({ sha, files }) => {
+			const paths: string[] = [];
+			const hash = createHash('sha256');
+			for (const file of files) {
+				// "diff --git a/<path> b/<path>": renames are off, so both paths are the same.
+				const names = file[0].slice('diff --git '.length);
+				const length = (names.length - 5) / 2;
+				if (Number.isInteger(length) && names.slice(2 + length) === ` b/${names.slice(2, 2 + length)}`) {
+					paths.push(names.slice(2, 2 + length));
+				}
+				const binary = file.some((line) => line.startsWith('Binary files '));
+				for (const line of file) {
+					if (line.startsWith('@@')) {
+						hash.update('@@\n');
+					} else if (binary || !line.startsWith('index ')) {
+						hash.update(`${line}\n`);
+					}
+				}
+			}
+			return [sha, { key: hash.digest('hex'), paths }] as const;
+		})
+	);
+}
+
 type Verdict = { readonly verdict: 'dead' | 'alive'; readonly reason: DeadReason | AliveReason; readonly evidence: Evidence | null };
 
 /** A merged pull request containing a commit, and how that was established. */
@@ -542,6 +603,33 @@ class Prover {
 		return undefined;
 	}
 
+	/**
+	 * Keeps a `git cherry` "-" only when a base commit has exactly the same
+	 * patch. Git's patch ids ignore whitespace: indenting a line into a block
+	 * would pass for the same line landed with another indentation.
+	 */
+	async exactCherry(tip: string, cherry: ReadonlyMap<string, boolean>): Promise<Map<string, boolean>> {
+		const exact = new Map([...cherry.keys()].map((commit) => [commit, false]));
+		const hinted = [...cherry].filter(([, upstream]) => upstream).map(([commit]) => commit);
+		if (hinted.length === 0) {
+			return exact;
+		}
+		const own = parsePatches(await this.gitRead(['-c', 'core.quotePath=false', 'show', ...PATCH_ARGS, ...hinted]));
+		const paths = [...new Set([...own.values()].flatMap((patch) => patch.paths))];
+		if (paths.length === 0) {
+			return exact;
+		}
+		const upstream = parsePatches(
+			await this.gitRead(['-c', 'core.quotePath=false', '--literal-pathspecs', 'log', '--no-merges', ...PATCH_ARGS, this.base.ref, '--not', tip, '--', ...paths])
+		);
+		const keys = new Set([...upstream.values()].map((patch) => patch.key));
+		for (const commit of hinted) {
+			const patch = own.get(commit);
+			exact.set(commit, patch !== undefined && keys.has(patch.key));
+		}
+		return exact;
+	}
+
 	openPullRequest(commit: string): PullRequest | undefined {
 		return this.github?.pullRequests.find((pr) => pr.state === 'open' && pr.headSha === commit);
 	}
@@ -623,7 +711,7 @@ class Prover {
 	}
 }
 
-/** Parses `git cherry`: each unique non-merge commit, true when an equivalent patch is upstream ("-"). */
+/** Parses `git cherry`: each unique non-merge commit, true when a patch with the same (whitespace-blind) id is upstream ("-"). */
 function parseCherry(output: string): Map<string, boolean> {
 	return new Map(lines(output).map((line) => [line.slice(2), line.startsWith('-')] as const));
 }
@@ -678,7 +766,7 @@ async function proveTip(git: RunGit, prover: Prover, tip: string, isAncestor: bo
 	} catch {
 		// Unrelated histories: only a pull request or a gone upstream can tell.
 	}
-	const cherry = mergeBase ? parseCherry((await git(['cherry', base.ref, tip, mergeBase])).stdout) : new Map<string, boolean>();
+	const cherry = mergeBase ? await prover.exactCherry(tip, parseCherry((await git(['cherry', base.ref, tip, mergeBase])).stdout)) : new Map<string, boolean>();
 	const unmerged = [...cherry.values()].filter((upstream) => !upstream).length;
 	if (mergeBase && cherry.size > 0 && unmerged === 0) {
 		return { verdict: 'dead', reason: 'rebase-merged', evidence: { method: 'patch-id', base: base.ref, commits: cherry.size } };
