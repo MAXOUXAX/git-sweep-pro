@@ -6,9 +6,10 @@ const EXIT_CODES = `Exit codes:
   2  Invalid arguments, or a branch that does not exist
   3  Sync paused on conflicts: resolve them, then run "gsp resume"
   4  Cancelled at a prompt
-  5  clean: some planned deletions were not applied; the output says why
-     and what to run next. Other commands: a confirmation was needed
-     but nobody could answer; rerun with --yes`;
+  5  clean, post-pr: some planned deletions were not applied; the output
+     says why and what to run next. For post-pr, 5 also means the branch
+     you asked to finish isn't finished. Other commands: a confirmation
+     was needed but nobody could answer; rerun with --yes`;
 
 const GLOBAL_OPTIONS = `  -C <path>          Run as if started in <path>
       --non-interactive
@@ -30,8 +31,8 @@ Commands:
   worktree prune     Forget the worktrees whose directory is gone
   worktree remove <path|branch>
                      Remove one linked worktree
-  post-pr [branch]   After a merged pull request: switch to [branch], delete
-                     the old branch, clean, then pull
+  post-pr [<branch>] After a merged pull request: delete its branch and
+                     worktree, update the default branch, then clean
   sync [upstream]    Rebase the current branch onto [upstream], then
                      force-push with a lease
   resume             Continue a sync paused on conflicts
@@ -46,6 +47,7 @@ Common tasks:
   gsp clean --dry-run          See what would be deleted, change nothing
   gsp clean --yes              Delete every branch proven merged
   gsp clean --json             The plan as JSON, for scripts and agents
+  gsp post-pr --yes            Finish the merged pull request of this branch
   gsp restore <branch>         Undo a deletion
 
 ${EXIT_CODES}`;
@@ -115,16 +117,66 @@ Options:
                      a locked one first with "git worktree unlock <path>"
 ${GLOBAL_OPTIONS}`;
 
-const POST_PR_HELP = `Usage: gsp post-pr [branch] [options]
+const POST_PR_HELP = `Usage: gsp post-pr [<branch>] [options]
 
-After a merged pull request: switch to [branch] (the default branch when
-omitted), delete the branch you were on, clean the other stale branches,
-then pull.
+Finish a merged pull request: delete <branch> (the current branch when
+omitted) and the linked worktree it is checked out in, fast-forward the
+default branch, then clean the other merged branches as "gsp clean --yes"
+would.
+
+<branch> is deleted only when its work is proven to be in the default
+branch, with the rules of "gsp clean". Otherwise nothing is changed on it,
+gsp says why and what may prove it (fetching, pushing, --into), and exits
+with 5; the same when its worktree has uncommitted changes. A <branch> that
+has no local branch is reported as such, and the rest goes on, when
+gsp deleted it, a remote branch of that name is still listed, or GitHub
+shows its pull request merged (gh pr merge --delete-branch deletes it).
+Any other missing <branch> is an error (exit 2).
+
+<branch> never names a protected branch: "gsp post-pr main", the old form
+naming the branch to go back to, still finishes the current branch, with a
+deprecation note. So does any other protected branch. Any other <branch>
+is the one to finish, wherever it is checked out.
+Works from any worktree:
+  - run from the branch's own linked worktree, gsp removes it, carries on
+    from the main checkout and tells you where to "cd" next;
+  - when the branch is checked out in the main checkout, that checkout is
+    switched to the default branch first (never when it has uncommitted
+    changes);
+  - the default branch is fast-forwarded where it is checked out, when that
+    worktree is clean, or as a ref when it is checked out nowhere.
+
+Without a terminal, gsp post-pr prints the plan and changes nothing unless
+--yes is given. The command that applies the plan names every other branch
+it deletes with --clean, or says --no-clean when there is none.
 
 Options:
-  -y, --yes          Confirm every prompt
-      --no-fetch     Skip "git fetch --prune"
-${GLOBAL_OPTIONS}`;
+      --into <branch>  The branch the pull request was merged into (default:
+                     the default branch)
+      --clean <branch>
+                     Clean only these other branches (repeatable)
+      --no-clean     Clean no other branch
+  -n, --dry-run      Print the plan and change nothing (no fetch, no switch)
+  -y, --yes          Apply without asking
+  -f, --force        Delete <branch> even when it is not proven merged
+      --json         Print the plan or the result as one JSON document
+  -p, --protect <glob>
+                     Never delete branches matching <glob> (repeatable)
+      --no-fetch     Use the local remote-tracking refs: no fetch, no
+                     "git ls-remote"
+      --no-github    Do not ask GitHub (through gh) for merged pull requests
+      --no-confirm   Do not ask for confirmation in a terminal
+${GLOBAL_OPTIONS}
+
+Common tasks:
+  gsp post-pr --yes                After merging, from the branch's worktree
+                                   (or the main checkout, on that branch)
+  gsp post-pr feature/x --yes      After merging, from the main checkout or
+                                   any other worktree
+  gsp post-pr --dry-run            Preview, change nothing
+  gsp restore feature/x            Undo the deletion
+
+${EXIT_CODES}`;
 
 const SYNC_HELP = `Usage: gsp sync [upstream] [options]
 

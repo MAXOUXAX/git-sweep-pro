@@ -33,7 +33,7 @@ Use \`--non-interactive\` for agent commands, including in a pseudo-terminal. Co
 
 Use \`gsp worktree list --json\` to inspect the worktrees and their states; \`gsp worktree remove <path|branch> --non-interactive\` removes one linked worktree (unlock a locked one first), and \`gsp worktree prune\` forgets registrations whose directory is gone. Use \`gsp restore --json\` to list recoverable deletions and \`gsp restore <branch> --non-interactive\` to restore one. \`--json\` is supported only for listing candidates, worktrees, or recoverable deletions. Parse stdout as JSON only on exit 0; diagnostics go to stderr.
 
-Exit codes: 0 completed or nothing to do, 1 failed, 2 invalid arguments, 3 sync paused on conflicts, 4 cancelled with \`--non-interactive\`. On exit 3, resolve the conflicts, stage the resolved files, then run \`gsp resume --non-interactive\`. \`sync\` rebases and force-pushes with a lease; \`post-pr\` switches branches, deletes, sweeps and pulls. Run these only when authorized.
+Exit codes: 0 completed or nothing to do, 1 failed, 2 invalid arguments, 3 sync paused on conflicts, 4 cancelled with \`--non-interactive\`. On exit 3, resolve the conflicts, stage the resolved files, then run \`gsp resume --non-interactive\`. \`sync\` rebases and force-pushes with a lease; \`post-pr\` deletes a merged branch and its worktree, updates the default branch and cleans. Run these only when authorized.
 ${END_MARKER}`;
 
 /** What adding the block did to a file. */

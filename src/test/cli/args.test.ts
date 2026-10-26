@@ -74,18 +74,36 @@ suite('cli args', () => {
 		assert.strictEqual(parseArgs(['list', '--json']).json, true);
 		assert.strictEqual(parseArgs(['worktree', 'list', '--json']).json, true);
 		assert.strictEqual(parseArgs(['restore', '--json']).json, true);
+		assert.strictEqual(parseArgs(['post-pr', 'feature/x', '--json']).json, true);
 		assert.strictEqual(parseArgs(['--json', '--help']).command, 'help');
 		for (const args of [
 			['worktree', 'prune'],
 			['worktree', 'remove', 'feature/x'],
-			['post-pr', 'main'],
 			['sync'],
 			['resume'],
 			['restore', 'feature/x'],
 			['agents'],
 		]) {
-			assert.throws(() => parseArgs([...args, '--json']), /--json requires clean, worktree list, or restore without branch arguments/);
+			assert.throws(() => parseArgs([...args, '--json']), /--json requires clean, post-pr, worktree list, or restore without branch arguments/);
 		}
+	});
+
+	test('--into names the branch post-pr merged into, and nothing else takes it', () => {
+		assert.strictEqual(parseArgs(['post-pr', '--into', 'develop']).into, 'develop');
+		assert.strictEqual(parseArgs(['post-pr']).into, undefined);
+		assert.throws(() => parseArgs(['clean', '--into', 'develop']), /--into can only be used with post-pr/);
+		assert.throws(() => parseArgs(['post-pr', '--into']), /requires a value/);
+		assert.throws(() => parseArgs(['post-pr', 'a', 'b']), /Unexpected argument: b/);
+	});
+
+	test('--clean and --no-clean limit the other branches post-pr cleans, and nothing else takes them', () => {
+		assert.deepStrictEqual(parseArgs(['post-pr', '--clean', 'a', '--clean', 'b']).others, ['a', 'b']);
+		assert.deepStrictEqual(parseArgs(['post-pr', '--no-clean']).others, []);
+		assert.strictEqual(parseArgs(['post-pr']).others, undefined);
+		assert.throws(() => parseArgs(['post-pr', '--clean', 'a', '--no-clean']), /--clean cannot be combined with --no-clean/);
+		assert.throws(() => parseArgs(['post-pr', '--clean=-x']), /Invalid branch name: "-x"/);
+		assert.throws(() => parseArgs(['clean', '--clean', 'a']), /--clean can only be used with post-pr/);
+		assert.throws(() => parseArgs(['clean', '--no-clean']), /--no-clean can only be used with post-pr/);
 	});
 
 	test('sync --continue is an alias of resume', () => {

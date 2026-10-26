@@ -181,20 +181,23 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 		return { reason: 'bisect-in-progress', hint: cmd('git', '-C', worktree.path, 'bisect', 'reset') };
 	}
 	if (branch.current) {
-		// post-pr deletes the branch it leaves: only suggest it when the branch is proven dead.
+		// post-pr leaves the worktree, then deletes the branch: only suggest it when the branch is proven dead.
 		const hint =
 			defaultBranch === undefined
 				? 'git switch <another-branch>'
 				: branch.verdict === 'dead'
-					? cmd('gsp', 'post-pr', defaultBranch)
+					? cmd('gsp', 'post-pr', branch.name, '--yes')
 					: cmd('git', 'switch', defaultBranch);
 		return { reason: 'current-branch', hint };
 	}
 	if (worktree?.isMain) {
-		return {
-			reason: 'main-worktree',
-			hint: `${cmd('git', '-C', worktree.path, 'switch')} ${defaultBranch ? quoteShellArg(defaultBranch) : '<another-branch>'}`,
-		};
+		const hint =
+			defaultBranch === undefined
+				? `${cmd('git', '-C', worktree.path, 'switch')} <another-branch>`
+				: branch.verdict === 'dead'
+					? cmd('gsp', 'post-pr', branch.name, '--yes')
+					: cmd('git', '-C', worktree.path, 'switch', defaultBranch);
+		return { reason: 'main-worktree', hint };
 	}
 	if (worktree?.locked) {
 		return { reason: 'locked-worktree', hint: cmd('git', 'worktree', 'unlock', worktree.path) };
@@ -294,7 +297,7 @@ export function decideActions(branches: readonly PlannedBranch[], options: Decid
 const FORCE_LIFTS: ReadonlySet<CleanBranch['reason']> = new Set(['needs-force', 'ignored-files']);
 
 /** Skips of planned deletions that running `gsp clean` again may carry out. */
-const RERUN_LIFTS: ReadonlySet<CleanBranch['reason']> = new Set(['plan-changed', 'fetch-failed', 'worktree-changed']);
+export const RERUN_LIFTS: ReadonlySet<CleanBranch['reason']> = new Set(['plan-changed', 'fetch-failed', 'worktree-changed']);
 
 /**
  * True when more could be cleaned with the user's approval: planned deletions
@@ -335,6 +338,17 @@ export type CleanScope = {
 	readonly github: boolean;
 	readonly fetch: boolean;
 };
+
+/** Longer than this, a suggested command is printed on its own line. */
+const COMMAND_INLINE_WIDTH = 80;
+
+/**
+ * `text`, then `command`: on the same line when short, otherwise on its own
+ * line, whole, since it names every planned branch.
+ */
+export function withCommand(text: string, command: string): string {
+	return command.length > COMMAND_INLINE_WIDTH ? `${text}:\n${command}` : `${text}: ${command}`;
+}
 
 /**
  * The command that applies a plan without ever going beyond it: every planned
@@ -463,6 +477,10 @@ function describeSkip(branch: CleanBranch): string {
 		case 'ignored-files':
 			return `removing worktree ${worktree} would delete ${branch.worktree?.ignoredFiles ? describeIgnored(branch.worktree.ignoredFiles) : 'ignored files'}, needs --force`;
 		case 'needs-force':
+			// post-pr hints at what may prove it first (fetching, pushing, another base): the label says no more than the hint.
+			if (branch.hint && !branch.hint.split(' ').includes('--force')) {
+				return 'not proven merged yet';
+			}
 			// The verdict, shown next to it, says which commits are found nowhere else.
 			return branch.verdict === 'alive' ? 'named, but not merged: needs --force' : 'needs --force';
 		case 'tracked-by-kept-branch':

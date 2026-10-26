@@ -89,11 +89,11 @@ suite('restore (real git)', function () {
 		assert.ok(calls.includes('success Restored 1 branch(es): feature/x.'));
 	});
 
-	test('post-pr records the merged branch it deletes', async () => {
+	test('post-pr records the branch it deletes', async () => {
 		const sha = makeGoneBranchWithCommit('feature/done');
 		git(['checkout', '-q', 'feature/done'], fx.repo);
 
-		assert.strictEqual(await runCli(['post-pr', 'main', '--yes'], createFakeIo(fx.repo)), EXIT.ok);
+		assert.strictEqual(await runCli(['post-pr', '--yes', '--force'], createFakeIo(fx.repo)), EXIT.ok);
 		assert.strictEqual(await runCli(['restore', 'feature/done'], createFakeIo(fx.repo)), EXIT.ok);
 		assert.strictEqual(tipOf('feature/done'), sha);
 	});
@@ -103,7 +103,7 @@ suite('restore (real git)', function () {
 		commitFile(fx.repo, 'live.txt', 'live\n', 'live work');
 		git(['push', '-q', '-u', 'origin', 'feature/live'], fx.repo);
 
-		assert.strictEqual(await runCli(['post-pr', 'main', '--yes'], createFakeIo(fx.repo)), EXIT.ok);
+		assert.strictEqual(await runCli(['post-pr', '--yes', '--force'], createFakeIo(fx.repo)), EXIT.ok);
 		assert.ok(!branchExists(fx.repo, 'feature/live'));
 
 		const io = createFakeIo(fx.repo);

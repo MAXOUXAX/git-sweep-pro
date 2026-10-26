@@ -107,7 +107,7 @@ export async function pruneWorktrees(context: WorkflowContext, dryRun = false): 
 }
 
 /** Absolute, symlink-resolved path when it exists, otherwise the lexical absolute path. */
-function canonical(absolutePath: string): string {
+export function canonical(absolutePath: string): string {
 	try {
 		return fs.realpathSync(absolutePath);
 	} catch {
