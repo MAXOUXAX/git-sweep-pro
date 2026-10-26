@@ -26,20 +26,26 @@ export async function inspectDeletions({ deletionLog, git }: WorkflowContext): P
 	if (entries.length === 0) {
 		return [];
 	}
-	const [refs, commits] = await Promise.all([
+	const [refs, commits, remotes] = await Promise.all([
 		git(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes']),
 		// Prints the commits that still exist, and skips the others.
 		git(['rev-list', '--no-walk', '--ignore-missing', ...new Set(entries.map((entry) => entry.sha))]),
+		entries.some((entry) => entry.remote !== undefined) ? git(['remote']) : { stdout: '' },
 	]);
 	const existingRefs = lineSet(refs.stdout);
 	const availableCommits = lineSet(commits.stdout);
+	const configuredRemotes = lineSet(remotes.stdout);
 	return entries.map((entry) => ({
 		entry,
-		blocker: existingRefs.has(entry.remote ? `refs/remotes/${entry.remote}/${entry.branch}` : `refs/heads/${entry.branch}`)
-			? `a branch with this name already exists${entry.remote ? ` on ${entry.remote}` : ''}`
-			: availableCommits.has(entry.sha)
-				? undefined
-				: `Git has garbage-collected its commit ${entry.sha.slice(0, 7)}`,
+		// The log can be edited by hand: only push to a remote this repository names, never to a URL.
+		blocker:
+			entry.remote !== undefined && !configuredRemotes.has(entry.remote)
+				? `${entry.remote} is not a remote of this repository`
+				: existingRefs.has(entry.remote ? `refs/remotes/${entry.remote}/${entry.branch}` : `refs/heads/${entry.branch}`)
+					? `a branch with this name already exists${entry.remote ? ` on ${entry.remote}` : ''}`
+					: availableCommits.has(entry.sha)
+						? undefined
+						: `Git has garbage-collected its commit ${entry.sha.slice(0, 7)}`,
 		upstream: entry.upstream && existingRefs.has(entry.upstream) ? entry.upstream : undefined,
 	}));
 }

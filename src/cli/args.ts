@@ -31,6 +31,12 @@ export type CliOptions = {
 	readonly worktree: WorktreeArgs | undefined;
 	/** `post-pr --into <branch>`: the branch the pull request was merged into; the default branch when undefined. */
 	readonly into: string | undefined;
+	/**
+	 * `post-pr --clean <branch>` (repeatable) or `--no-clean`: the only other
+	 * branches its clean step may delete, none with `--no-clean`; every proven
+	 * one when undefined.
+	 */
+	readonly others: readonly string[] | undefined;
 	/** Repository directory (`-C <path>`); defaults to the current directory. */
 	readonly cwd: string | undefined;
 	/** `--dry-run`, `--force`, or a safe delete by default. */
@@ -91,6 +97,8 @@ const OPTIONS = {
 	json: { type: 'boolean', default: false },
 	cwd: { type: 'string', short: 'C' },
 	into: { type: 'string' },
+	clean: { type: 'string', multiple: true },
+	'no-clean': { type: 'boolean', default: false },
 	verbose: { type: 'boolean', short: 'v', default: false },
 	help: { type: 'boolean', short: 'h', default: false },
 	version: { type: 'boolean', default: false },
@@ -205,6 +213,16 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 	if (values.into !== undefined && command !== 'post-pr') {
 		throw new UsageError('--into can only be used with post-pr.');
 	}
+	if ((values.clean !== undefined || values['no-clean']) && command !== 'post-pr') {
+		throw new UsageError(`${values['no-clean'] ? '--no-clean' : '--clean'} can only be used with post-pr.`);
+	}
+	if (values.clean !== undefined && values['no-clean']) {
+		throw new UsageError('--clean cannot be combined with --no-clean.');
+	}
+	const invalidOther = values.clean?.find((name) => name.startsWith('-') || name.trim() === '');
+	if (invalidOther !== undefined) {
+		throw new UsageError(`Invalid branch name: "${invalidOther}".`);
+	}
 	if (command === 'restore' && (values['dry-run'] || values.force)) {
 		// Restore never overwrites a branch, so there is nothing to force or to preview.
 		throw new UsageError(`${values.force ? '--force' : '--dry-run'} cannot be used with restore.`);
@@ -247,6 +265,7 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 		positionals: args,
 		worktree,
 		into: values.into,
+		others: values['no-clean'] ? [] : values.clean,
 		cwd: values.cwd,
 		mode: values.force ? 'forceDelete' : values['dry-run'] || requested === 'list' ? 'dryRun' : 'safeDelete',
 		yes: values.yes,
@@ -293,6 +312,7 @@ function helpOptions(topic: CommandName | undefined): CliOptions {
 		positionals: [],
 		worktree: undefined,
 		into: undefined,
+		others: undefined,
 		cwd: undefined,
 		mode: 'safeDelete',
 		yes: false,

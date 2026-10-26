@@ -23,6 +23,7 @@ import {
 	hasPendingChanges,
 	hasNoLocalBranch,
 	postPrCommand,
+	withPlannedOthers,
 	type DefaultBranchUpdate,
 	type PostPrReport,
 	type PostPrScope,
@@ -36,6 +37,8 @@ export type PostPrOptions = Pick<CleanOptions, 'dryRun' | 'yes' | 'force' | 'fet
 	readonly into: string | undefined;
 	/** `-C <path>`, as given: the commands gsp suggests keep it. */
 	readonly cwd?: string;
+	/** The only other branches the clean step may delete (`--clean`, none with `--no-clean`); every proven one when undefined. */
+	readonly others?: readonly string[];
 };
 
 export type PostPrContext = CleanContext & {
@@ -380,6 +383,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		protectedPatterns: options.protectedPatterns,
 		github: options.github,
 		fetch: options.fetch,
+		...(options.others === undefined ? {} : { others: options.others }),
 	};
 
 	const { requested, noLocal } = await readPositional(context, options, {
@@ -429,7 +433,8 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 			into,
 			mainCheckoutDirty: worktree?.isMain ? await hasTrackedChanges(git, worktree.path) : false,
 			remoteAhead,
-			scope,
+			// Its hints finish it along with the other branches the plan deletes, named.
+			scope: withPlannedOthers(scope, others),
 			...(mergedElsewhere === undefined ? {} : { mergedElsewhere }),
 			...(pushRemote === undefined ? {} : { pushRemote }),
 		});
@@ -439,17 +444,17 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		plan.remote.source === 'ls-remote' && intoRemote !== undefined
 			? await isRemoteAhead(git, intoRef, intoRemote, (await readTips(git, [intoRef])).get(intoRef) ?? '')
 			: false;
-	const plannedIgnored = new Map(plan.ignored);
-	let analysed = await analyseTarget(plan.planned, plannedIgnored, false);
-	let target = await decide(analysed, remoteAhead);
-	// The clean step: the other branches, with the rules of `gsp clean --yes`.
+	// The clean step: the other branches, with the rules of `gsp clean --yes`, limited to those named with --clean.
 	const excluded = new Set([targetName, ...(into === base?.name ? [] : [into])]);
 	const decideOthers = (planned: readonly PlannedBranch[]) =>
 		decideActions(
-			planned.filter((branch) => !excluded.has(branch.name)),
+			planned.filter((branch) => !excluded.has(branch.name) && (options.others === undefined || options.others.includes(branch.name))),
 			{ force: false, named: new Set(), defaultBranch: base?.name }
 		);
 	let others = decideOthers(plan.planned);
+	const plannedIgnored = new Map(plan.ignored);
+	let analysed = await analyseTarget(plan.planned, plannedIgnored, false);
+	let target = await decide(analysed, remoteAhead);
 	let { analysis, remote } = plan;
 	let worktreesPruned = apply ? [] : plan.prunable;
 
@@ -507,7 +512,6 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	({ analysis, remote, worktreesPruned } = refreshed);
 	const fetchedIgnored = new Map(refreshed.ignored);
 	analysed = await analyseTarget(refreshed.planned, fetchedIgnored, remote.source === 'fetch');
-	const fresh = await decide(analysed, false);
 	// The worktrees as the plan showed them, to check them against before removing one. The merged
 	// branch is decided again after the fetch: its worktree is checked against the ignored files only.
 	const shown = { branches: others, ignored: [plannedIgnored, fetchedIgnored] };
@@ -519,10 +523,16 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		github: scope.github,
 		fetch: scope.fetch,
 	};
-	target = fresh && holdToPlan([fresh], [fresh], remote, true, cleanScope)[0];
 	others = holdToPlan(others, decideOthers(refreshed.planned), remote, !options.yes, cleanScope);
-	// Every proof compares with the default branch: when the fetch changed it, nothing is deleted.
 	const review = postPrCommand(scope, targetName ?? noLocal, '--dry-run');
+	const fresh = await decide(analysed, false);
+	// Asked in a terminal, it is deleted only when the question named it: one the fetch alone proves is planned again.
+	const approved = target && finishing ? [{ ...target, action: 'delete' as const }] : [];
+	target = fresh && holdToPlan(approved, [fresh], remote, !options.yes, cleanScope)[0];
+	if (target?.reason === 'plan-changed') {
+		target = { ...target, hint: review };
+	}
+	// Every proof compares with the default branch: when the fetch changed it, nothing is deleted.
 	const held = holdToBase([...(target ? [target] : []), ...others], base, analysis.checks.base, review);
 	[target, others] = target ? [held.branches[0], held.branches.slice(1)] : [null, held.branches];
 	if (held.message) {
