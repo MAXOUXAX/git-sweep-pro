@@ -126,7 +126,10 @@ would.
 
 <branch> is deleted only when its work is proven to be in the default
 branch, with the rules of "gsp clean". Otherwise nothing is changed on it,
-gsp says why, and exits with 5. Works from any worktree:
+gsp says why, and exits with 5; the same when its worktree has uncommitted
+changes. A <branch> that no longer exists (gh pr merge --delete-branch
+deletes it) is reported as already deleted, and the rest goes on.
+Works from any worktree:
   - run from the branch's own linked worktree, gsp removes it, carries on
     from the main checkout and tells you where to "cd" next;
   - when the branch is checked out in the main checkout, that checkout is

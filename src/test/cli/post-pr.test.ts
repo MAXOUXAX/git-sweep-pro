@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { runCli } from '../../cli/app';
 import { EXIT } from '../../cli/args';
+import type { CleanBranch } from '../../core/clean-plan';
 import type { PostPrReport } from '../../core/post-pull-request-plan';
 import { createFakePrompter } from './fake-prompter';
 import { branchExists, commitFile, createFakeIo, createRepoFixture, git, makeGoneBranch, type RepoFixture } from './git-fixture';
@@ -45,8 +46,9 @@ suite('cli post-pr (real git)', function () {
 		git(['push', '-q', 'origin', 'main', `:${branch}`], merger);
 	}
 
-	function json(out: readonly string[]): PostPrReport {
-		return JSON.parse(out.join('')) as PostPrReport;
+	/** The report of a run that had a branch to finish, or none. */
+	function json(out: readonly string[]): PostPrReport & { readonly branch: CleanBranch | null } {
+		return JSON.parse(out.join('')) as PostPrReport & { readonly branch: CleanBranch | null };
 	}
 
 	const tip = (ref: string, cwd = fx.repo) => git(['rev-parse', ref], cwd).trim();
@@ -329,14 +331,47 @@ suite('cli post-pr (real git)', function () {
 		assert.ok(branchExists(fx.repo, 'feature/x') && branchExists(fx.repo, 'feature/old'));
 	});
 
-	test('an unknown branch is a usage error', async () => {
-		const io = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['post-pr', 'feature/nope', '--yes'], io), EXIT.usage);
-		assert.ok(io.err.join('').includes('No local branch named "feature/nope"'), io.err.join(''));
+	/** What `gh pr merge --delete-branch` leaves: the branch merged on the remote and deleted there and locally, main checked out. */
+	function mergeAndDeleteBranch(name: string): void {
+		git(['checkout', '-q', '-b', name], fx.repo);
+		commitFile(fx.repo, 'x.txt', 'x\n', 'work');
+		git(['push', '-q', '-u', 'origin', name], fx.repo);
+		squashMergeOnRemote(name);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['branch', '-q', '-D', name], fx.repo);
+	}
 
-		const json = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['post-pr', 'feature/nope', '--json'], json), EXIT.usage);
-		assert.strictEqual(JSON.parse(json.out.join('')).error.code, 'unknown-branch');
+	test('a branch that is already deleted: says so, updates main and cleans', async () => {
+		mergeAndDeleteBranch('feature/x');
+		makeGoneBranch(fx.repo, 'feature/old');
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--yes'], io), EXIT.ok, io.err.join(''));
+		const out = io.out.join('');
+		assert.ok(out.startsWith('feature/x is already deleted.\n'), out);
+		assert.match(out, /^main: fast-forwarded to origin\/main /m);
+		assert.ok(out.includes('Other branches: 1 deleted'), out);
+		assert.strictEqual(tip('main'), tip('origin/main'));
+		assert.ok(!branchExists(fx.repo, 'feature/old'));
+	});
+
+	test('a branch that is already deleted, in JSON', async () => {
+		mergeAndDeleteBranch('feature/x');
+		git(['fetch', '-q'], fx.repo);
+
+		const plan = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--json'], plan), EXIT.notApplied, plan.err.join(''));
+		const planned = JSON.parse(plan.out.join('')) as PostPrReport;
+		assert.deepStrictEqual(planned.branch, { name: 'feature/x', action: 'gone' });
+		assert.strictEqual(planned.defaultBranch.reason, 'not-applied');
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
+		const report = JSON.parse(io.out.join('')) as PostPrReport;
+		assert.deepStrictEqual(report.branch, { name: 'feature/x', action: 'gone' });
+		assert.deepStrictEqual(report.worktree, { path: null, removed: false, switched: false });
+		assert.strictEqual(report.defaultBranch.updated, true);
+		assert.strictEqual(report.restore, null);
 	});
 
 	test('in a terminal, asks before deleting; refusing changes nothing', async () => {

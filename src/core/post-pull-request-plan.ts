@@ -61,13 +61,21 @@ export type PostPrWorktree = {
 	readonly switched: boolean;
 };
 
+/** The merged branch, named on the command line, when it no longer exists: `gh pr merge --delete-branch` deletes it, for one. */
+export type GoneBranch = { readonly name: string; readonly action: 'gone' };
+
+export const isGone = (branch: PostPrReport['branch']): branch is GoneBranch => branch?.action === 'gone';
+
 /** The `--json` document of `gsp post-pr`. */
 export type PostPrReport = {
 	readonly schema: typeof CLEAN_SCHEMA;
 	readonly command: 'post-pr';
 	readonly mode: CleanMode;
-	/** The merged branch, as `gsp clean` reports a branch; null when there is none to finish (e.g. run on the default branch). */
-	readonly branch: CleanBranch | null;
+	/**
+	 * The merged branch, as `gsp clean` reports a branch; `{ name, action: "gone" }` when the branch named is
+	 * already deleted; null when there is none to finish (e.g. run on the default branch).
+	 */
+	readonly branch: CleanBranch | GoneBranch | null;
 	readonly worktree: PostPrWorktree;
 	readonly defaultBranch: DefaultBranchUpdate;
 	/** The clean step that follows, run with proof-only rules (`gsp clean --yes`). */
@@ -151,7 +159,7 @@ export function formatDefaultBranch(update: DefaultBranchUpdate): string | undef
 /** True when the report holds changes that were planned but not carried out. */
 export function hasPendingChanges(report: PostPrReport): boolean {
 	return (
-		(report.branch !== null && report.branch.result !== 'deleted') ||
+		(report.branch !== null && !isGone(report.branch) && report.branch.result !== 'deleted') ||
 		report.defaultBranch.reason === 'not-applied' ||
 		report.clean.branches.some((branch) => (branch.action === 'delete' && branch.result === undefined) || branch.reason === 'needs-force')
 	);
@@ -163,7 +171,9 @@ export function hasPendingChanges(report: PostPrReport): boolean {
  */
 export function formatPostPrLines(report: PostPrReport): string[] {
 	const lines: string[] = [];
-	if (report.branch) {
+	if (isGone(report.branch)) {
+		lines.push(`${report.branch.name} is already deleted.`);
+	} else if (report.branch) {
 		lines.push(...formatBranchLines({ branches: [report.branch], mode: report.mode }));
 		if (report.worktree.switched && report.worktree.path) {
 			const switched = report.mode === 'apply' ? 'switched' : 'switches';

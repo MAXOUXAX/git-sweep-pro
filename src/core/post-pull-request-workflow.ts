@@ -16,7 +16,7 @@ import {
 import { canRecordDeletions, createDeletionRecorder } from './deletion-log';
 import { toErrorMessage } from './errors';
 import { quoteShellArg, type RunGit } from './git-command';
-import { decideTarget, hasPendingChanges, type DefaultBranchUpdate, type PostPrReport } from './post-pull-request-plan';
+import { decideTarget, hasPendingChanges, isGone, type DefaultBranchUpdate, type PostPrReport } from './post-pull-request-plan';
 import { canonical, listWorktrees, type Worktree } from './worktrees';
 
 export type PostPrOptions = Pick<CleanOptions, 'dryRun' | 'yes' | 'force' | 'fetch' | 'github' | 'protectedPatterns' | 'canPrompt' | 'confirm'> & {
@@ -34,15 +34,7 @@ export type PostPrContext = CleanContext & {
 export type PostPrRun = { readonly report: PostPrReport; readonly outcome: CleanOutcome };
 
 /** Arguments that name no branch: the CLI reports them as a usage error. */
-export class PostPrUsageError extends Error {
-	constructor(
-		message: string,
-		/** `unknown-branch` for a merged branch that does not exist. */
-		readonly code: 'unknown-branch' | 'usage' = 'usage'
-	) {
-		super(message);
-	}
-}
+export class PostPrUsageError extends Error {}
 
 function firstLine(message: string): string {
 	return message.split('\n').find((line) => line.trim())?.trim() ?? message;
@@ -201,15 +193,12 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	const current = head.stdout.trim();
 	const localBranches = locals.stdout.split('\n').filter(Boolean);
 	const mainCheckout = worktrees.find((worktree) => worktree.state === 'main')?.path ?? context.root;
+	// A merged branch that no longer exists is already deleted (`gh pr merge --delete-branch`): the rest goes on.
+	let gone: string | undefined;
 	if (options.branch !== undefined && options.branch !== options.into && !localBranches.includes(options.branch)) {
 		// The old form named the default branch: it may exist only on the remote.
 		const remoteHead = (await git(['for-each-ref', '--format=%(symref:lstrip=3)', 'refs/remotes/*/HEAD'])).stdout.split('\n');
-		if (!remoteHead.includes(options.branch)) {
-			throw new PostPrUsageError(
-				`No local branch named "${options.branch}": it may already be deleted. Run "gsp post-pr" on the default branch to update it and clean.`,
-				'unknown-branch'
-			);
-		}
+		gone = remoteHead.includes(options.branch) ? undefined : options.branch;
 	}
 
 	const apply = !options.dryRun && (options.yes || options.canPrompt);
@@ -234,7 +223,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		);
 		requested = undefined;
 	}
-	const targetName = requested ?? (current !== 'HEAD' && current !== into ? current : undefined);
+	const targetName = gone ? undefined : (requested ?? (current !== 'HEAD' && current !== into ? current : undefined));
 
 	/** The branch to finish, compared with --into; the detected default branch stays protected. */
 	const analyseTarget = async (
@@ -305,7 +294,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 			schema: CLEAN_SCHEMA,
 			command: 'post-pr',
 			mode,
-			branch: target,
+			branch: gone ? { name: gone, action: 'gone' } : target,
 			worktree: { path: worktree?.path ?? null, removed, switched: mode === 'plan' ? target?.action === 'delete' && inMain() : switched },
 			defaultBranch,
 			clean: buildReport(mode, analysis, remote, others, worktreesPruned, cleanRecorder.recorded),
@@ -343,7 +332,8 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	target = fresh && holdToPlan([fresh], [fresh], remote)[0];
 	others = holdToPlan(others, decideOthers(refreshed.planned), remote, !options.yes);
 	// Every proof compares with the default branch: when the fetch changed it, nothing is deleted.
-	const review = ['gsp', 'post-pr', ...(targetName ? [targetName] : []), '--dry-run'].map(quoteShellArg).join(' ');
+	const rerun = targetName ?? gone;
+	const review = ['gsp', 'post-pr', ...(rerun ? [rerun] : []), '--dry-run'].map(quoteShellArg).join(' ');
 	const held = holdToBase([...(target ? [target] : []), ...others], base, analysis.checks.base, review);
 	[target, others] = target ? [held.branches[0], held.branches.slice(1)] : [null, held.branches];
 	if (held.message) {
@@ -372,7 +362,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 /** How a run ended, from its report. */
 function runOutcome(report: PostPrReport): CleanOutcome {
 	const failed =
-		(report.branch !== null && (report.branch.result === 'failed' || report.branch.result === 'worktree-removed')) ||
+		(report.branch !== null && !isGone(report.branch) && (report.branch.result === 'failed' || report.branch.result === 'worktree-removed')) ||
 		report.defaultBranch.reason === 'failed' ||
 		appliedOutcome(report.clean.branches) === 'failed';
 	if (failed) {
@@ -381,6 +371,6 @@ function runOutcome(report: PostPrReport): CleanOutcome {
 	if (report.mode === 'plan') {
 		return hasPendingChanges(report) ? 'not-applied' : 'done';
 	}
-	const targetKept = report.branch !== null && report.branch.result !== 'deleted';
+	const targetKept = report.branch !== null && !isGone(report.branch) && report.branch.result !== 'deleted';
 	return targetKept || hasPendingDeletions(report.clean.branches) ? 'not-applied' : 'done';
 }

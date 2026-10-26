@@ -107,7 +107,8 @@ gsp post-pr feature/x --yes       # from anywhere else
 gsp post-pr --dry-run             # preview, change nothing
 ```
 
-- The branch is deleted only when its work is proven to be in the default branch, with the same rules as `gsp clean`. Otherwise nothing changes on it, gsp says why (for example `1 commit not merged into origin/main`) and exits with 5. `--force` deletes it anyway, unless it is protected.
+- The branch is deleted only when its work is proven to be in the default branch, with the same rules as `gsp clean`. Otherwise nothing changes on it, gsp says why (for example `1 commit not merged into origin/main`) and exits with 5. `--force` deletes it anyway, unless it is protected. A branch kept because its worktree has uncommitted changes also exits with 5.
+- A branch that no longer exists, because `gh pr merge --delete-branch` already deleted it for example, is not an error: gsp says `feature/x is already deleted.`, then updates the default branch and cleans as usual.
 - Run from the branch's own linked worktree, gsp removes that worktree, carries on from the main checkout and ends with `cd <main checkout>`.
 - When the branch is checked out in the main checkout, gsp switches that checkout to the default branch first, and refuses when it has uncommitted changes.
 - The default branch is fast-forwarded with `git merge --ff-only` where it is checked out, when that worktree is clean, or moved as a ref when it is checked out nowhere. A dirty checkout is reported, never an error.
@@ -222,7 +223,7 @@ Other JSON outputs:
 
 | Field | Value |
 | --- | --- |
-| `branch` | The merged branch, as an entry of `branches` above, or `null` when there is none to finish (run on the default branch) |
+| `branch` | The merged branch, as an entry of `branches` above; `{ "name": "feature/x", "action": "gone" }` when the branch named is already deleted; `null` when there is none to finish (run on the default branch) |
 | `worktree` | `path` where the branch was checked out (or `null`), `removed` (its linked worktree went with it), `switched` (it was the main checkout, switched to the default branch) |
 | `defaultBranch` | `name`, `from` and `to` (tips before and of the remote branch), `upstream`, `where` (the worktree fast-forwarded, or `null` when only the ref moves), `updated`, and `reason` when not updated: `up-to-date`, `not-applied` (plan), `no-remote`, `not-local`, `dirty`, `diverged` or `failed`, with a `hint`. `remoteAhead` (plan): the remote has commits not fetched yet, so the plan may change |
 | `clean` | The clean step that follows, as the `gsp clean --json` document, without the merged branch |
