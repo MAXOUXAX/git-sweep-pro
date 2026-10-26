@@ -139,6 +139,13 @@ export function resolveWorktree(worktrees: readonly Worktree[], target: string, 
 	return worktree ? { kind: 'found', worktree } : { kind: 'not-found', target };
 }
 
+/**
+ * `git worktree remove`, made to refuse untracked files: Git checks the
+ * worktree with a plain `git status`, which a `status.showUntrackedFiles=no`
+ * config blinds to them, and would then delete them.
+ */
+export const WORKTREE_REMOVE: readonly string[] = ['-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove'];
+
 export type WorktreeRemoval =
 	| { readonly kind: 'removed'; readonly worktree: Worktree }
 	| { readonly kind: 'main'; readonly worktree: Worktree }
@@ -159,6 +166,6 @@ export async function removeWorktree(context: WorkflowContext, target: string, f
 	if (resolution.worktree.state === 'main') {
 		return { kind: 'main', worktree: resolution.worktree };
 	}
-	await context.git(['worktree', 'remove', ...(force ? ['--force'] : []), resolution.worktree.path]);
+	await context.git([...WORKTREE_REMOVE, ...(force ? ['--force'] : []), resolution.worktree.path]);
 	return { kind: 'removed', worktree: resolution.worktree };
 }

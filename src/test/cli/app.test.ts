@@ -691,7 +691,7 @@ suite('cli app (real git)', function () {
 			assert.ok(io.out.join('').includes('Removed worktree'));
 		});
 
-		test('worktree remove refuses a dirty worktree without --force and removes it with --force', async () => {
+		test('worktree remove refuses a dirty worktree without --force, even when status hides untracked files, and removes it with --force', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');
 			fs.writeFileSync(path.join(wt, 'wip.txt'), 'work in progress\n');

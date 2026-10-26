@@ -23,7 +23,7 @@ import type { RunGh } from './github-signal';
 import { listIgnoredFiles, summarizeIgnored } from './ignored-files';
 import { isNotFullyMergedError } from './sweep-logic';
 import type { PickItem, WorkflowContext } from './workflow';
-import { listWorktrees, parseWorktrees, pruneWorktrees } from './worktrees';
+import { listWorktrees, parseWorktrees, pruneWorktrees, WORKTREE_REMOVE } from './worktrees';
 
 export type CleanOptions = {
 	/** Branch names or globs; only the matching branches are considered. All branches when empty. */
@@ -261,7 +261,7 @@ async function deleteBranch(git: RunGit, branch: CleanBranch, seen: SeenWorktree
 	}
 	if (worktree) {
 		try {
-			await git(['worktree', 'remove', worktree]);
+			await git([...WORKTREE_REMOVE, worktree]);
 		} catch (error) {
 			return { result: 'failed', error: `could not remove worktree ${worktree}: ${gitFailureReason(error)}` };
 		}
