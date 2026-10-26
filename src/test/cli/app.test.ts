@@ -210,6 +210,35 @@ suite('cli app (real git)', function () {
 		assert.strictEqual(calls.at(-1), 'outro Done.');
 	});
 
+	test('an unreachable remote falls back to the local remote-tracking refs, and says so', async () => {
+		makeGoneBranch(fx.repo, 'feature/a');
+		git(['remote', 'set-url', 'origin', path.join(fx.dir, 'nowhere.git')], fx.repo);
+
+		const plan = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['--json'], plan), EXIT.notApplied);
+		const planned = JSON.parse(plan.out.join(''));
+		assert.deepStrictEqual([planned.checks.remote.source, planned.checks.remote.reason], ['local-refs', 'unreachable']);
+		assert.ok(plan.err.join('').includes('Could not reach the remote'));
+
+		const applied = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['--json', '--yes'], applied), EXIT.ok);
+		const result = JSON.parse(applied.out.join(''));
+		assert.deepStrictEqual([result.checks.remote.source, result.checks.remote.reason, result.checks.fetched], ['local-refs', 'unreachable', false]);
+		assert.ok(!branchExists(fx.repo, 'feature/a'), 'a proven branch is still deleted');
+	});
+
+	test('a repository without a remote is cleaned from its local branches', async () => {
+		git(['remote', 'remove', 'origin'], fx.repo);
+		git(['branch', 'feature/a'], fx.repo);
+
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['--json', '--yes'], io), EXIT.ok);
+		const report = JSON.parse(io.out.join(''));
+		assert.deepStrictEqual(report.checks.remote, { source: 'local-refs', reason: 'no-remote' });
+		assert.strictEqual(report.checks.base.ref, 'refs/heads/main');
+		assert.ok(!branchExists(fx.repo, 'feature/a'));
+	});
+
 	test('an interactive cancel exits 4 and deletes nothing', async () => {
 		makeGoneBranch(fx.repo, 'feature/a');
 		const { prompter } = createFakePrompter({ multiselect: [0], confirm: false });
