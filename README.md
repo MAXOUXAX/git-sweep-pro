@@ -163,7 +163,8 @@ gsp restore feature/x --non-interactive
   ],
   "worktreesPruned": [],
   "restore": null,
-  "summary": { "delete": 1, "deleted": 0, "failed": 0, "skipped": 0, "kept": 1, "needsForce": 0, "reasons": { "squash-merged": 1 } }
+  "summary": { "delete": 1, "deleted": 0, "failed": 0, "skipped": 0, "kept": 1, "needsForce": 0, "reasons": { "squash-merged": 1 } },
+  "next": "gsp clean feature/squash --yes"
 }
 ```
 
@@ -179,6 +180,7 @@ gsp restore feature/x --non-interactive
 | `branches[].result` | Apply mode, deleted branches only: `deleted`, `worktree-removed` (the worktree went, the branch did not: see `error`) or `failed` (nothing changed: see `error`) |
 | `worktreesPruned` | Registrations whose directory is gone: pruned (apply) or to prune (plan) |
 | `restore` | `gsp restore <names>` for the branches deleted by this run, or `null` |
+| `next` | The command to run next, the one the terminal output prints: it applies the planned deletions not carried out, or, when some changed while applying, plans again within the same branches and options (`--dry-run`) so you can review them. `null` when nothing is left, or when what is left needs `--force` or your action: each branch's `hint` says what to do |
 
 Other JSON outputs:
 

@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import type { BranchAnalysis } from '../../core/branch-analysis';
 import {
 	applyCommand,
+	nextCommand,
 	CLEAN_SCHEMA,
 	decideActions,
 	describeVerdict,
@@ -177,6 +178,16 @@ suite('clean plan', () => {
 		const many = decide(Array.from({ length: 11 }, (_, index) => branch(`feature/${index}`)));
 		assert.strictEqual(applyCommand(many, { ...scope, patterns: ['feature/*'] }), "gsp clean 'feature/*' --yes", 'too many to name: the patterns');
 		assert.strictEqual(applyCommand(many, scope), 'gsp clean --yes');
+	});
+
+	test('the next command applies what is left, or plans again when it changed', () => {
+		const scope = { patterns: ['feature/*'], protectedPatterns: [], github: true, fetch: true };
+		const planned = decide([branch('feature/a'), branch('feature/gone', { reason: 'upstream-gone', unpushedCommits: 1 })]);
+		assert.strictEqual(nextCommand({ branches: planned }, scope), 'gsp clean feature/a --yes');
+		const changed = planned.map((entry): CleanBranch => (entry.name === 'feature/a' ? { ...entry, action: 'skip', reason: 'fetch-failed' } : entry));
+		assert.strictEqual(nextCommand({ branches: changed }, scope), "gsp clean 'feature/*' --dry-run");
+		const deleted = planned.map((entry): CleanBranch => (entry.name === 'feature/a' ? { ...entry, result: 'deleted' } : entry));
+		assert.strictEqual(nextCommand({ branches: deleted }, scope), null, 'what needs --force is left to its own hint');
 	});
 
 	test('without a default branch, the hints still say what to do', () => {

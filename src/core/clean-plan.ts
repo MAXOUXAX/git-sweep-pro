@@ -123,7 +123,10 @@ export type CleanSummary = {
 	readonly reasons: Readonly<Partial<Record<DeadReason | AliveReason, number>>>;
 };
 
-/** The `--json` document of `gsp clean`. */
+/** The `--json` document of `gsp clean`: the report, and the command to run next (see {@link nextCommand}). */
+export type CleanDocument = CleanReport & { readonly next: string | null };
+
+/** The report of `gsp clean`. */
 export type CleanReport = {
 	readonly schema: typeof CLEAN_SCHEMA;
 	readonly mode: CleanMode;
@@ -336,6 +339,11 @@ export const MAX_NAMED_BRANCHES = 10;
 export function applyCommand(branches: readonly CleanBranch[], scope: CleanScope): string {
 	const deleting = branches.filter((branch) => branch.action === 'delete' && branch.result === undefined);
 	const targets = deleting.length > 0 && deleting.length <= MAX_NAMED_BRANCHES ? deleting.map((branch) => branch.name) : scope.patterns;
+	return scopedCommand(scope, targets, ['--yes', ...(deleting.some((branch) => branch.needsForce) ? ['--force'] : [])]);
+}
+
+/** `gsp clean` on `targets`, with every option of `scope` that narrows it, then `flags`. */
+function scopedCommand(scope: CleanScope, targets: readonly string[], flags: readonly string[]): string {
 	return cmd(
 		'gsp',
 		...(scope.cwd === undefined ? [] : ['-C', scope.cwd]),
@@ -344,9 +352,25 @@ export function applyCommand(branches: readonly CleanBranch[], scope: CleanScope
 		...scope.protectedPatterns.flatMap((pattern) => ['--protect', pattern]),
 		...(scope.github ? [] : ['--no-github']),
 		...(scope.fetch ? [] : ['--no-fetch']),
-		'--yes',
-		...(deleting.some((branch) => branch.needsForce) ? ['--force'] : [])
+		...flags
 	);
+}
+
+/**
+ * The command to run next, or null when nothing is left that gsp can do on
+ * its own: the one that applies the planned deletions not carried out, or,
+ * when some changed while applying, the one that plans again (within the
+ * same scope) to review them. Branches that only `--force` deletes are left
+ * to their own hint, which says what to save first.
+ */
+export function nextCommand(report: Pick<CleanReport, 'branches'>, scope: CleanScope): string | null {
+	if (report.branches.some((branch) => branch.action === 'delete' && branch.result === undefined)) {
+		return applyCommand(report.branches, scope);
+	}
+	if (report.branches.some((branch) => RERUN_LIFTS.has(branch.reason))) {
+		return scopedCommand(scope, scope.patterns, ['--dry-run']);
+	}
+	return null;
 }
 
 /** The command that restores `branches`, or null when there are none. */

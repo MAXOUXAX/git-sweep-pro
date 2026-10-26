@@ -151,24 +151,37 @@ suite('merged branch detection (real git)', function () {
 		assert.strictEqual(git(['symbolic-ref', 'refs/remotes/origin/HEAD'], fx.repo).trim(), 'refs/remotes/origin/main');
 	});
 
-	test('when the fetch moves the default branch, --yes deletes nothing, not even the old default branch (Git 2.48+)', async function () {
+	/** As above, for a user who follows the remote HEAD; main is not checked out, and it is all in origin/trunk. */
+	const followRemoteHeadToTrunk = (context: Mocha.Context) => {
 		const [major, minor] = (/(\d+)\.(\d+)/.exec(git(['version'], fx.repo)) ?? []).slice(1).map(Number);
 		if (major < 2 || (major === 2 && minor < 48)) {
-			this.skip();
+			context.skip();
 		}
 		moveRemoteHeadToTrunk();
-		// The user follows the remote HEAD; main is not checked out, and it is all in origin/trunk.
 		git(['config', 'remote.origin.followRemoteHEAD', 'always'], fx.repo);
 		git(['checkout', '-q', '--detach'], fx.repo);
+	};
 
+	test('when the fetch moves the default branch, --yes deletes nothing, not even the old default branch (Git 2.48+)', async function () {
+		followRemoteHeadToTrunk(this);
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['clean', '--yes', '--json'], io), EXIT.notApplied);
 		const report = JSON.parse(io.out.join(''));
 		assert.strictEqual(report.checks.base.ref, 'refs/remotes/origin/trunk');
 		const actions = Object.fromEntries(report.branches.map((branch: { name: string; action: string; reason: string }) => [branch.name, [branch.action, branch.reason]]));
 		assert.deepStrictEqual(actions, { 'feature/on-trunk': ['skip', 'plan-changed'], main: ['skip', 'protected'] });
+		assert.strictEqual(report.next, 'gsp clean --dry-run');
 		assert.ok(branchExists(fx.repo, 'main') && branchExists(fx.repo, 'feature/on-trunk'));
 		assert.ok(io.err.join('').includes('The default branch changed from origin/main to origin/trunk during the fetch, so nothing was deleted.'), io.err.join(''));
+	});
+
+	test('when the fetch moves the default branch, the summary says why nothing was deleted, and what to run (Git 2.48+)', async function () {
+		followRemoteHeadToTrunk(this);
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', '--yes'], io), EXIT.notApplied);
+		const out = io.out.join('');
+		assert.ok(out.includes('Nothing deleted · 2 skipped (1 changed since the plan)\n'), out);
+		assert.ok(out.includes('1 not deleted, as things changed while applying. Review them with: gsp clean --dry-run\n'), out);
 	});
 
 	test('with --yes, a squash merge only the fetch reveals is deleted in the same run', async () => {

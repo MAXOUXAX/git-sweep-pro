@@ -82,10 +82,18 @@ suite('cli app (real git)', function () {
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 		assert.ok(planned.out.join('').includes('To apply this plan, run: gsp clean feature/a --yes'));
 
+		const json = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['--json'], json), EXIT.notApplied);
+		assert.strictEqual(JSON.parse(json.out.join('')).next, 'gsp clean feature/a --yes', 'the same command, for agents');
+
 		const accepted = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['sweep', '--yes'], accepted), EXIT.ok);
 		assert.ok(!branchExists(fx.repo, 'feature/a'));
 		assert.ok(accepted.out.join('').includes('1 deleted (1 empty) · restore with gsp restore feature/a'));
+
+		const done = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['--json'], done), EXIT.ok);
+		assert.strictEqual(JSON.parse(done.out.join('')).next, null);
 	});
 
 	test('dry run plans even with --yes, and the deprecated --merged changes nothing', async () => {
