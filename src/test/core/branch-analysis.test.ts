@@ -8,15 +8,31 @@ import { commitFile, createRepoFixture, git, makeGoneBranch, type RepoFixture } 
 
 const GITHUB_URL = 'https://github.com/acme/widgets.git';
 
-type FakePullRequest = { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; headRefOid: string };
+/** A pull request as `gh pr list` returns it; `baseRefName` defaults to main. */
+type FakePullRequest = { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; headRefOid: string; baseRefName?: string };
 
-/** A `gh` stub: lists `pullRequests`, answers commit lookups from `commitPulls`, records every call. */
-function fakeGh(pullRequests: FakePullRequest[], commitPulls: Record<string, FakePullRequest[]> = {}): RunGh & { calls: string[][] } {
+/**
+ * A `gh` stub: lists `pullRequests`, answers commit lookups from `commitPulls`
+ * and compare calls from `compares` ("<base>...<head>" → status), records every call.
+ */
+function fakeGh(
+	pullRequests: FakePullRequest[],
+	commitPulls: Record<string, FakePullRequest[]> = {},
+	compares: Record<string, string> = {}
+): RunGh & { calls: string[][] } {
 	const calls: string[][] = [];
 	const run = async (args: readonly string[]) => {
 		calls.push([...args]);
 		if (args[0] === 'pr') {
-			return { stdout: JSON.stringify(pullRequests), stderr: '' };
+			return { stdout: JSON.stringify(pullRequests.map((pr) => ({ baseRefName: 'main', ...pr }))), stderr: '' };
+		}
+		const compared = /compare\/([0-9a-f]+\.\.\.[0-9a-f]+)$/.exec(args.find((arg) => arg.includes('/compare/')) ?? '')?.[1];
+		if (compared) {
+			const status = compares[compared];
+			if (!status) {
+				throw Object.assign(new Error('HTTP 404'), { code: 1, stderr: 'Not Found' });
+			}
+			return { stdout: `${status}\n`, stderr: '' };
 		}
 		const sha = /commits\/([0-9a-f]+)\/pulls$/.exec(args.at(-1) ?? '')?.[1] ?? '';
 		const found = commitPulls[sha];
@@ -28,6 +44,7 @@ function fakeGh(pullRequests: FakePullRequest[], commitPulls: Record<string, Fak
 			state: pr.state === 'OPEN' ? 'open' : 'closed',
 			merged_at: pr.state === 'MERGED' ? '2026-10-01T00:00:00Z' : null,
 			head: { sha: pr.headRefOid },
+			base: { ref: pr.baseRefName ?? 'main' },
 		}));
 		return { stdout: JSON.stringify(api), stderr: '' };
 	};
@@ -205,6 +222,76 @@ suite('branch analysis (real git)', function () {
 		assert.strictEqual(branches['feature/wip'].unpushedCommits, 1);
 	});
 
+	test('a patch that only matches the base ignoring whitespace is not rebase-merged', async () => {
+		commitFile(fx.repo, 'a.js', 'a();\nc();\nb();\n', 'add a.js');
+		makeBranch('feature/indent', [['a.js', 'a();\nif (x) {\n  c();\n}\nb();\n']]);
+		makeBranch('feature/same', [['a.js', 'a();\nif (y) {\n    c();\n}\nb();\n']]);
+		// main lands the same lines, indented with a tab, then the exact change of feature/same.
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		commitFile(fx.repo, 'a.js', 'a();\nif (x) {\n\tc();\n}\nb();\n', 'tab indented');
+		git(['revert', '--no-edit', 'HEAD'], fx.repo);
+		git(['cherry-pick', 'feature/same'], fx.repo);
+		commitFile(fx.repo, 'a.js', 'a();\nif (y) {\n    c();\n}\nb();\nlater();\n', 'later');
+		pushMain();
+		// Git's own patch ids call it upstream.
+		assert.match(git(['cherry', 'origin/main', 'feature/indent'], fx.repo), /^- /);
+
+		const branches = byName(await analyze());
+		assert.strictEqual(`${branches['feature/indent'].verdict} ${branches['feature/indent'].reason}`, 'alive unmerged-commits');
+		assert.strictEqual(branches['feature/indent'].unpushedCommits, 1);
+		assert.strictEqual(`${branches['feature/same'].verdict} ${branches['feature/same'].reason}`, 'dead rebase-merged');
+	});
+
+	/** Merges `branch` into the checked-out branch, adding `file` in the merge commit itself (an "evil merge"). */
+	const evilMerge = (branch: string, file: string) => {
+		git(['merge', '-q', '--no-ff', '--no-commit', branch], fx.repo);
+		fs.writeFileSync(path.join(fx.repo, file), 'only in the merge\n');
+		git(['add', file], fx.repo);
+		git(['commit', '-q', '-m', `merge ${branch}`], fx.repo);
+	};
+
+	test('a merge commit adding work of its own keeps the branch alive', async () => {
+		// Merges main in, resolving with extra work; its own commit is then cherry-picked onto main.
+		makeBranch('feature/merges-main', [['e.txt', 'e\n']]);
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		git(['checkout', '-q', 'feature/merges-main'], fx.repo);
+		evilMerge('main', 'resolution.txt');
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['cherry-pick', 'feature/merges-main^1'], fx.repo);
+
+		// Integrates two branches, the second merge adding work; both branches land on main by cherry-pick.
+		const integrate = (name: string, branches: string[]) => {
+			makeBranch(name, []);
+			git(['checkout', '-q', name], fx.repo);
+			git(['merge', '-q', '--no-ff', '-m', `merge ${branches[0]}`, branches[0]], fx.repo);
+			evilMerge(branches[1], `${name}-glue.txt`);
+			git(['checkout', '-q', 'main'], fx.repo);
+		};
+		makeBranch('feature/a', [['a.txt', 'a\n']]);
+		makeBranch('feature/b', [['b.txt', 'b\n']]);
+		integrate('integration', ['feature/a', 'feature/b']);
+		commitFile(fx.repo, 'other.txt', 'main moves again\n', 'unrelated again');
+		git(['cherry-pick', 'feature/a', 'feature/b'], fx.repo);
+
+		// The same with two-commit branches squashed separately, main editing in between.
+		makeBranch('feature/c', [['c.txt', 'c1\n'], ['c.txt', 'c1\nc2\n']]);
+		makeBranch('feature/d', [['d.txt', 'd1\n'], ['d.txt', 'd1\nd2\n']]);
+		integrate('integration-squashed', ['feature/c', 'feature/d']);
+		squashInto('feature/c');
+		commitFile(fx.repo, 'c.txt', 'c1\nc2\nmain\n', 'main edits c');
+		squashInto('feature/d');
+		pushMain();
+
+		const branches = byName(await analyze());
+		for (const name of ['feature/merges-main', 'integration', 'integration-squashed']) {
+			assert.strictEqual(`${branches[name].verdict} ${branches[name].reason}`, 'alive unmerged-commits', name);
+			assert.ok(branches[name].unpushedCommits > 0, name);
+		}
+		// What they merged in is proven on its own.
+		assert.strictEqual(branches['feature/a'].reason, 'rebase-merged');
+		assert.strictEqual(branches['feature/d'].reason, 'squash-merged');
+	});
+
 	test('an integration branch whose two pull requests were squashed separately', async () => {
 		makeBranch('feature/a', [['a.txt', 'a1\n'], ['a.txt', 'a1\na2\n']]);
 		makeBranch('feature/b', [['b.txt', 'b1\n'], ['b.txt', 'b1\nb2\n']]);
@@ -307,7 +394,14 @@ suite('branch analysis (real git)', function () {
 		const realpath = (p: string) => fs.realpathSync(p);
 		const dirtyTree = branches['feature/dirty'].worktree;
 		assert.ok(dirtyTree);
-		assert.deepStrictEqual({ ...dirtyTree, path: realpath(dirtyTree.path) }, { path: realpath(dirty), isMain: false, dirty: true, locked: false, prunable: false });
+		assert.deepStrictEqual({ ...dirtyTree, path: realpath(dirtyTree.path) }, {
+			path: realpath(dirty),
+			isMain: false,
+			dirty: true,
+			locked: false,
+			prunable: false,
+			inProgress: null,
+		});
 		assert.strictEqual(branches['feature/locked'].worktree?.locked, true);
 		assert.strictEqual(branches['feature/locked'].worktree?.dirty, false);
 		assert.strictEqual(branches.main.current, true);
@@ -320,6 +414,32 @@ suite('branch analysis (real git)', function () {
 		assert.strictEqual(branches['feature/stacked'].upstream, 'feature/keep');
 		assert.strictEqual(branches['feature/stacked'].upstreamState, 'tracking');
 		assert.strictEqual(branches['feature/dirty'].upstreamState, 'none');
+	});
+
+	test('a branch being rebased or bisected in a worktree is attached to it, though HEAD is detached', async () => {
+		makeBranch('feature/rebasing', [['conflict.txt', 'branch\n']]);
+		makeBranch('feature/bisecting', [['b.txt', '1\n'], ['b.txt', '2\n'], ['b.txt', '3\n']]);
+		commitFile(fx.repo, 'conflict.txt', 'main\n', 'conflicting');
+		const rebasing = path.join(fx.dir, 'rebasing');
+		const bisecting = path.join(fx.dir, 'bisecting');
+		git(['worktree', 'add', '-q', rebasing, 'feature/rebasing'], fx.repo);
+		git(['worktree', 'add', '-q', bisecting, 'feature/bisecting'], fx.repo);
+		assert.throws(() => git(['rebase', 'main'], rebasing));
+		git(['bisect', 'start', 'feature/bisecting', 'main'], bisecting);
+		assert.match(git(['worktree', 'list', '--porcelain'], fx.repo), /detached\n[\s\S]*detached/);
+
+		const branches = byName(await analyze());
+		const realpath = (p: string) => fs.realpathSync(p);
+		for (const [name, where, inProgress] of [
+			['feature/rebasing', rebasing, 'rebase'],
+			['feature/bisecting', bisecting, 'bisect'],
+		]) {
+			const worktree = branches[name].worktree;
+			assert.ok(worktree, name);
+			assert.strictEqual(realpath(worktree.path), realpath(where));
+			assert.strictEqual(worktree.inProgress, inProgress);
+		}
+		assert.strictEqual(branches.main.worktree?.inProgress, null);
 	});
 
 	test('a repository without a remote compares with its local default branch', async () => {
@@ -384,10 +504,16 @@ suite('branch analysis (real git)', function () {
 		git(['fetch', '-q'], fx.repo);
 
 		const pr = { number: 7, state: 'MERGED' as const, headRefOid: prHead };
-		// The head commit is not here: only the API can tell.
-		const gh = fakeGh([pr], { [localTip]: [pr] });
+		// The head commit is not here: GitHub lists the tip in the PR, but that alone proves nothing.
+		const listedOnly = fakeGh([pr], { [localTip]: [pr] }, { [`${localTip}...${prHead}`]: 'diverged' });
+		assert.strictEqual(byName(await analyze({}, listedOnly))['feature/review'].reason, 'unmerged-commits');
+		const unreachable = fakeGh([pr], { [localTip]: [pr] });
+		assert.strictEqual(byName(await analyze({}, unreachable))['feature/review'].reason, 'unmerged-commits');
+
+		// The compare API confirms the final head contains the tip.
+		const gh = fakeGh([pr], { [localTip]: [pr] }, { [`${localTip}...${prHead}`]: 'ahead' });
 		const result = await analyze({}, gh);
-		assert.deepStrictEqual(result.checks.github, { used: true, repo: 'acme/widgets', pullRequests: 1, apiCalls: 1 });
+		assert.deepStrictEqual(result.checks.github, { used: true, repo: 'acme/widgets', pullRequests: 1, apiCalls: 2 });
 		const branch = byName(result)['feature/review'];
 		assert.strictEqual(`${branch.verdict} ${branch.reason}`, 'dead pr-merged');
 		assert.deepStrictEqual(branch.evidence, { method: 'pull-request', pullRequest: 7, state: 'merged', headSha: prHead, match: 'api' });
@@ -402,6 +528,22 @@ suite('branch analysis (real git)', function () {
 
 		// Matched by SHA, never by name; without GitHub it stays alive.
 		assert.strictEqual(byName(await analyze())['feature/review'].reason, 'unmerged-commits');
+	});
+
+	test('a pull request merged into another branch than the default one proves nothing on its own', async () => {
+		pretendGitHub();
+		makeBranch('feature/into-release', [['r.txt', 'r\n']]);
+		makeBranch('feature/stacked', [['s.txt', 's\n'], ['s.txt', 's\ns\n']]);
+		const tip = rev('feature/into-release');
+		const stacked = { number: 5, state: 'MERGED' as const, headRefOid: rev('feature/stacked'), baseRefName: 'release' };
+		const gh = fakeGh(
+			[{ number: 4, state: 'MERGED', headRefOid: tip, baseRefName: 'release' }, stacked],
+			{ [rev('feature/stacked~1')]: [stacked] },
+			{ [`${rev('feature/stacked~1')}...${stacked.headRefOid}`]: 'ahead' }
+		);
+		const branches = byName(await analyze({}, gh));
+		assert.strictEqual(`${branches['feature/into-release'].verdict} ${branches['feature/into-release'].reason}`, 'alive unmerged-commits');
+		assert.strictEqual(`${branches['feature/stacked'].verdict} ${branches['feature/stacked'].reason}`, 'alive unmerged-commits');
 	});
 
 	test('a tip that is a merged pull request head, and one that is an open pull request head', async () => {
@@ -451,6 +593,66 @@ suite('branch analysis (real git)', function () {
 			reason: 'gh-failed',
 			detail: 'GraphQL: Could not resolve to a Repository',
 		});
+	});
+
+	test('a branch whose analysis fails stays alive without failing the others', async () => {
+		makeBranch('feature/rebased', [['r.txt', 'r\n']]);
+		makeBranch('feature/broken', [['b.txt', 'b\n']]);
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		git(['cherry-pick', 'feature/rebased', 'feature/broken'], fx.repo);
+		pushMain();
+		const broken = rev('feature/broken');
+		const failing = (args: readonly string[]) =>
+			args.includes('cherry') && args.includes(broken)
+				? Promise.reject(Object.assign(new Error('Command failed: git cherry'), { code: 128, stderr: 'fatal: bad object\n' }))
+				: runGit(args);
+
+		const branches = byName(await analyzeBranches({ git: failing }, { github: false }));
+		assert.strictEqual(`${branches['feature/broken'].verdict} ${branches['feature/broken'].reason}`, 'alive analysis-failed');
+		assert.deepStrictEqual(branches['feature/broken'].evidence, { method: 'error', message: 'fatal: bad object' });
+		assert.strictEqual(branches['feature/broken'].unpushedCommits, 1);
+		assert.strictEqual(branches['feature/rebased'].reason, 'rebase-merged');
+	});
+
+	test('never fetches the objects a partial clone lacks: the branch stays alive instead', async function () {
+		const [major, minor] = (/(\d+)\.(\d+)/.exec(git(['version'], fx.repo)) ?? []).slice(1).map(Number);
+		if (major < 2 || (major === 2 && minor < 44)) {
+			this.skip();
+		}
+		makeBranch('feature/x', [['x.txt', 'x\n']]);
+		git(['push', '-q', 'origin', 'feature/x'], fx.repo);
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		git(['cherry-pick', 'feature/x'], fx.repo);
+		pushMain();
+		git(['config', 'uploadpack.allowFilter', 'true'], fx.remote);
+		const partial = path.join(fx.dir, 'partial');
+		git(['clone', '-q', '--filter=blob:none', '--no-checkout', `file://${fx.remote}`, partial], fx.dir);
+		git(['branch', '-q', 'feature/x', 'origin/feature/x'], partial);
+		const objects = () => git(['count-objects', '-v'], partial);
+		const before = objects();
+
+		const result = await analyzeBranches({ git: (args) => runGitCommand(args, partial, { appendLine: () => undefined }) }, { github: false });
+		const branch = byName(result)['feature/x'];
+		assert.strictEqual(`${branch.verdict} ${branch.reason}`, 'alive analysis-failed');
+		assert.strictEqual(objects(), before);
+	});
+
+	test('a branch with plain unmerged work costs a handful of git calls', async () => {
+		const count = 8;
+		for (let index = 0; index < count; index++) {
+			makeBranch(`feature/${index}`, [[`${index}.txt`, '1\n'], [`${index}.txt`, '1\n2\n'], [`${index}.txt`, '1\n2\n3\n']]);
+		}
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		pushMain();
+		let calls = 0;
+		const counting = (args: readonly string[]) => {
+			calls++;
+			return runGit(args);
+		};
+		const result = await analyzeBranches({ git: counting }, { github: false });
+		assert.ok(result.branches.every((branch) => branch.name === 'main' || branch.reason === 'unmerged-commits'));
+		// Merge base, cherry, squash diff and log, unpushed count; plus the shared reads.
+		assert.ok(calls <= 5 * count + 10, `${calls} git calls`);
 	});
 
 	test('only classifies the requested branches, and accepts a base override', async () => {
