@@ -84,18 +84,18 @@ suite('cli args', () => {
 		assert.strictEqual(parseArgs(['sweep', '--json']).json, true);
 		assert.strictEqual(parseArgs(['list', '--json']).json, true);
 		assert.strictEqual(parseArgs(['worktree', 'list', '--json']).json, true);
+		assert.strictEqual(parseArgs(['worktree', 'remove', 'feature/x', '--json']).json, true);
 		assert.strictEqual(parseArgs(['restore', '--json']).json, true);
 		assert.strictEqual(parseArgs(['post-pr', 'feature/x', '--json']).json, true);
 		assert.strictEqual(parseArgs(['--json', '--help']).command, 'help');
 		for (const args of [
 			['worktree', 'prune'],
-			['worktree', 'remove', 'feature/x'],
 			['sync'],
 			['resume'],
 			['restore', 'feature/x'],
 			['agents'],
 		]) {
-			assert.throws(() => parseArgs([...args, '--json']), /--json requires clean, post-pr, worktree list, or restore without branch arguments/);
+			assert.throws(() => parseArgs([...args, '--json']), /--json requires clean, post-pr, worktree list or remove, or restore without branch arguments/);
 		}
 	});
 

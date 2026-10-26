@@ -809,12 +809,12 @@ suite('cli app (real git)', function () {
 			const wt = addWorktree('feature/wt');
 
 			const main = createFakeIo(fx.repo);
-			assert.strictEqual(await runCli(['worktree', 'remove', 'main'], main), EXIT.failed);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'main'], main), EXIT.usage);
 			assert.ok(main.err.join('').includes('Refusing to remove the main worktree'));
 			assert.ok(fs.existsSync(fx.repo));
 
 			const unknown = createFakeIo(fx.repo);
-			assert.strictEqual(await runCli(['worktree', 'remove', 'nope'], unknown), EXIT.failed);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'nope'], unknown), EXIT.usage);
 			assert.ok(unknown.err.join('').includes('No worktree found for "nope"'));
 
 			const io = createFakeIo(fx.repo);
@@ -832,8 +832,9 @@ suite('cli app (real git)', function () {
 			git(['config', 'status.showUntrackedFiles', 'no'], fx.repo);
 
 			const refused = createFakeIo(fx.repo);
-			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt'], refused), EXIT.failed);
-			assert.ok(refused.err.join('').includes('modified or untracked'));
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt'], refused), EXIT.notApplied);
+			assert.ok(refused.err.join('').includes('it has uncommitted changes or untracked files'));
+			assert.ok(refused.err.join('').includes('stash --include-untracked'));
 			assert.ok(fs.existsSync(wt));
 
 			const forced = createFakeIo(fx.repo);
@@ -848,14 +849,81 @@ suite('cli app (real git)', function () {
 
 			// Git needs two --force flags for a locked worktree; gsp passes one.
 			const locked = createFakeIo(fx.repo);
-			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt', '--force'], locked), EXIT.failed);
-			assert.ok(locked.err.join('').includes('locked'));
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt', '--force'], locked), EXIT.notApplied);
+			assert.ok(locked.err.join('').includes('it is locked'));
+			assert.ok(locked.err.join('').includes('git worktree unlock'));
 			assert.ok(fs.existsSync(wt));
 
 			git(['worktree', 'unlock', wt], fx.repo);
 			const unlocked = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt'], unlocked), EXIT.ok);
 			assert.ok(!fs.existsSync(wt));
+		});
+
+		test('worktree remove keeps a worktree holding ignored files a build does not recreate, lists them, and removes it with --force', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+			fs.writeFileSync(path.join(wt, '.gitignore'), '.env\nnode_modules/\n');
+			git(['-C', wt, 'add', '.gitignore'], fx.repo);
+			git(['-C', wt, 'commit', '-qm', 'ignore'], fx.repo);
+			fs.writeFileSync(path.join(wt, '.env'), 'TOKEN=1\n');
+			fs.mkdirSync(path.join(wt, 'node_modules'));
+			fs.writeFileSync(path.join(wt, 'node_modules', 'x.js'), '');
+
+			const kept = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt', '--json'], kept), EXIT.notApplied);
+			const document = JSON.parse(kept.out.join(''));
+			assert.deepStrictEqual([document.command, document.removed, document.reason, document.ignoredFiles], [
+				'worktree remove',
+				false,
+				'ignored-files',
+				{ count: 1, sample: ['.env'] },
+			]);
+			assert.ok(document.hint.endsWith('--force'));
+			assert.ok(fs.existsSync(path.join(wt, '.env')));
+
+			const listed = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt'], listed), EXIT.notApplied);
+			assert.ok(listed.err.join('').includes('  .env'));
+			assert.ok(!listed.err.join('').includes('node_modules'), 'regenerable folders are not listed');
+
+			const forced = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/wt', '--force', '--json'], forced), EXIT.ok);
+			assert.strictEqual(JSON.parse(forced.out.join('')).removed, true);
+			assert.ok(!fs.existsSync(wt));
+		});
+
+		test('worktree remove removes a worktree whose only ignored files are regenerable', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+			fs.writeFileSync(path.join(wt, '.gitignore'), 'node_modules/\n');
+			git(['-C', wt, 'add', '.gitignore'], fx.repo);
+			git(['-C', wt, 'commit', '-qm', 'ignore'], fx.repo);
+			fs.mkdirSync(path.join(wt, 'node_modules'));
+			fs.writeFileSync(path.join(wt, 'node_modules', 'x.js'), '');
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', wt], io), EXIT.ok, io.err.join(''));
+			assert.ok(!fs.existsSync(wt));
+		});
+
+		test('worktree remove keeps a worktree with a rebase in progress', async () => {
+			makeGoneBranch(fx.repo, 'feature/wt');
+			const wt = addWorktree('feature/wt');
+			const gitDir = git(['-C', wt, 'rev-parse', '--absolute-git-dir'], fx.repo).trim();
+			fs.mkdirSync(path.join(gitDir, 'rebase-merge'));
+			fs.writeFileSync(path.join(gitDir, 'rebase-merge', 'head-name'), 'refs/heads/feature/wt\n');
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', wt], io), EXIT.notApplied);
+			assert.ok(io.err.join('').includes('a rebase is in progress there'));
+			assert.ok(fs.existsSync(wt));
+		});
+
+		test('worktree remove --json reports an unknown target as an error document', async () => {
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'nope', '--json'], io), EXIT.usage);
+			assert.strictEqual(JSON.parse(io.out.join('')).error.code, 'unknown-worktree');
 		});
 
 		test('worktree remove reads a relative path from the directory the command ran in', async () => {
@@ -878,7 +946,7 @@ suite('cli app (real git)', function () {
 			git(['worktree', 'add', '-q', byBranch, 'feature/x'], fx.repo);
 
 			const io = createFakeIo(fx.repo);
-			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/x'], io), EXIT.failed);
+			assert.strictEqual(await runCli(['worktree', 'remove', 'feature/x'], io), EXIT.usage);
 			assert.ok(io.err.join('').includes('is both the worktree'));
 			assert.ok(fs.existsSync(byPath));
 			assert.ok(fs.existsSync(byBranch));

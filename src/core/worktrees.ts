@@ -1,6 +1,9 @@
 import * as fs from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import type { RunGit } from './git-command';
+import { CLEAN_SCHEMA, type IgnoredFiles, type SkipReason } from './clean-plan';
+import { quoteShellArg, type RunGit } from './git-command';
+import { listIgnoredFiles, summarizeIgnored } from './ignored-files';
 import type { WorkflowContext } from './workflow';
 
 /**
@@ -160,26 +163,148 @@ export async function hasSubmodules(git: RunGit, worktreePath: string): Promise<
  */
 export const WORKTREE_REMOVE: readonly string[] = ['-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove'];
 
+/** A rebase or a bisect in progress in a worktree, and the branch it works on. */
+export type WorktreeOperation = { readonly kind: 'rebase' | 'bisect'; readonly branch: string };
+
+/** The rebase or bisect in progress in the worktree at `worktreePath`, read from its git dir. */
+export async function worktreeOperation(git: RunGit, worktreePath: string): Promise<WorktreeOperation | undefined> {
+	const gitDir = await git(['-C', worktreePath, 'rev-parse', '--absolute-git-dir']).then(
+		(result) => result.stdout.trim(),
+		() => ''
+	);
+	if (!gitDir) {
+		return undefined;
+	}
+	const read = (file: string) =>
+		readFile(path.join(gitDir, file), 'utf8').then(
+			(text) => text.trim(),
+			() => ''
+		);
+	for (const file of ['rebase-merge/head-name', 'rebase-apply/head-name']) {
+		const head = await read(file);
+		if (head.startsWith('refs/heads/')) {
+			return { kind: 'rebase', branch: head.slice('refs/heads/'.length) };
+		}
+	}
+	// The branch, or a commit when the bisect started on a detached HEAD.
+	const bisected = await read('BISECT_START');
+	return bisected ? { kind: 'bisect', branch: bisected.replace(/^refs\/heads\//, '') } : undefined;
+}
+
+/**
+ * Why `gsp worktree remove` keeps a worktree. Every one but `locked-worktree`
+ * is lifted by `--force`, which Git needs twice for a locked worktree.
+ */
+export type WorktreeKeptReason = Extract<
+	SkipReason,
+	'locked-worktree' | 'rebase-in-progress' | 'bisect-in-progress' | 'dirty-worktree' | 'submodules' | 'ignored-files'
+>;
+
 export type WorktreeRemoval =
 	| { readonly kind: 'removed'; readonly worktree: Worktree }
+	| {
+			readonly kind: 'kept';
+			readonly worktree: Worktree;
+			readonly reason: WorktreeKeptReason;
+			/** The ignored files removing it would delete, regenerable ones left out; empty unless the reason is `ignored-files`. */
+			readonly ignoredFiles: readonly string[];
+			readonly hint: string | null;
+	  }
 	| { readonly kind: 'main'; readonly worktree: Worktree }
 	| { readonly kind: 'ambiguous'; readonly target: string; readonly worktrees: readonly [Worktree, Worktree] }
 	| { readonly kind: 'not-found'; readonly target: string };
 
+const command = (...args: string[]) => args.map(quoteShellArg).join(' ');
+
 /**
- * Removes one linked worktree. The main worktree is refused, and without
- * `force` Git refuses a dirty or locked worktree: its reason travels up as the
- * thrown error. `baseDir` is the directory the command was invoked from, so a
- * relative path is read the way the user typed it.
+ * What keeps `worktree` from being removed safely, as `gsp clean` checks a
+ * branch's worktree: locked, a rebase or bisect in progress, uncommitted
+ * changes or untracked files, submodules, or ignored files a build does not
+ * recreate. `force` lifts every check but the lock, which Git only lifts
+ * with a double `--force`. Read-only.
+ */
+async function removalBlocker(git: RunGit, worktree: Worktree, force: boolean): Promise<Omit<Extract<WorktreeRemoval, { kind: 'kept' }>, 'kind' | 'worktree'> | undefined> {
+	const at = worktree.path;
+	const remove = (...flags: string[]) => command('gsp', 'worktree', 'remove', at, ...flags);
+	const kept = (reason: WorktreeKeptReason, hint: string, ignoredFiles: readonly string[] = []) => ({ reason, hint, ignoredFiles });
+	if (worktree.state === 'locked') {
+		return kept('locked-worktree', `${command('git', 'worktree', 'unlock', at)} && ${remove()}`);
+	}
+	if (force) {
+		return undefined;
+	}
+	const operation = await worktreeOperation(git, at);
+	if (operation) {
+		return operation.kind === 'rebase'
+			? kept('rebase-in-progress', `${command('git', '-C', at, 'rebase', '--continue')} && ${remove()}`)
+			: kept('bisect-in-progress', `${command('git', '-C', at, 'bisect', 'reset')} && ${remove()}`);
+	}
+	const { stdout: status } = await git(['-C', at, '--no-optional-locks', 'status', '--porcelain', '--untracked-files=normal']);
+	if (status.trim().length > 0) {
+		return kept('dirty-worktree', `${command('git', '-C', at, 'stash', '--include-untracked')} && ${remove()}`);
+	}
+	if (await hasSubmodules(git, at)) {
+		return kept('submodules', `check the submodules of ${quoteShellArg(at)} (${command('git', '-C', at, 'submodule', 'foreach', '--recursive', 'git', 'status', '--short')}), then: ${remove('--force')}`);
+	}
+	const ignored = await listIgnoredFiles(git, at);
+	if (ignored.length > 0) {
+		return kept('ignored-files', `move what you need out of ${quoteShellArg(at)}, then: ${remove('--force')}`, ignored);
+	}
+	return undefined;
+}
+
+/**
+ * Removes one linked worktree, with the checks `gsp clean` makes before
+ * removing one: a worktree that is locked, mid-rebase or mid-bisect, has
+ * uncommitted changes, holds submodules or ignored files a build does not
+ * recreate is kept, with a hint. `force` lifts every check but the lock. The
+ * main worktree is refused. `baseDir` is the directory the command was
+ * invoked from, so a relative path is read the way the user typed it. The
+ * branch checked out there is never deleted.
  */
 export async function removeWorktree(context: WorkflowContext, target: string, force: boolean, baseDir = context.root): Promise<WorktreeRemoval> {
 	const resolution = resolveWorktree(await listWorktrees(context), target, baseDir);
 	if (resolution.kind !== 'found') {
 		return resolution;
 	}
-	if (resolution.worktree.state === 'main') {
-		return { kind: 'main', worktree: resolution.worktree };
+	const { worktree } = resolution;
+	if (worktree.state === 'main') {
+		return { kind: 'main', worktree };
 	}
-	await context.git([...WORKTREE_REMOVE, ...(force ? ['--force'] : []), resolution.worktree.path]);
-	return { kind: 'removed', worktree: resolution.worktree };
+	// A prunable worktree has no directory left to check.
+	if (worktree.state !== 'prunable') {
+		const blocker = await removalBlocker(context.git, worktree, force);
+		if (blocker) {
+			return { kind: 'kept', worktree, ...blocker };
+		}
+	}
+	await context.git([...WORKTREE_REMOVE, ...(force ? ['--force'] : []), worktree.path]);
+	return { kind: 'removed', worktree };
+}
+
+/** The `--json` document of `gsp worktree remove`, once the target is found and is a linked worktree. */
+export type WorktreeRemoveDocument = {
+	readonly schema: typeof CLEAN_SCHEMA;
+	readonly command: 'worktree remove';
+	readonly worktree: { readonly path: string; readonly branch: string | null };
+	readonly removed: boolean;
+	/** Why it was kept; null once removed. */
+	readonly reason: WorktreeKeptReason | null;
+	/** The ignored files that kept it, regenerable ones left out; null unless the reason is `ignored-files`. */
+	readonly ignoredFiles: IgnoredFiles | null;
+	/** What to run to remove it; null once removed. */
+	readonly hint: string | null;
+};
+
+export function worktreeRemoveDocument(removal: Extract<WorktreeRemoval, { kind: 'removed' | 'kept' }>): WorktreeRemoveDocument {
+	const kept = removal.kind === 'kept' ? removal : undefined;
+	return {
+		schema: CLEAN_SCHEMA,
+		command: 'worktree remove',
+		worktree: { path: removal.worktree.path, branch: removal.worktree.branch ?? null },
+		removed: !kept,
+		reason: kept?.reason ?? null,
+		ignoredFiles: kept?.reason === 'ignored-files' ? summarizeIgnored(kept.ignoredFiles) : null,
+		hint: kept?.hint ?? null,
+	};
 }

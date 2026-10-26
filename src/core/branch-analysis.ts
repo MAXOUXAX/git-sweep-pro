@@ -1,6 +1,4 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import * as path from 'node:path';
 import { identifyForge, type ForgeSetting, type RunSsh } from './forge';
 import type { RunGit } from './git-command';
 import {
@@ -14,7 +12,7 @@ import {
 	type RunGh,
 } from './github-signal';
 import { branchMatchesPattern, isProtectedBranch } from './sweep-logic';
-import { parseWorktrees } from './worktrees';
+import { parseWorktrees, worktreeOperation } from './worktrees';
 
 /*
  * Read-only branch analysis: decides, for every local branch, whether its
@@ -957,33 +955,6 @@ async function classify(prover: Prover | undefined, ref: Ref, name: string, ance
 	return verdict.verdict === 'alive' && gone ? gone : verdict;
 }
 
-type Operation = { readonly kind: 'rebase' | 'bisect'; readonly branch: string };
-
-/** The branch a rebase or bisect in progress works on in the worktree at `worktreePath`, read from its git dir. */
-async function operationIn(git: RunGit, worktreePath: string): Promise<Operation | undefined> {
-	const gitDir = await git(['-C', worktreePath, 'rev-parse', '--absolute-git-dir']).then(
-		(result) => result.stdout.trim(),
-		() => ''
-	);
-	if (!gitDir) {
-		return undefined;
-	}
-	const read = (file: string) =>
-		readFile(path.join(gitDir, file), 'utf8').then(
-			(text) => text.trim(),
-			() => ''
-		);
-	for (const file of ['rebase-merge/head-name', 'rebase-apply/head-name']) {
-		const head = await read(file);
-		if (head.startsWith('refs/heads/')) {
-			return { kind: 'rebase', branch: head.slice('refs/heads/'.length) };
-		}
-	}
-	// The branch, or a commit when the bisect started on a detached HEAD.
-	const bisected = await read('BISECT_START');
-	return bisected ? { kind: 'bisect', branch: bisected.replace(/^refs\/heads\//, '') } : undefined;
-}
-
 /** A branch whose analysis failed stays alive: no proof was found. */
 function failedVerdict(error: unknown): Verdict {
 	const failure = error as Error & { stderr?: string };
@@ -1093,7 +1064,7 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 		worktrees.filter((worktree) => !worktree.branch && worktree.state !== 'prunable'),
 		CONCURRENCY,
 		async (worktree) => {
-			const operation = await operationIn(git, worktree.path);
+			const operation = await worktreeOperation(git, worktree.path);
 			return operation && names.has(operation.branch) ? [{ ...worktree, branch: operation.branch, inProgress: operation.kind }] : [];
 		}
 	);

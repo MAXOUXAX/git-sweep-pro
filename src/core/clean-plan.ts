@@ -20,7 +20,18 @@ import { quoteShellArg } from './git-command';
 export const CLEAN_SCHEMA = 2;
 
 /** Why a command stopped before producing its JSON document. */
-export type JsonErrorCode = 'usage' | 'no-such-directory' | 'unknown-branch' | 'unknown-remote' | 'push-url-differs' | 'not-a-repository' | 'failed';
+export type JsonErrorCode =
+	| 'usage'
+	| 'no-such-directory'
+	| 'unknown-branch'
+	| 'unknown-remote'
+	| 'push-url-differs'
+	| 'not-a-repository'
+	/** `worktree remove`: no worktree has that path or branch, both name different worktrees, or it names the main worktree. */
+	| 'unknown-worktree'
+	| 'ambiguous-worktree'
+	| 'main-worktree'
+	| 'failed';
 
 /** The `--json` document of a command that stopped on a fatal error. */
 export type JsonErrorDocument = { readonly schema: typeof CLEAN_SCHEMA; readonly error: { readonly message: string; readonly code: JsonErrorCode } };
@@ -285,7 +296,7 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 		// `--force` would delete whatever the submodules hold: let the user check them first.
 		return {
 			reason: 'submodules',
-			hint: `check the submodules of ${quoteShellArg(worktree.path)} (${cmd('git', '-C', worktree.path, 'submodule', 'foreach', '--recursive', 'git', 'status', '--short')}), then: ${cmd('git', 'worktree', 'remove', '--force', worktree.path)} && ${cmd('gsp', 'clean', branch.name, '--yes')}`,
+			hint: `check the submodules of ${quoteShellArg(worktree.path)} (${cmd('git', '-C', worktree.path, 'submodule', 'foreach', '--recursive', 'git', 'status', '--short')}), then: ${cmd('gsp', 'worktree', 'remove', worktree.path, '--force')} && ${cmd('gsp', 'clean', branch.name, '--yes')}`,
 		};
 	}
 	if (worktree?.ignoredFiles && worktree.ignoredFiles.count > 0 && !options.force) {

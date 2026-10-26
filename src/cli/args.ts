@@ -191,9 +191,9 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 	const worktree = command === 'worktree' ? parseWorktreeArgs(args) : undefined;
 	const jsonAllowed =
 		command === 'clean' ||
-		command === 'post-pr' || (worktree !== undefined && worktree.subcommand === 'list') || (command === 'restore' && args.length === 0);
+		command === 'post-pr' || (worktree !== undefined && worktree.subcommand !== 'prune') || (command === 'restore' && args.length === 0);
 	if (values.json && !jsonAllowed) {
-		throw new UsageError('--json requires clean, post-pr, worktree list, or restore without branch arguments.');
+		throw new UsageError('--json requires clean, post-pr, worktree list or remove, or restore without branch arguments.');
 	}
 	if (values.into !== undefined && command !== 'post-pr') {
 		throw new UsageError('--into can only be used with post-pr.');

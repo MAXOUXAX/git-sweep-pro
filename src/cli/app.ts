@@ -9,6 +9,7 @@ import type { CliEvent } from '../core/rpc-protocol';
 import { PushUrlMismatchError, runCleanWorkflow, UnknownBranchError, UnknownRemoteError, type CleanOutcome } from '../core/clean-workflow';
 import { createSshRunner } from '../core/forge';
 import { createGhRunner } from '../core/github-signal';
+import { summarizeIgnored } from '../core/ignored-files';
 import { formatNextSteps, formatPostPrLines, postPrNextCommand, type PostPrDocument, type PostPrReport } from '../core/post-pull-request-plan';
 import { PostPrUsageError, runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import { inspectDeletions, runRestoreWorkflow } from '../core/restore-workflow';
@@ -17,7 +18,7 @@ import type { SyncContext } from '../core/sync-state';
 import { runSyncWorkflow } from '../core/sync-workflow';
 import type { WorkflowContext, WorkflowOutcome } from '../core/workflow';
 import { formatWorktreeLines, listWorktreeStates } from '../core/worktree-list';
-import { pruneWorktrees, removeWorktree } from '../core/worktrees';
+import { pruneWorktrees, removeWorktree, worktreeRemoveDocument, type WorktreeKeptReason } from '../core/worktrees';
 import { EXIT, parseArgs, UsageError, type CliOptions } from './args';
 import { createFrontend, type Frontend } from './frontend';
 import { helpFor, USAGE } from './help';
@@ -167,10 +168,11 @@ async function runCommand(options: CliOptions, dir: string, frontend: Frontend, 
 	if (options.command === 'post-pr') {
 		return runPostPr(options, dir, frontend, io);
 	}
-	return { kind: 'workflow', outcome: await runWorkflow(options, dir, frontend, io) };
+	const outcome = await runWorkflow(options, dir, frontend, io);
+	return typeof outcome === 'string' ? { kind: 'workflow', outcome } : outcome;
 }
 
-async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<WorkflowOutcome> {
+async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<WorkflowOutcome | CommandOutcome> {
 	let repository: Repository;
 	try {
 		repository = await openRepository(dir, frontend.trace);
@@ -442,7 +444,7 @@ function printPostPrReport(report: PostPrReport, outcome: CleanOutcome, options:
  * `dir` is the invocation directory, so a relative removal target is read the
  * way the user typed it.
  */
-async function runWorktree(context: WorkflowContext, options: CliOptions, io: CliIo, dir: string): Promise<WorkflowOutcome> {
+async function runWorktree(context: WorkflowContext, options: CliOptions, io: CliIo, dir: string): Promise<WorkflowOutcome | CommandOutcome> {
 	const worktree = options.worktree;
 	if (!worktree) {
 		return 'failed';
@@ -472,35 +474,76 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 				}
 				return 'ok';
 			}
-			case 'remove': {
-				const result = await removeWorktree(context, worktree.target ?? '', options.mode === 'forceDelete', dir);
-				switch (result.kind) {
-					case 'removed':
-						io.stdout(`Removed worktree ${result.worktree.path}.\n`);
-						return 'ok';
-					case 'main':
-						context.ui.showErrorMessage(`Refusing to remove the main worktree (${result.worktree.path}).`, { failed: true });
-						return 'failed';
-					case 'ambiguous': {
-						const [byPath, byBranch] = result.worktrees;
-						context.ui.showErrorMessage(
-							`"${result.target}" is both the worktree ${byPath.path} and the branch ${byBranch.branch} (${byBranch.path}). Remove one by its full path.`,
-							{ failed: true }
-						);
-						return 'failed';
-					}
-					case 'not-found':
-						context.ui.showErrorMessage(`No worktree found for "${result.target}". Run "gsp worktree list" to see them.`, { failed: true });
-						return 'failed';
-				}
-				return 'failed';
-			}
+			case 'remove':
+				return await runWorktreeRemove(context, options, io, dir, worktree.target ?? '');
 		}
 	} catch (error) {
+		if (options.json) {
+			printJsonError(io, options.rpc, toErrorMessage(error), gitErrorCode(toErrorMessage(error)));
+		}
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	}
 }
+
+/**
+ * `worktree remove`: removes one linked worktree, or keeps it and says why
+ * and what to run (exit 5). A target that is the main worktree, no worktree,
+ * or two different ones is an invalid argument (exit 2).
+ */
+async function runWorktreeRemove(context: WorkflowContext, options: CliOptions, io: CliIo, dir: string, target: string): Promise<CommandOutcome> {
+	const result = await removeWorktree(context, target, options.mode === 'forceDelete', dir);
+	const refuse = (message: string, code: JsonErrorCode): CommandOutcome => {
+		if (options.json) {
+			printJsonError(io, options.rpc, message, code);
+		}
+		context.ui.showErrorMessage(message, { failed: true });
+		return EXIT.usage;
+	};
+	switch (result.kind) {
+		case 'main':
+			return refuse(`Refusing to remove the main worktree (${result.worktree.path}).`, 'main-worktree');
+		case 'ambiguous': {
+			const [byPath, byBranch] = result.worktrees;
+			return refuse(
+				`"${result.target}" is both the worktree ${byPath.path} and the branch ${byBranch.branch} (${byBranch.path}). Remove one by its full path.`,
+				'ambiguous-worktree'
+			);
+		}
+		case 'not-found':
+			return refuse(`No worktree found for "${result.target}". Run "gsp worktree list" to see them.`, 'unknown-worktree');
+		case 'removed':
+		case 'kept':
+			break;
+	}
+	if (options.json) {
+		printJson(io, options.rpc, worktreeRemoveDocument(result));
+	}
+	if (result.kind === 'removed') {
+		if (!options.json) {
+			io.stdout(`Removed worktree ${result.worktree.path}.\n`);
+		}
+		return { kind: 'workflow', outcome: 'ok' };
+	}
+	context.ui.showErrorMessage(`Kept ${result.worktree.path}: ${KEPT_WORKTREE_MESSAGES[result.reason](result.ignoredFiles)}`);
+	if (!options.json && result.hint) {
+		io.stderr(`To remove it: ${result.hint}\n`);
+	}
+	return { kind: 'clean', outcome: 'not-applied' };
+}
+
+const KEPT_WORKTREE_MESSAGES: Record<WorktreeKeptReason, (ignoredFiles: readonly string[]) => string> = {
+	'locked-worktree': () => 'it is locked.',
+	'rebase-in-progress': () => 'a rebase is in progress there.',
+	'bisect-in-progress': () => 'a bisect is in progress there.',
+	'dirty-worktree': () => 'it has uncommitted changes or untracked files. Commit or stash them, or add --force to discard them.',
+	submodules: () => 'it holds submodules, which would be deleted with it. Add --force to remove it anyway.',
+	'ignored-files': (files) => {
+		const { sample, count } = summarizeIgnored(files);
+		const more = count > sample.length ? `\n  and ${count - sample.length} more` : '';
+		return `removing it would delete ignored files a build does not recreate:\n${sample.map((file) => `  ${file}`).join('\n')}${more}\nMove what you need, then add --force.`;
+	},
+};
 
 /**
  * `restore`: restores the branches named, or the ones picked. Without names
