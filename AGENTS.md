@@ -24,6 +24,8 @@ Settled by Maxence on 2026-10-26.
 - A branch needing `--force` is never offered or pre-selected in the picker without `--force`.
 - Local branches named `main`, `master`, `trunk` or `develop` are protected by default, besides the detected default branch, so a moved `origin/HEAD` can't get them deleted; naming one exactly on the command line lifts it.
 - Secret-like files (`.env*`, `*.pem`, `*.key`, `.npmrc`, `.netrc`) are never regenerable, even inside ignored build or cache folders; dependency folders are not searched.
+- `--remote` never force-deletes: it pushes the deletion with a lease on the analysed SHA; a rejected lease is reported as `plan-changed`. Without `origin`, it uses the only remote, else it's a usage error. `branch.<name>.deleteMerged=false` also protects that branch's upstream on the remote.
+- The extension offers `--remote` and the worktree list in 2.0.
 
 ## Release workflow for 2.0
 
