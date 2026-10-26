@@ -20,6 +20,8 @@ Settled by Maxence on 2026-10-26.
 - A merged pull request only proves a branch dead when it was merged into the default branch.
 - **Hints never suggest losing data first.** A skip caused by uncommitted changes points to committing or stashing them, not to a forced removal.
 - **Exit 5 means "more could be cleaned with your approval"**: deletions planned but not applied, or branches that need `--force`. Skips that need the user to act elsewhere (current branch, dirty worktree) don't change the exit code.
+- `--yes` without a picker applies whatever is proven after the fetch, within the requested scope (patterns, `--protect`) and never beyond the `--force` rules. Only branches a person picked in the picker are held to the plan they saw.
+- A branch needing `--force` is never offered or pre-selected in the picker without `--force`.
 
 ## Release workflow for 2.0
 
