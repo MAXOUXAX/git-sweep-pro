@@ -145,7 +145,7 @@ function blockerOf(branch: BranchAnalysis, defaultBranch: string | undefined): B
 	if (worktree?.isMain) {
 		return {
 			reason: 'main-worktree',
-			hint: cmd('git', '-C', worktree.path, 'switch', ...(defaultBranch ? [defaultBranch] : ['<another-branch>'])),
+			hint: `${cmd('git', '-C', worktree.path, 'switch')} ${defaultBranch ? quoteShellArg(defaultBranch) : '<another-branch>'}`,
 		};
 	}
 	if (worktree?.locked) {
@@ -337,7 +337,8 @@ export function formatBranchLines(report: Pick<CleanReport, 'branches' | 'mode'>
 		if (branch.result === 'failed' || branch.result === 'worktree-removed') {
 			detail = `${branch.result === 'worktree-removed' ? 'worktree removed, but the branch was not deleted: ' : ''}${branch.error ?? 'unknown error'}`;
 		} else if (branch.action === 'skip') {
-			detail = `${describeSkip(branch)} (${verdict})${branch.hint ? ` → ${branch.hint}` : ''}`;
+			const skip = describeSkip(branch);
+			detail = `${skip === verdict ? skip : `${skip} (${verdict})`}${branch.hint ? ` → ${branch.hint}` : ''}`;
 		} else {
 			const worktree = branch.action === 'delete' && branch.worktree && !branch.worktree.prunable ? `, ${branch.result ? 'removed' : 'removes'} worktree ${branch.worktree.path}` : '';
 			detail = `${verdict}${branch.needsForce && branch.action === 'delete' ? ', forced' : ''}${worktree}`;
