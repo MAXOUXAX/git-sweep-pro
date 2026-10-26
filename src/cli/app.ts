@@ -252,7 +252,7 @@ function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: C
 		return;
 	}
 	const lines = formatBranchLines(report);
-	const summary = formatSummary(report);
+	const summary = outcome === 'cancelled' ? 'Cancelled. Nothing was deleted.' : formatSummary(report);
 	const next = nextStep(report, outcome);
 	if (options.rpc || frontend.canPrompt) {
 		lines.forEach((line) => frontend.output.appendLine(line));
