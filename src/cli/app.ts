@@ -4,7 +4,7 @@ import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion, describeDeletionTarget } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
-import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, nextCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
+import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, nextCommand, withCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
 import { PushUrlMismatchError, runCleanWorkflow, UnknownBranchError, UnknownRemoteError, type CleanOutcome } from '../core/clean-workflow';
 import { createSshRunner } from '../core/forge';
 import { createGhRunner } from '../core/github-signal';
@@ -147,8 +147,10 @@ function printJsonError(io: CliIo, message: string, code: JsonErrorCode): void {
 	io.stdout(`${JSON.stringify({ schema: CLEAN_SCHEMA, error: { message, code } }, null, 2)}\n`);
 }
 
-function gitErrorCode(message: string): JsonErrorCode {
-	return message.toLowerCase().includes('not a git repository') ? 'not-a-repository' : 'failed';
+/** {@link printJsonError} for a failed Git command, or any other error. */
+function printJsonGitError(io: CliIo, error: unknown): void {
+	const message = toErrorMessage(error);
+	printJsonError(io, describeGitFailure(message)[0], message.toLowerCase().includes('not a git repository') ? 'not-a-repository' : 'failed');
 }
 
 /** How a command ended: a workflow outcome, a `clean` outcome, or an exit code decided on the spot. */
@@ -169,6 +171,9 @@ async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend,
 	try {
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return 'failed';
 	}
@@ -232,7 +237,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
 		if (options.json) {
-			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+			printJsonGitError(io, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return EXIT.failed;
@@ -267,7 +272,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 			return EXIT.usage;
 		}
 		if (options.json) {
-			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+			printJsonGitError(io, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return EXIT.failed;
@@ -282,7 +287,7 @@ function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | nul
 	const remote = report.summary.remote;
 	const remoteBranches = report.remoteBranches ?? [];
 	if (next && report.summary.delete + (remote?.delete ?? 0) > 0 && ![...report.branches, ...remoteBranches].some((branch) => branch.result !== undefined)) {
-		return `Nothing was changed. To apply this plan, run: ${next}`;
+		return withCommand('Nothing was changed. To apply this plan, run', next);
 	}
 	const unapplied = remoteBranches.filter((branch) => branch.action === 'delete' && branch.result === undefined).length;
 	const count = (test: (branch: CleanReport['branches'][number]) => boolean) => report.branches.filter(test).length;
@@ -299,7 +304,7 @@ function nextStep(report: CleanReport, outcome: CleanOutcome, next: string | nul
 	).length;
 	const lines = [
 		...(kept.length > 0 ? [`Kept without --force: ${kept.join(', ')}. Each line above gives the command.`] : []),
-		...(unapplied > 0 && remote && next ? [`Branches on ${remote.remote} are only deleted with --yes. To delete them, run: ${next}`] : []),
+		...(unapplied > 0 && remote && next ? [withCommand(`Branches on ${remote.remote} are only deleted with --yes. To delete them, run`, next)] : []),
 		...(changed > 0 && next ? [`${changed} not deleted, as things changed while applying. Review them with: ${next}`] : []),
 	];
 	return lines.length > 0 ? lines.join('\n') : undefined;
@@ -354,7 +359,7 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
 		if (options.json) {
-			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+			printJsonGitError(io, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return EXIT.failed;
@@ -371,6 +376,7 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 				branch: options.positionals[0],
 				into: options.into,
 				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+				...(options.others === undefined ? {} : { others: options.others }),
 				dryRun: options.mode === 'dryRun',
 				yes: options.yes,
 				force: options.mode === 'forceDelete',
@@ -392,7 +398,7 @@ async function runPostPr(options: CliOptions, dir: string, frontend: Frontend, i
 			return EXIT.usage;
 		}
 		if (options.json) {
-			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+			printJsonGitError(io, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return EXIT.failed;
@@ -409,6 +415,7 @@ function printPostPrReport(report: PostPrReport, outcome: CleanOutcome, options:
 					protectedPatterns: options.protect,
 					github: options.github,
 					fetch: options.fetch,
+					...(options.others === undefined ? {} : { others: options.others }),
 				});
 	if (options.json) {
 		const document: PostPrDocument = { ...report, next };
@@ -491,6 +498,9 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 			}
 		}
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	}
@@ -520,6 +530,9 @@ async function runRestore(context: WorkflowContext, options: CliOptions, fronten
 		}
 		return 'ok';
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	}

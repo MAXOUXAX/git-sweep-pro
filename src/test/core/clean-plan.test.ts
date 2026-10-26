@@ -176,8 +176,9 @@ suite('clean plan', () => {
 		assert.strictEqual(applyCommand(forced, scope), 'gsp clean feature/gone --yes --force');
 
 		const many = decide(Array.from({ length: 11 }, (_, index) => branch(`feature/${index}`)));
-		assert.strictEqual(applyCommand(many, { ...scope, patterns: ['feature/*'] }), "gsp clean 'feature/*' --yes", 'too many to name: the patterns');
-		assert.strictEqual(applyCommand(many, scope), 'gsp clean --yes');
+		const named = `gsp clean ${Array.from({ length: 11 }, (_, index) => `feature/${index}`).join(' ')} --yes`;
+		assert.strictEqual(applyCommand(many, { ...scope, patterns: ['feature/*'] }), named, 'never the patterns, which could match more later');
+		assert.strictEqual(applyCommand(many, scope), named);
 	});
 
 	test('the next command applies what is left, or plans again when it changed', () => {

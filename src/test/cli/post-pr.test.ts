@@ -139,6 +139,24 @@ suite('cli post-pr (real git)', function () {
 		assert.ok(!branchExists(fx.repo, 'feature/old'));
 	});
 
+	test('the command that applies a plan names the other branches it cleans, and --clean keeps to them', async () => {
+		makeGoneBranch(fx.repo, 'feature/old');
+		makeGoneBranch(fx.repo, 'feature/older');
+
+		const planned = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', '--json'], planned), EXIT.notApplied, planned.err.join(''));
+		assert.strictEqual(JSON.parse(planned.out.join('')).next, 'gsp post-pr --clean feature/old --clean feature/older --yes');
+
+		const none = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', '--no-clean', '--yes'], none), EXIT.ok, none.err.join(''));
+		assert.ok(branchExists(fx.repo, 'feature/old') && branchExists(fx.repo, 'feature/older'));
+
+		const one = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['post-pr', '--clean', 'feature/old', '--yes'], one), EXIT.ok, one.err.join(''));
+		assert.ok(!branchExists(fx.repo, 'feature/old'));
+		assert.ok(branchExists(fx.repo, 'feature/older'));
+	});
+
 	test('a branch that is not merged is kept: nothing changes on it, exit 5 and a hint', async () => {
 		const wt = addFeatureWorktree('feature/open');
 
@@ -148,7 +166,7 @@ suite('cli post-pr (real git)', function () {
 		assert.strictEqual(report.branch?.action, 'skip');
 		assert.strictEqual(report.branch?.reason, 'needs-force');
 		assert.strictEqual(report.branch?.verdictReason, 'unmerged-commits');
-		assert.strictEqual(report.branch?.hint, 'gsp post-pr feature/open --yes --force');
+		assert.strictEqual(report.branch?.hint, 'gsp post-pr feature/open --no-clean --yes --force');
 		assert.deepStrictEqual(report.worktree, { path: wt, removed: false, switched: false });
 		assert.strictEqual(report.nextCwd, null);
 		assert.ok(fs.existsSync(wt));
@@ -156,7 +174,7 @@ suite('cli post-pr (real git)', function () {
 
 		const text = createFakeIo(wt);
 		assert.strictEqual(await runCli(['post-pr', '--yes'], text), EXIT.notApplied);
-		assert.ok(text.out.join('').includes('1 commit not merged into origin/main) → gsp post-pr feature/open --yes --force'), text.out.join(''));
+		assert.ok(text.out.join('').includes('1 commit not merged into origin/main) → gsp post-pr feature/open --no-clean --yes --force'), text.out.join(''));
 	});
 
 	test('--force deletes a branch that is not merged, and its worktree', async () => {
@@ -186,7 +204,7 @@ suite('cli post-pr (real git)', function () {
 		assert.strictEqual(await runCli(['post-pr', '--yes', '--json'], io), EXIT.notApplied, io.err.join(''));
 		const report = json(io.out);
 		assert.strictEqual(report.branch?.reason, 'dirty-worktree');
-		assert.strictEqual(report.branch?.hint, `git -C ${wt} stash --include-untracked && gsp post-pr feature/x --yes`);
+		assert.strictEqual(report.branch?.hint, `git -C ${wt} stash --include-untracked && gsp post-pr feature/x --no-clean --yes`);
 		assert.ok(fs.existsSync(path.join(wt, 'wip.txt')));
 		assert.ok(branchExists(fx.repo, 'feature/x'));
 		assert.strictEqual(tip('main'), tip('origin/main'), 'main is still updated');
@@ -216,7 +234,7 @@ suite('cli post-pr (real git)', function () {
 		assert.strictEqual(await runCli(['post-pr', '--yes', '--json'], io), EXIT.notApplied, io.err.join(''));
 		const report = json(io.out);
 		assert.strictEqual(report.branch?.reason, 'dirty-worktree');
-		assert.strictEqual(report.branch?.hint, `git -C ${mainCheckout()} stash --include-untracked && gsp post-pr feature/x --yes`);
+		assert.strictEqual(report.branch?.hint, `git -C ${mainCheckout()} stash --include-untracked && gsp post-pr feature/x --no-clean --yes`);
 		assert.strictEqual(report.worktree.switched, false);
 		assert.strictEqual(headOf(fx.repo), 'feature/x');
 		assert.ok(branchExists(fx.repo, 'feature/x'));
@@ -257,7 +275,7 @@ suite('cli post-pr (real git)', function () {
 		const report = json(io.out);
 		assert.strictEqual(report.mode, 'plan');
 		assert.strictEqual(report.branch?.action, 'delete');
-		assert.strictEqual(report.branch?.hint, 'gsp post-pr feature/x --yes');
+		assert.strictEqual(report.branch?.hint, 'gsp post-pr feature/x --no-clean --yes');
 		assert.strictEqual(report.defaultBranch.reason, 'not-applied');
 		assert.strictEqual(report.clean.checks.remote.source, 'ls-remote');
 		assert.deepStrictEqual(snapshot(), before);
@@ -272,14 +290,14 @@ suite('cli post-pr (real git)', function () {
 		assert.strictEqual(await runCli(['post-pr'], io), EXIT.notApplied, io.err.join(''));
 		const out = io.out.join('');
 		assert.ok(out.includes('origin/main has new commits that are not fetched yet'), out);
-		assert.ok(out.includes('Nothing was changed. To apply this plan, run: gsp post-pr feature/x --yes'), out);
+		assert.ok(out.includes('Nothing was changed. To apply this plan, run: gsp post-pr feature/x --no-clean --yes'), out);
 		assert.ok(!out.includes('--yes --force'), 'never suggests --force before fetching');
 
 		// Its upstream pruned, its commit is found nowhere else until the merge is fetched: still fetch first, never push.
 		git(['update-ref', '-d', 'refs/remotes/origin/feature/x'], fx.repo);
 		const pruned = createFakeIo(wt);
 		assert.strictEqual(await runCli(['post-pr', '--json'], pruned), EXIT.notApplied, pruned.err.join(''));
-		assert.strictEqual(json(pruned.out).branch?.hint, 'gsp post-pr feature/x --yes');
+		assert.strictEqual(json(pruned.out).branch?.hint, 'gsp post-pr feature/x --no-clean --yes');
 		assert.ok(branchExists(fx.repo, 'feature/x'));
 	});
 
@@ -405,7 +423,7 @@ suite('cli post-pr (real git)', function () {
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--no-github', '--json'], io), EXIT.notApplied, io.err.join(''));
 		const report = json(io.out);
-		assert.deepStrictEqual([report.branch?.reason, report.branch?.hint], ['needs-force', 'gsp post-pr feature/x --into develop --no-github --yes']);
+		assert.deepStrictEqual([report.branch?.reason, report.branch?.hint], ['needs-force', 'gsp post-pr feature/x --into develop --no-github --no-clean --yes']);
 	});
 
 	test('unpushed commits on top of a merged branch: push them first', async () => {
@@ -531,7 +549,7 @@ suite('cli post-pr (real git)', function () {
 		const planned = JSON.parse(plan.out.join('')) as PostPrDocument;
 		assert.deepStrictEqual(planned.branch, { name: 'feature/x', action: 'no-local-branch' });
 		assert.strictEqual(planned.defaultBranch.reason, 'not-applied');
-		assert.strictEqual(planned.next, 'gsp post-pr feature/x --yes');
+		assert.strictEqual(planned.next, 'gsp post-pr feature/x --no-clean --yes');
 
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
@@ -553,5 +571,27 @@ suite('cli post-pr (real git)', function () {
 		assert.ok(calls.includes('confirm Finish'), calls.join('\n'));
 		assert.ok(fs.existsSync(wt));
 		assert.ok(branchExists(fx.repo, 'feature/x'));
+	});
+
+	test('in a terminal, a branch only the fetch proves merged is not deleted without being asked', async () => {
+		const wt = addFeatureWorktree('feature/x');
+		makeGoneBranch(fx.repo, 'feature/old');
+
+		const fake = createFakePrompter({ confirm: true });
+		// The question is about feature/old only; the pull request is merged while it waits for an answer.
+		const prompter = {
+			...fake.prompter,
+			confirm: async (message: string, label: string) => {
+				squashMergeOnRemote('feature/x');
+				return fake.prompter.confirm(message, label);
+			},
+		};
+		const io = { ...createFakeIo(wt, { interactive: true }), loadPrompter: async () => prompter };
+		assert.strictEqual(await runCli(['post-pr', '--no-github'], io), EXIT.notApplied, io.err.join(''));
+		assert.ok(fake.calls.includes('confirm Finish'), fake.calls.join('\n'));
+		assert.ok(fake.calls.some((call) => call.includes('feature/x  changed since the plan was made')), fake.calls.join('\n'));
+		assert.ok(fs.existsSync(wt));
+		assert.ok(branchExists(fx.repo, 'feature/x'));
+		assert.ok(!branchExists(fx.repo, 'feature/old'));
 	});
 });
