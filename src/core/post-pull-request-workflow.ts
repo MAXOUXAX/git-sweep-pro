@@ -120,14 +120,14 @@ async function updateDefaultBranch(
 	}
 	const merge = where ? ['-C', where, 'merge', '--ff-only', upstreamRef] : undefined;
 	if (where && !options.checkedOutAt && (await hasTrackedChanges(git, where))) {
-		return { ...update, reason: 'dirty', hint: ['git', ...(merge ?? [])].map(quoteShellArg).join(' ') };
+		return { ...update, reason: 'dirty', hint: ['git', '-C', where, 'merge', '--ff-only', upstream ?? upstreamRef].map(quoteShellArg).join(' ') };
 	}
 	if (!options.apply) {
 		return { ...update, reason: 'not-applied' };
 	}
 	try {
 		// The old value makes the ref update atomic: it fails if the branch moved meanwhile.
-		await context.ui.withProgress({ title: `Updating ${name}` }, () => git(merge ?? ['update-ref', local, to, from]));
+		await context.ui.withProgress({ title: `Updating ${name}` }, () => git(merge ?? ['update-ref', '-m', 'gsp post-pr', local, to, from]));
 		return { ...update, updated: true };
 	} catch (error) {
 		return { ...update, reason: 'failed', error: firstLine(toErrorMessage(error)) };

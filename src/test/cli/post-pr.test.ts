@@ -235,7 +235,7 @@ suite('cli post-pr (real git)', function () {
 		assert.strictEqual(report.branch?.result, 'deleted');
 		assert.strictEqual(report.defaultBranch.updated, false);
 		assert.strictEqual(report.defaultBranch.reason, 'dirty');
-		assert.strictEqual(report.defaultBranch.hint, `git -C ${mainCheckout()} merge --ff-only refs/remotes/origin/main`);
+		assert.strictEqual(report.defaultBranch.hint, `git -C ${mainCheckout()} merge --ff-only origin/main`);
 		assert.strictEqual(tip('main'), before);
 		assert.strictEqual(fs.readFileSync(path.join(fx.repo, 'README.md'), 'utf8'), 'local edit\n');
 	});
@@ -288,6 +288,18 @@ suite('cli post-pr (real git)', function () {
 		assert.ok(io.err.join('').includes('"gsp post-pr main" is deprecated'), io.err.join(''));
 		assert.strictEqual(headOf(fx.repo), 'main');
 		assert.ok(!branchExists(fx.repo, 'feature/x'));
+	});
+
+	test('the default branch checked out nowhere is moved as a ref, with a reflog message', async () => {
+		const wt = addFeatureWorktree('feature/x');
+		squashMergeOnRemote('feature/x');
+		git(['checkout', '-q', '--detach'], fx.repo);
+
+		const io = createFakeIo(wt);
+		assert.strictEqual(await runCli(['post-pr', '--yes', '--json'], io), EXIT.ok, io.err.join(''));
+		assert.strictEqual(json(io.out).defaultBranch.where, null);
+		assert.strictEqual(tip('main'), tip('origin/main'));
+		assert.strictEqual(git(['reflog', '-1', '--format=%gs', 'main'], fx.repo).trim(), 'gsp post-pr');
 	});
 
 	test('--into compares with another branch, which stays protected like the default one', async () => {

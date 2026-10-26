@@ -137,8 +137,8 @@ suite('post-pr plan', () => {
 		assert.strictEqual(formatDefaultBranch(update({ reason: 'no-remote' })), 'main: no remote branch to update it from');
 		assert.strictEqual(formatDefaultBranch(update({ reason: 'not-local' })), undefined);
 		assert.strictEqual(
-			formatDefaultBranch(update({ reason: 'dirty', hint: 'git -C /repo merge --ff-only refs/remotes/origin/main' })),
-			'main: not updated, /repo has uncommitted changes → commit or stash them, then run git -C /repo merge --ff-only refs/remotes/origin/main'
+			formatDefaultBranch(update({ reason: 'dirty', hint: 'git -C /repo merge --ff-only origin/main' })),
+			'main: not updated, /repo has uncommitted changes → commit or stash them, then run git -C /repo merge --ff-only origin/main'
 		);
 		assert.strictEqual(formatDefaultBranch(update({ reason: 'diverged' })), 'main: not updated, it has commits that are not on origin/main');
 		assert.strictEqual(formatDefaultBranch(update({ reason: 'failed', error: 'boom' })), 'main: could not fast-forward to origin/main: boom');
