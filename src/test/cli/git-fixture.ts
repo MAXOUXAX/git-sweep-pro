@@ -37,6 +37,8 @@ export function createRepoFixture(): RepoFixture {
 	const remote = path.join(dir, 'remote.git');
 	const repo = path.join(dir, 'repo');
 	git(['init', '-q', '--bare', remote], dir);
+	// The server's HEAD names the default branch, whatever init.defaultBranch says.
+	git(['symbolic-ref', 'HEAD', 'refs/heads/main'], remote);
 	git(['init', '-q', repo], dir);
 	// The CLI under test runs git with the real environment: rebases need an
 	// identity even where none is configured globally (CI runners).

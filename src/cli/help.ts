@@ -85,8 +85,8 @@ Options:
       --json         Print the plan or the result as one JSON document
       --remote[=<name>]
                      Also delete the branches on <name> (origin by default)
-                     whose work is merged into the default branch; never
-                     forced, and only with --yes
+                     whose work is merged into its own default branch; never
+                     forced, and only with --yes. Name them <name>/<branch>
   -p, --protect <glob>
                      Never delete branches matching <glob> (repeatable; also
                      read from "git config --get-all git-sweep-pro.protected")

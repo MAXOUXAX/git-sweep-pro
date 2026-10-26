@@ -124,8 +124,19 @@ export type RemoteCheck =
 
 export type CleanChecks = AnalysisChecks & { readonly remote: RemoteCheck };
 
-/** Why a branch on the remote that could be deleted is skipped. */
-export type RemoteSkipReason = Extract<SkipReason, 'protected' | 'tracked-by-kept-branch' | 'plan-changed' | 'fetch-failed'>;
+/**
+ * Why a branch on the remote that could be deleted is skipped. Besides the
+ * local reasons that apply there:
+ * - `remote-default-unknown`: the server did not say which branch is the remote's default (unreachable, `--no-fetch`, no HEAD): nothing can be proven there, every branch is skipped;
+ * - `github-unavailable`: the remote is on GitHub, but its open pull requests could not all be read (`gh` missing, failing or unauthenticated, `--no-github`): the branch may be the head or base of one.
+ */
+export type RemoteSkipReason =
+	| Extract<SkipReason, 'protected' | 'tracked-by-kept-branch' | 'plan-changed' | 'fetch-failed'>
+	| 'remote-default-unknown'
+	| 'github-unavailable';
+
+/** What keeps every branch of the remote, or every one that would be deleted, from going (see {@link RemoteSkipReason}). */
+export type RemoteBlocker = { readonly reason: Extract<RemoteSkipReason, 'remote-default-unknown' | 'github-unavailable'>; readonly hint: string | null };
 
 /** What `gsp clean --remote` decides for a branch on the remote. Never forced: only proven branches go. */
 export type CleanRemoteBranch = {
@@ -351,18 +362,36 @@ export function remoteFlag(remote: string): string {
 	return remote === 'origin' ? '--remote' : `--remote=${remote}`;
 }
 
+/** How the command line names a branch of `remote`: qualified ("origin/x"), so only the remote one is meant. */
+export function remoteBranchArg(branch: Pick<CleanRemoteBranch, 'remote' | 'name'>): string {
+	return `${branch.remote}/${branch.name}`;
+}
+
 /**
  * Decides the action of every branch of the remote. Only a dead branch goes,
  * whatever the flags: never the remote's default branch, a protected one, the
- * head of an open pull request (alive), or the upstream of a local branch
- * that is kept. `deletedLocals` are the local branches deleted (or planned
- * for deletion) in the same run: they no longer hold their upstream.
+ * head or base of an open pull request (alive), or the upstream of a local
+ * branch that is kept. `deletedLocals` are the local branches deleted (or
+ * planned for deletion) in the same run: they no longer hold their upstream.
+ * A `blocker` skips every branch (`remote-default-unknown`) or every one that
+ * would be deleted (`github-unavailable`).
  */
 export function decideRemoteActions(
 	branches: readonly (RemoteBranchAnalysis & { readonly trackedBy: readonly string[] })[],
-	deletedLocals: ReadonlySet<string>
+	deletedLocals: ReadonlySet<string>,
+	blocker?: RemoteBlocker
 ): CleanRemoteBranch[] {
 	return branches.map((branch): CleanRemoteBranch => {
+		const decided = decideRemoteAction(branch, deletedLocals);
+		if (blocker && (blocker.reason === 'remote-default-unknown' || decided.action === 'delete')) {
+			return { ...decided, action: 'skip', reason: blocker.reason, hint: blocker.hint };
+		}
+		return decided;
+	});
+}
+
+function decideRemoteAction(branch: RemoteBranchAnalysis & { readonly trackedBy: readonly string[] }, deletedLocals: ReadonlySet<string>): CleanRemoteBranch {
+	{
 		const make = (action: CleanAction, reason: CleanRemoteBranch['reason'], hint: string | null): CleanRemoteBranch => ({
 			remote: branch.remote,
 			name: branch.name,
@@ -380,22 +409,22 @@ export function decideRemoteActions(
 			return make('keep', branch.reason, null);
 		}
 		if (branch.protected) {
-			// Naming a long-lived name exactly lifts its protection, not the proofs.
-			return make('skip', 'protected', branch.protected.by === 'default-name' ? cmd('gsp', 'clean', branch.name, remoteFlag(branch.remote)) : null);
+			// Naming a long-lived name exactly, with its remote, lifts its protection, not the proofs.
+			return make('skip', 'protected', branch.protected.by === 'default-name' ? cmd('gsp', 'clean', remoteBranchArg(branch), remoteFlag(branch.remote)) : null);
 		}
 		const kept = branch.trackedBy.filter((name) => !deletedLocals.has(name));
 		if (kept.length > 0) {
 			return make('skip', 'tracked-by-kept-branch', kept.map((name) => cmd('git', 'branch', '--unset-upstream', name)).join(' && '));
 		}
-		return make('delete', branch.reason, cmd('gsp', 'clean', branch.name, remoteFlag(branch.remote), '--yes'));
-	});
+		return make('delete', branch.reason, cmd('gsp', 'clean', remoteBranchArg(branch), remoteFlag(branch.remote), '--yes'));
+	}
 }
 
 /** Skips that `--force` lifts. */
-const FORCE_LIFTS: ReadonlySet<CleanBranch['reason']> = new Set(['needs-force', 'ignored-files']);
+const FORCE_LIFTS: ReadonlySet<CleanBranch['reason'] | CleanRemoteBranch['reason']> = new Set(['needs-force', 'ignored-files']);
 
 /** Skips of planned deletions that running `gsp clean` again may carry out. */
-const RERUN_LIFTS: ReadonlySet<CleanBranch['reason']> = new Set(['plan-changed', 'fetch-failed', 'worktree-changed']);
+const RERUN_LIFTS: ReadonlySet<CleanBranch['reason'] | CleanRemoteBranch['reason']> = new Set(['plan-changed', 'fetch-failed', 'worktree-changed']);
 
 /**
  * True when more could be cleaned with the user's approval: planned deletions
@@ -469,13 +498,18 @@ export const MAX_NAMED_BRANCHES = 10;
  */
 export function applyCommand(branches: readonly CleanBranch[], scope: CleanScope, remoteBranches: readonly CleanRemoteBranch[] = []): string {
 	const deleting = branches.filter((branch) => branch.action === 'delete' && branch.result === undefined);
-	const names = [...new Set([...deleting, ...remoteBranches.filter((branch) => branch.action === 'delete' && branch.result === undefined)].map((branch) => branch.name))];
+	const names = [
+		...new Set([
+			...deleting.map((branch) => branch.name),
+			...remoteBranches.filter((branch) => branch.action === 'delete' && branch.result === undefined).map(remoteBranchArg),
+		]),
+	];
 	const targets = names.length > 0 && names.length <= MAX_NAMED_BRANCHES ? names : scope.patterns;
 	return scopedCommand(scope, targets, ['--yes', ...(deleting.some((branch) => branch.needsForce) ? ['--force'] : [])]);
 }
 
 /** `gsp clean` on `targets`, with every option of `scope` that narrows it, then `flags`. */
-function scopedCommand(scope: CleanScope, targets: readonly string[], flags: readonly string[]): string {
+export function scopedCommand(scope: CleanScope, targets: readonly string[], flags: readonly string[]): string {
 	return cmd(
 		'gsp',
 		...(scope.cwd === undefined ? [] : ['-C', scope.cwd]),
@@ -547,6 +581,8 @@ export function describeVerdict(branch: Pick<CleanBranch, 'verdictReason' | 'evi
 			return 'default branch';
 		case 'open-pr':
 			return evidence?.method === 'pull-request' ? `pull request #${evidence.pullRequest} is open` : 'pull request is open';
+		case 'open-pr-base':
+			return evidence?.method === 'pull-request' ? `open pull request #${evidence.pullRequest} targets it` : 'an open pull request targets it';
 		case 'unmerged-commits':
 			return evidence?.method === 'unique-commits' ? `${plural(evidence.commits, 'commit')} not merged into ${into}` : 'commits not merged';
 		case 'no-base':
@@ -567,7 +603,14 @@ function describeProtection(branch: Pick<CleanBranch, 'verdictReason' | 'protect
 	if (branch.verdictReason === 'default-branch' || branch.protected?.by === 'default-branch') {
 		return 'default branch';
 	}
-	return branch.protected?.by === 'default-name' ? 'protected as a long-lived branch name: name it exactly to clean it' : 'protected';
+	switch (branch.protected?.by) {
+		case 'default-name':
+			return 'protected as a long-lived branch name: name it exactly to clean it';
+		case 'branch-config':
+			return `${branch.protected.key} is false`;
+		default:
+			return 'protected';
+	}
 }
 
 /** Why a candidate is skipped, in words. */
@@ -664,6 +707,10 @@ function describeRemoteSkip(branch: CleanRemoteBranch): string {
 			return `changed on ${branch.remote} since it was analysed`;
 		case 'fetch-failed':
 			return `the fetch failed: ${branch.remote} could not be checked again`;
+		case 'remote-default-unknown':
+			return `the default branch of ${branch.remote} is unknown`;
+		case 'github-unavailable':
+			return 'its open pull requests could not be checked';
 		default:
 			return branch.reason;
 	}

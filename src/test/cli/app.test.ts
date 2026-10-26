@@ -112,7 +112,7 @@ suite('cli app (real git)', function () {
 
 		const unknown = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['clean', 'feature/a', 'nope', '--yes'], unknown), EXIT.usage);
-		assert.ok(unknown.err.join('').includes('No local branch named "nope"'));
+		assert.ok(unknown.err.join('').includes('No branch named "nope"'));
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 
 		assert.strictEqual(await runCli(['clean', 'feature/a', '--yes'], createFakeIo(fx.repo)), EXIT.ok);
@@ -641,13 +641,13 @@ suite('cli app (real git)', function () {
 				]
 			);
 			assert.deepStrictEqual(document.summary.remote, { remote: 'origin', delete: 1, deleted: 0, failed: 0, skipped: 0, kept: 1 });
-			assert.strictEqual(document.next, 'gsp clean feature/r --no-github --remote --yes');
+			assert.strictEqual(document.next, 'gsp clean origin/feature/r --no-github --remote --yes');
 
 			const human = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['clean', '--remote', '--no-github'], human), EXIT.notApplied);
 			const out = human.out.join('');
 			assert.ok(out.includes('\nOn origin:\ndelete  feature/r  merged into origin/main\n'), out);
-			assert.ok(out.includes('Nothing was changed. To apply this plan, run: gsp clean feature/r --no-github --remote --yes'), out);
+			assert.ok(out.includes('Nothing was changed. To apply this plan, run: gsp clean origin/feature/r --no-github --remote --yes'), out);
 
 			const unknown = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['clean', '--remote=upstream', '--json'], unknown), EXIT.usage);

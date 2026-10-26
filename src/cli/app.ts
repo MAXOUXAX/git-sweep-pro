@@ -248,6 +248,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 				canPrompt: frontend.canPrompt && !options.json,
 				confirm: options.confirm,
 				...(options.remote === undefined ? {} : { remote: options.remote }),
+				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
 			}
 		);
 		printCleanReport(report, outcome, options, frontend, io);

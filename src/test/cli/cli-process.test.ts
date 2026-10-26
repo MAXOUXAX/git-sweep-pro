@@ -148,7 +148,7 @@ suite('cli process client (real git)', function () {
 		assert.strictEqual(unknown.status, EXIT.usage);
 		assert.deepStrictEqual(JSON.parse(unknown.stdout), {
 			schema: 2,
-			error: { message: 'No local branch named "nope". Run "gsp clean --dry-run" to see them.', code: 'unknown-branch' },
+			error: { message: 'No branch named "nope". Run "gsp clean --dry-run" to see them.', code: 'unknown-branch' },
 		});
 
 		const outside = run(['--json'], fx.dir);

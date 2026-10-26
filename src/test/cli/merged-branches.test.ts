@@ -105,6 +105,8 @@ suite('merged branch detection (real git)', function () {
 
 	test('without origin/HEAD, the remote main branch is the base', async () => {
 		git(['remote', 'set-head', 'origin', '--delete'], fx.repo);
+		// The fetch before applying would recreate it from the server's HEAD.
+		git(['config', 'remote.origin.followRemoteHEAD', 'never'], fx.repo);
 		makeLocalBranch('feature/x', 'x.txt', ['x\n']);
 
 		const io = createFakeIo(fx.repo);

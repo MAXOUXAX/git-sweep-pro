@@ -51,8 +51,19 @@ export type PullRequest = {
 	readonly baseRef: string;
 };
 
-/** Why the GitHub signal was not used. */
-export type GitHubSkipReason = 'disabled' | 'no-remote' | 'not-github' | 'gh-missing' | 'gh-unauthenticated' | 'offline' | 'gh-failed';
+/**
+ * Why the GitHub signal was not used. `too-many-open-prs`: more open pull
+ * requests than gsp lists, so one of them may be missing.
+ */
+export type GitHubSkipReason =
+	| 'disabled'
+	| 'no-remote'
+	| 'not-github'
+	| 'gh-missing'
+	| 'gh-unauthenticated'
+	| 'offline'
+	| 'gh-failed'
+	| 'too-many-open-prs';
 
 /** What `gh` and Go's HTTP client print when GitHub cannot be reached. */
 const OFFLINE_ERROR = /error connecting to|dial tcp|no such host|network is unreachable|connection refused|i\/o timeout|TLS handshake timeout/i;
@@ -190,4 +201,69 @@ export async function loadGitHubSignal(
 		return found;
 	};
 	return { ok: true, signal: { repo, pullRequests, pullRequestsOf, contains, apiCalls: () => calls } };
+}
+
+/** An open pull request, with where its head lives. */
+export type OpenPullRequest = PullRequest & {
+	/** Head branch name, in the head repository. */
+	readonly headRef: string;
+	/** Owner of the head repository, e.g. the fork's owner; null when GitHub does not say (deleted fork). */
+	readonly headOwner: string | null;
+	/** The repository it is open on: the one asked about, or its parent when that one is a fork. */
+	readonly on: 'repo' | 'parent';
+};
+
+export type OpenPullRequestsResult =
+	| { readonly ok: true; readonly pullRequests: readonly OpenPullRequest[]; readonly parent: GitHubRepo | null }
+	| { readonly ok: false; readonly reason: GitHubSkipReason; readonly detail?: string };
+
+type ListedOpenPullRequest = ListedPullRequest & { headRefName: string; headRepositoryOwner: { login: string } | null };
+
+/**
+ * Every open pull request that may use a branch of `repo`: those open on it,
+ * and, when it is a fork, those open on its parent from it. All or nothing:
+ * when one list fails or may be cut short (`limit` reached), the result says
+ * why, as no branch can then be shown not to be the head or base of one.
+ */
+export async function loadOpenPullRequests(runGh: RunGh, repo: GitHubRepo, { limit = 1000 }: { limit?: number } = {}): Promise<OpenPullRequestsResult> {
+	const list = async (target: GitHubRepo, on: OpenPullRequest['on']): Promise<OpenPullRequest[]> => {
+		const { stdout } = await runGh([
+			'pr',
+			'list',
+			'--repo',
+			repoArg(target),
+			'--state',
+			'open',
+			'--limit',
+			String(limit),
+			'--json',
+			'number,state,headRefOid,headRefName,headRepositoryOwner,baseRefName',
+		]);
+		const listed = JSON.parse(stdout) as ListedOpenPullRequest[];
+		if (listed.length >= limit) {
+			throw Object.assign(new Error(`more than ${limit} open pull requests on ${repoArg(target)}`), { tooMany: true });
+		}
+		return listed.map((pr) => ({
+			number: pr.number,
+			state: 'open',
+			headSha: pr.headRefOid,
+			baseRef: pr.baseRefName,
+			headRef: pr.headRefName,
+			headOwner: pr.headRepositoryOwner?.login ?? null,
+			on,
+		}));
+	};
+	try {
+		const { stdout } = await runGh(['repo', 'view', repoArg(repo), '--json', 'isFork,parent']);
+		const view = JSON.parse(stdout) as { isFork: boolean; parent: { name: string; owner: { login: string } } | null };
+		const parent = view.isFork && view.parent ? { host: repo.host, owner: view.parent.owner.login, name: view.parent.name } : null;
+		const own = await list(repo, 'repo');
+		const fromParent = parent ? (await list(parent, 'parent')).filter((pr) => pr.headOwner?.toLowerCase() === repo.owner.toLowerCase()) : [];
+		return { ok: true, pullRequests: [...own, ...fromParent], parent };
+	} catch (error) {
+		if ((error as { tooMany?: boolean }).tooMany) {
+			return { ok: false, reason: 'too-many-open-prs', detail: (error as Error).message };
+		}
+		return { ok: false, ...skipReason(error) };
+	}
 }

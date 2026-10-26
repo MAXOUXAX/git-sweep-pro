@@ -2,7 +2,17 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { RunGit } from './git-command';
-import { loadGitHubSignal, parseGitHubRemote, type GitHubSignal, type GitHubSkipReason, type PullRequest, type RunGh } from './github-signal';
+import {
+	loadGitHubSignal,
+	loadOpenPullRequests,
+	parseGitHubRemote,
+	type GitHubRepo,
+	type GitHubSignal,
+	type GitHubSkipReason,
+	type OpenPullRequest,
+	type PullRequest,
+	type RunGh,
+} from './github-signal';
 import { branchMatchesPattern, isProtectedBranch } from './sweep-logic';
 import { parseWorktrees } from './worktrees';
 
@@ -32,11 +42,12 @@ export type DeadReason = 'empty' | 'merged' | 'rebase-merged' | 'squash-merged' 
  * Why a branch is alive:
  * - `default-branch`: it is the branch everything is compared with;
  * - `open-pr`: its tip is the head of an open pull request;
+ * - `open-pr-base`: an open pull request targets it (remote branches only): deleting it would close that pull request;
  * - `unmerged-commits`: some of its work is found nowhere else;
  * - `no-base`: no default branch was found to compare it with;
  * - `analysis-failed`: a Git command failed while looking for a proof (see the evidence).
  */
-export type AliveReason = 'default-branch' | 'open-pr' | 'unmerged-commits' | 'no-base' | 'analysis-failed';
+export type AliveReason = 'default-branch' | 'open-pr' | 'open-pr-base' | 'unmerged-commits' | 'no-base' | 'analysis-failed';
 
 /** How one commit of an integration branch was proven merged. */
 export type CommitProof = {
@@ -67,9 +78,10 @@ export type Evidence =
 			readonly headSha: string;
 			/**
 			 * `head`: the tip is the PR head; `ancestor`: the PR head, present locally, contains it;
-			 * `api`: GitHub lists the tip in the PR and its compare API confirms the PR head contains it.
+			 * `api`: GitHub lists the tip in the PR and its compare API confirms the PR head contains it;
+			 * `base`: the branch is the one the open PR targets.
 			 */
-			readonly match: 'head' | 'ancestor' | 'api';
+			readonly match: 'head' | 'ancestor' | 'api' | 'base';
 	  }
 	| { readonly method: 'commits'; readonly base: string; readonly commits: number; readonly proofs: readonly CommitProof[] }
 	| { readonly method: 'upstream-gone'; readonly upstream: string }
@@ -153,26 +165,49 @@ export type GitHubCheck =
 	| { readonly used: true; readonly repo: string; readonly pullRequests: number; readonly apiCalls: number }
 	| { readonly used: false; readonly reason: GitHubSkipReason; readonly detail?: string };
 
+/** What GitHub said about the open pull requests of the cleaned remote's repository. */
+export type RemoteGitHubCheck =
+	/** `parent`: the repository it is a fork of, whose open pull requests from it were read too. */
+	| { readonly used: true; readonly repo: string; readonly parent: string | null; readonly openPullRequests: number }
+	| { readonly used: false; readonly reason: GitHubSkipReason; readonly detail?: string };
+
+/** What the branches of the cleaned remote were compared with. */
+export type CleanedRemoteCheck = {
+	readonly remote: string;
+	/**
+	 * Its default branch, as the server reported it (`git ls-remote --symref`):
+	 * its branches are proven against it. Null when it could not be read: none is deleted.
+	 */
+	readonly defaultBranch: string | null;
+	/** Null when the remote is not on GitHub. On GitHub, when not used, none of its branches is deleted. */
+	readonly github: RemoteGitHubCheck | null;
+};
+
 export type AnalysisChecks = {
 	/** Null when no default branch was found: only `upstream-gone` can then make a branch dead. */
 	readonly base: AnalysisBase | null;
 	/** Whether the caller fetched before analysing; this module never fetches. */
 	readonly fetched: boolean;
 	readonly github: GitHubCheck;
+	/** With {@link AnalyzeOptions.remote}: how its branches were analysed. */
+	readonly cleanedRemote?: CleanedRemoteCheck;
 	readonly durationMs: number;
 };
 
-/** A branch on a remote: its verdict, as for a local branch. */
+/** A branch on a remote: its verdict, as for a local branch, against that remote's own default branch. */
 export type RemoteBranchAnalysis = {
 	readonly remote: string;
 	/** Name on the remote, e.g. "feature/x". */
 	readonly name: string;
 	readonly tip: string;
 	readonly verdict: 'dead' | 'alive';
-	/** Never `upstream-gone`. `open-pr` wins over any proof: someone may still push to it. */
+	/** Never `upstream-gone`. `open-pr` and `open-pr-base` win over any proof: someone may still push to it, or merge into it. */
 	readonly reason: DeadReason | AliveReason;
 	readonly evidence: Evidence | null;
-	/** The remote's default branch, or a protected name or pattern. */
+	/**
+	 * The remote's default branch, a protected name or pattern, or the upstream
+	 * of a local branch with `branch.<name>.deleteMerged` false.
+	 */
 	readonly protected: Protection | null;
 };
 
@@ -201,14 +236,18 @@ export type AnalyzeOptions = {
 	readonly base?: string;
 	/** Reported in the checks: whether the caller fetched first. */
 	readonly fetched?: boolean;
-	/** Branch names the user gave exactly: they lift the {@link DEFAULT_PROTECTED_NAMES} protection. */
+	/**
+	 * Branch names the user gave exactly: they lift the {@link DEFAULT_PROTECTED_NAMES}
+	 * protection, locally; on the remote, only in the qualified form ("origin/develop").
+	 */
 	readonly named?: readonly string[];
 	/**
-	 * Also classify the branches of this remote (those matching `branches`).
-	 * `heads` maps each branch name to its tip on the remote, as `git ls-remote`
-	 * read it; without it, the remote-tracking refs are used.
+	 * Also classify the branches of this remote (those matching `branches`, by
+	 * name or qualified name, "origin/x"). `heads` maps each branch name to its
+	 * tip on the remote; `defaultBranch` is the remote's own, as the server
+	 * reported it, or null when unknown (nothing is proven then).
 	 */
-	readonly remote?: { readonly name: string; readonly heads?: ReadonlyMap<string, string> };
+	readonly remote?: { readonly name: string; readonly heads: ReadonlyMap<string, string>; readonly defaultBranch: string | null };
 };
 
 /** Squash proofs give up beyond this many changed files. */
@@ -250,16 +289,19 @@ type Ref = {
 	readonly track: string;
 	readonly head: boolean;
 	readonly symref: string;
+	/** Remote of the upstream ("." for a local one), and the upstream's ref there, e.g. "refs/heads/x". */
+	readonly upstreamRemote: string;
+	readonly upstreamRemoteRef: string;
 };
 
-const REFS_FORMAT = '%(refname)%00%(objectname)%00%(upstream)%00%(upstream:track)%00%(HEAD)%00%(symref)';
+const REFS_FORMAT = '%(refname)%00%(objectname)%00%(upstream)%00%(upstream:track)%00%(HEAD)%00%(symref)%00%(upstream:remotename)%00%(upstream:remoteref)';
 
 function parseRefs(output: string): Map<string, Ref> {
 	const refs = new Map<string, Ref>();
 	for (const line of output.split('\n')) {
-		const [name, oid = '', upstream = '', track = '', head = '', symref = ''] = line.split('\0');
+		const [name, oid = '', upstream = '', track = '', head = '', symref = '', upstreamRemote = '', upstreamRemoteRef = ''] = line.split('\0');
 		if (name) {
-			refs.set(name, { name, oid, upstream, track, head: head === '*', symref });
+			refs.set(name, { name, oid, upstream, track, head: head === '*', symref, upstreamRemote, upstreamRemoteRef });
 		}
 	}
 	return refs;
@@ -1069,12 +1111,13 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 
 	const patterns = [...(options.protectedPatterns ?? []), ...config.protectedPatterns];
 	const named = new Set(options.named ?? []);
-	const byPatternOrName = (name: string): Protection | null => {
-		const pattern = patterns.find((candidate) => isProtectedBranch(name, [candidate]));
+	/** `qualified`: the remote branch's name with its remote ("origin/develop"), which patterns also match; only it lifts a long-lived name's protection. */
+	const byPatternOrName = (name: string, qualified?: string): Protection | null => {
+		const pattern = patterns.find((candidate) => isProtectedBranch(name, [candidate]) || (qualified !== undefined && isProtectedBranch(qualified, [candidate])));
 		if (pattern !== undefined) {
 			return { by: 'pattern', pattern: pattern.trim() };
 		}
-		return DEFAULT_PROTECTED_NAMES.includes(name) && !named.has(name) ? { by: 'default-name' } : null;
+		return DEFAULT_PROTECTED_NAMES.includes(name) && !named.has(qualified ?? name) ? { by: 'default-name' } : null;
 	};
 	const protection = (name: string): Protection | null => {
 		if (base && name === base.name) {
@@ -1112,62 +1155,149 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 		};
 	});
 
-	const remoteBranches = options.remote && (await classifyRemote(git, prover, refs, options, byPatternOrName));
+	const cleaned = options.remote && (await classifyRemote(git, context, options.remote, options, config, refs, { prover, github }, byPatternOrName));
 
 	const githubCheck: GitHubCheck =
 		github.check.used && github.signal ? { ...github.check, apiCalls: github.signal.apiCalls() } : github.check;
 	return {
-		checks: { base: base ?? null, fetched: options.fetched ?? false, github: githubCheck, durationMs: Date.now() - started },
+		checks: {
+			base: base ?? null,
+			fetched: options.fetched ?? false,
+			github: githubCheck,
+			...(cleaned ? { cleanedRemote: cleaned.check } : {}),
+			durationMs: Date.now() - started,
+		},
 		branches,
-		...(remoteBranches ? { remoteBranches } : {}),
+		...(cleaned ? { remoteBranches: cleaned.branches } : {}),
+	};
+}
+
+const sameRepo = (a: GitHubRepo, b: GitHubRepo) =>
+	a.host === b.host && a.owner.toLowerCase() === b.owner.toLowerCase() && a.name.toLowerCase() === b.name.toLowerCase();
+
+/**
+ * The GitHub signal for the cleaned remote's own repository (the local one
+ * when it is the same), with every open pull request that may use one of its
+ * branches. `check` is null when the remote is not on GitHub.
+ */
+async function loadRemoteGitHub(
+	context: AnalyzeContext,
+	options: AnalyzeOptions,
+	url: string | undefined,
+	local: GitHubSignal | undefined
+): Promise<{ check: RemoteGitHubCheck | null; signal?: GitHubSignal; open?: readonly OpenPullRequest[]; repo?: GitHubRepo }> {
+	const repo = url === undefined ? undefined : parseGitHubRemote(url);
+	if (!repo) {
+		return { check: null };
+	}
+	if (options.github === false) {
+		return { check: { used: false, reason: 'disabled' }, repo };
+	}
+	if (!context.gh) {
+		return { check: { used: false, reason: 'gh-missing' }, repo };
+	}
+	const [loaded, open] = await Promise.all([
+		local && sameRepo(local.repo, repo) ? { ok: true as const, signal: local } : loadGitHubSignal(context.gh, repo),
+		loadOpenPullRequests(context.gh, repo),
+	]);
+	const unused = (failed: { reason: GitHubSkipReason; detail?: string }) => ({
+		check: { used: false as const, reason: failed.reason, ...(failed.detail ? { detail: failed.detail } : {}) },
+		repo,
+	});
+	if (!loaded.ok) {
+		return unused(loaded);
+	}
+	if (!open.ok) {
+		return unused(open);
+	}
+	const parent = open.parent && `${open.parent.owner}/${open.parent.name}`;
+	return {
+		check: { used: true, repo: `${repo.owner}/${repo.name}`, parent, openPullRequests: open.pullRequests.length },
+		signal: loaded.signal,
+		open: open.pullRequests,
+		repo,
 	};
 }
 
 /**
- * Classifies the branches of `options.remote` with the same proofs as the
- * local ones, at their tip on the remote. A tip missing from the repository
- * (pushed since the last fetch) cannot be proven: it stays alive. The
- * remote's own HEAD and default branch are protected, and so is the head of
- * an open pull request, whatever proves it merged.
+ * Classifies the branches of the cleaned remote at their tip there, with the
+ * same proofs as the local ones, but against that remote's own default branch
+ * (as the server reported it) and with the pull requests of its own GitHub
+ * repository: a branch merged into another remote's default branch is not
+ * merged on this one. A tip missing from the repository (pushed since the
+ * last fetch) cannot be proven: it stays alive. The remote's default branch
+ * is protected, and so is the head or the base of an open pull request
+ * (matched by SHA, or by name in its own repository), whatever proves it merged.
  */
 async function classifyRemote(
 	git: RunGit,
-	prover: Prover | undefined,
-	refs: ReadonlyMap<string, Ref>,
+	context: AnalyzeContext,
+	{ name: remote, heads, defaultBranch }: NonNullable<AnalyzeOptions['remote']>,
 	options: AnalyzeOptions,
-	byPatternOrName: (name: string) => Protection | null
-): Promise<RemoteBranchAnalysis[]> {
-	const remote = options.remote?.name ?? '';
-	const prefix = `refs/remotes/${remote}/`;
-	const remoteHead = refs.get(`${prefix}HEAD`)?.symref.slice(prefix.length);
-	const heads =
-		options.remote?.heads ??
-		new Map(
-			[...refs.values()]
-				.filter((ref) => ref.name.startsWith(prefix) && !ref.symref && ref.name !== `${prefix}HEAD`)
-				.map((ref) => [ref.name.slice(prefix.length), ref.oid] as const)
-		);
+	config: GitConfig,
+	refs: ReadonlyMap<string, Ref>,
+	local: { readonly prover: Prover | undefined; readonly github: { readonly signal?: GitHubSignal } },
+	byPatternOrName: (name: string, qualified: string) => Protection | null
+): Promise<{ branches: RemoteBranchAnalysis[]; check: CleanedRemoteCheck }> {
 	const selected = [...heads].filter(
-		([name]) => name !== 'HEAD' && (!options.branches || options.branches.some((pattern) => branchMatchesPattern(name, pattern)))
+		([name]) =>
+			name !== 'HEAD' &&
+			(!options.branches || options.branches.some((pattern) => branchMatchesPattern(name, pattern) || branchMatchesPattern(`${remote}/${name}`, pattern)))
 	);
+	const github = await loadRemoteGitHub(context, options, config.remotes.get(remote), local.github.signal);
+	const check: CleanedRemoteCheck = { remote, defaultBranch, github: github.check };
+
+	const baseRef = defaultBranch === null ? undefined : `refs/remotes/${remote}/${defaultBranch}`;
+	const baseTip = baseRef && refs.get(baseRef)?.oid;
+	const base: AnalysisBase | undefined =
+		defaultBranch !== null && baseRef && baseTip ? { name: defaultBranch, ref: baseRef, remote, tip: baseTip, source: 'remote-head' } : undefined;
+	const prover =
+		base && (local.prover?.base.ref === base.ref && github.signal === local.github.signal ? local.prover : new Prover(git, base, github.signal));
+
+	// `branch.<name>.deleteMerged` false keeps the branch and what it tracks on the remote.
+	const keptUpstreams = new Map(
+		[...refs.values()]
+			.filter((ref) => ref.name.startsWith('refs/heads/') && ref.upstreamRemote === remote && ref.upstreamRemoteRef.startsWith('refs/heads/'))
+			.map((ref) => [ref.upstreamRemoteRef.slice('refs/heads/'.length), ref.name.slice('refs/heads/'.length)] as const)
+			.filter(([, local]) => config.keepMerged.has(local))
+	);
+	const owner = github.repo?.owner.toLowerCase();
+	const openHead = (name: string, tip: string) =>
+		github.open?.find(
+			(pr) => pr.headSha === tip || (pr.headRef === name && (pr.on === 'parent' || (owner !== undefined && pr.headOwner?.toLowerCase() === owner)))
+		);
+	const openBase = (name: string) => github.open?.find((pr) => pr.on === 'repo' && pr.baseRef === name);
+
 	const tips = [...new Set(selected.map(([, tip]) => tip))];
 	const present = new Set(tips.length > 0 ? lines((await git(['rev-list', '--no-walk', '--ignore-missing', ...tips])).stdout) : []);
 
-	const verdictOf = async (tip: string): Promise<Verdict> => {
+	const verdictOf = async (name: string, tip: string): Promise<Verdict> => {
+		const head = openHead(name, tip);
+		if (head) {
+			return {
+				verdict: 'alive',
+				reason: 'open-pr',
+				evidence: { method: 'pull-request', pullRequest: head.number, state: 'open', headSha: head.headSha, match: 'head' },
+			};
+		}
+		const targeted = openBase(name);
+		if (targeted) {
+			return {
+				verdict: 'alive',
+				reason: 'open-pr-base',
+				evidence: { method: 'pull-request', pullRequest: targeted.number, state: 'open', headSha: targeted.headSha, match: 'base' },
+			};
+		}
 		if (!present.has(tip)) {
 			const message = `its tip ${tip.slice(0, 7)} is not in this repository yet: fetch ${remote} first`;
 			return { verdict: 'alive', reason: 'analysis-failed', evidence: { method: 'error', message } };
 		}
 		if (!prover) {
-			return { verdict: 'alive', reason: 'no-base', evidence: null };
-		}
-		const open = prover.openPullRequest(tip);
-		if (open) {
-			return {
-				verdict: 'alive',
-				reason: 'open-pr',
-				evidence: { method: 'pull-request', pullRequest: open.number, state: 'open', headSha: open.headSha, match: 'head' },
-			};
+			if (defaultBranch === null) {
+				return { verdict: 'alive', reason: 'no-base', evidence: null };
+			}
+			const message = `${remote}/${defaultBranch} is not in this repository yet: fetch ${remote} first`;
+			return { verdict: 'alive', reason: 'analysis-failed', evidence: { method: 'error', message } };
 		}
 		const isAncestor = await git(['merge-base', '--is-ancestor', tip, prover.base.ref]).then(
 			() => true,
@@ -1176,10 +1306,14 @@ async function classifyRemote(
 		return prover.verdictOf(tip, isAncestor);
 	};
 
-	return mapWithLimit(selected, CONCURRENCY, async ([name, tip]): Promise<RemoteBranchAnalysis> => {
-		if (name === remoteHead || name === prover?.base.name) {
+	const branches = await mapWithLimit(selected, CONCURRENCY, async ([name, tip]): Promise<RemoteBranchAnalysis> => {
+		// The local default branch's name too: a fork's default branch is often its parent's.
+		if (name === defaultBranch || name === local.prover?.base.name) {
 			return { remote, name, tip, verdict: 'alive', reason: 'default-branch', evidence: null, protected: { by: 'default-branch' } };
 		}
-		return { remote, name, tip, ...(await verdictOf(tip).catch(failedVerdict)), protected: byPatternOrName(name) };
+		const kept = keptUpstreams.get(name);
+		const protection: Protection | null = kept ? { by: 'branch-config', key: `branch.${kept}.deleteMerged` } : byPatternOrName(name, `${remote}/${name}`);
+		return { remote, name, tip, ...(await verdictOf(name, tip).catch(failedVerdict)), protected: protection };
 	});
+	return { branches, check };
 }
