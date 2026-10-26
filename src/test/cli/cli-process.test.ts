@@ -226,6 +226,20 @@ suite('cli process client (real git)', function () {
 		assert.deepStrictEqual(host.errors, []);
 	});
 
+	test('with --json, the client returns the document the CLI sent over RPC', async () => {
+		makeGoneBranch(fx.repo, 'feature/a');
+		const host = createHostUi(true);
+
+		const result = await runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: fx.repo, args: ['clean', '--json'], ui: host.ui });
+
+		assert.strictEqual(result.exitCode, EXIT.notApplied);
+		const document = result.document as { mode: string; branches: { name: string; action: string }[] };
+		assert.strictEqual(document.mode, 'plan');
+		assert.deepStrictEqual(document.branches.map(({ name, action }) => [name, action]), [['feature/a', 'delete'], ['main', 'keep']]);
+		assert.ok(branchExists(fx.repo, 'feature/a'), 'a plan changes nothing');
+		assert.deepStrictEqual(host.confirms, [], 'with --json, nothing is asked');
+	});
+
 	test('a declined confirmation deletes nothing and exits 4', async () => {
 		makeGoneBranch(fx.repo, 'feature/a');
 		const host = createHostUi(false);

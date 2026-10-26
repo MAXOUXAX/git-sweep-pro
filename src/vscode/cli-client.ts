@@ -19,6 +19,7 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 	const openProgress = new Map<number, () => void>();
 	let errorShown = false;
 	let disposed = false;
+	let document: unknown;
 	let cancelPrompts!: () => void;
 	const cancelled = new Promise<undefined>((resolve) => { cancelPrompts = () => resolve(undefined); });
 
@@ -26,6 +27,9 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 		switch (event.type) {
 			case 'log':
 				ui.log(event.line);
+				return;
+			case 'result':
+				document = event.document;
 				return;
 			case 'notify':
 				errorShown ||= event.method === 'showErrorMessage';
@@ -77,6 +81,8 @@ export function createCliEventHandler(ui: HostUi, respond: (response: HostRespon
 		},
 		/** True once the CLI reported an error to the user. */
 		errorShown: (): boolean => errorShown,
+		/** The `--json` document the CLI sent, or `undefined` without `--json`. */
+		document: (): unknown => document,
 		/** Releases pending prompt handlers and closes progress when the CLI exits. */
 		dispose: (): void => {
 			disposed = true;
@@ -102,6 +108,8 @@ export type CliRunResult = {
 	readonly exitCode: number;
 	/** True when the user already saw an error notification for this run. */
 	readonly errorShown: boolean;
+	/** The `--json` document of the run, when it was given `--json` and got that far. */
+	readonly document?: unknown;
 };
 
 /**
@@ -138,7 +146,8 @@ export function runCliProcess(options: CliRunOptions): Promise<CliRunResult> {
 				// Release pending prompts before waiting for the event queue to drain.
 				handler.dispose();
 				void queue.then(() => {
-					resolve({ exitCode, errorShown: startFailed || handler.errorShown() });
+					const document = handler.document();
+					resolve({ exitCode, errorShown: startFailed || handler.errorShown(), ...(document === undefined ? {} : { document }) });
 				});
 			}
 		};

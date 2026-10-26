@@ -327,6 +327,18 @@ suite('cli app (real git)', function () {
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['list', '--rpc', '--json'], io), EXIT.ok);
 		assert.ok(io.out.some((line) => line.startsWith('{"type":"log","line":"$ git')));
+		// Every stdout line is one event: the document comes as the last one, unindented.
+		const events = io.out.map((line) => JSON.parse(line) as { type: string; document?: { schema: number; mode: string } });
+		assert.deepStrictEqual(events.filter((event) => event.type === 'result').map((event) => [event.document?.schema, event.document?.mode]), [[2, 'plan']]);
+	});
+
+	test('--rpc --json sends a usage error as a result event too', async () => {
+		const io = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', '--rpc', '--json', '--nope'], io), EXIT.usage);
+		assert.deepStrictEqual(JSON.parse(io.out.join('')), {
+			type: 'result',
+			document: { schema: 2, error: { message: 'Unknown option: --nope', code: 'usage' } },
+		});
 	});
 
 	suite('worktrees', () => {
