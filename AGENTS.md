@@ -26,6 +26,7 @@ Settled by Maxence on 2026-10-26.
 - Secret-like files (`.env*`, `*.pem`, `*.key`, `.npmrc`, `.netrc`) are never regenerable, even inside ignored build or cache folders; dependency folders are not searched.
 - `--remote` never force-deletes: it pushes the deletion with a lease on the analysed SHA; a rejected lease is reported as `plan-changed`. Without `origin`, it uses the only remote, else it's a usage error. `branch.<name>.deleteMerged=false` also protects that branch's upstream on the remote.
 - On a GitHub remote, `--remote` deletes nothing when the GitHub signal is unavailable or `--no-github` is passed (open PRs can't be checked). The base branch of an open PR is kept like its head. Naming `develop` lifts its default-name protection locally only; the remote needs the qualified form `origin/develop`.
+- `post-pr` exits 5 whenever the merged branch it was asked to finish is kept (dirty, ignored files, mid-rebase, not proven): for post-pr, 5 means "not finished". Its positional never lifts protection; a protected name there is read as the old `gsp post-pr <default>` form.
 - The extension offers `--remote` and the worktree list in 2.0.
 
 ## Release workflow for 2.0
