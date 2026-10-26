@@ -1,7 +1,7 @@
 import { EXIT } from '../cli/args';
 import type { CleanDocument } from '../core/clean-plan';
-import { cleanedRemote, cleanProblems, confirmLocal, confirmRemote, deletedNames, describeCleanResult, type CleanEntry } from './clean-model';
-import { reportRunError, SHOW_OUTPUT, UNDO, type CommandDeps, type NoticeKind } from './command-ui';
+import { cleanedRemote, cleanProblems, confirmLocal, confirmRemote, deletedNames, describeCleanResult, expectArgs, type CleanEntry } from './clean-model';
+import { reportRunError, SHOW_OUTPUT, UNDO, undoDeletions, type CommandDeps, type NoticeKind } from './command-ui';
 import type { JsonRun } from './gsp-client';
 
 export type CleanCommandOptions = {
@@ -16,30 +16,46 @@ export type CleanCommandOptions = {
 	readonly confirm: boolean;
 };
 
+/** The note shown in the picker when `--remote` could not pick a remote, or undefined. */
+export const NO_ORIGIN_NOTE = "Remote branches aren't shown: no remote is named origin.";
+
 /**
  * Sweep Stale Branches: plans with `gsp clean --json` (read-only), lets the
- * user pick, confirms, then applies exactly the picked branches with `--yes`.
- * Remote branches go in a second run, with `--remote` and their qualified
- * names only, so a local pick never deletes a remote branch of the same name.
+ * user pick, confirms, then applies exactly the picked branches with `--yes`,
+ * each held with `--expect` to the tip the picker showed. Forced picks go in
+ * their own `--force` run, so proven picks never get `--force`. Remote
+ * branches go last, with `--remote` and their qualified names only, so a
+ * local pick never deletes a remote branch of the same name.
  */
-export async function runCleanCommand({ client, ui }: CommandDeps, options: CleanCommandOptions): Promise<void> {
-	const planRun = client.json<CleanDocument>(options.root, ['clean', ...(options.remote ? ['--remote'] : [])]);
+export async function runCleanCommand(deps: CommandDeps, options: CleanCommandOptions): Promise<void> {
+	const { client, ui } = deps;
+	// Closing the picker before the plan is read stops it: it writes nothing.
+	const abort = new AbortController();
+	const planRun = readPlan(client, options, abort.signal);
 	const pick = await ui.pickCleanup({
 		title: options.readOnly ? 'Preview stale branches' : 'Sweep stale branches',
 		readOnly: options.readOnly,
 		force: options.force,
-		plan: planRun.then((run) => (run.kind === 'document' ? run.document : undefined)),
+		confirm: options.confirm,
+		plan: planRun.then(({ run }) => (run.kind === 'document' ? run.document : undefined)),
+		note: planRun.then(({ note }) => note),
 	});
-	const plan = await planRun;
+	if (pick.kind === 'closed') {
+		// The plan is read already when it failed, which closed the picker: say why. Otherwise, drop it.
+		const settled = await Promise.race([planRun, Promise.resolve(undefined)]);
+		if (settled?.run.kind === 'error') {
+			await reportRunError(ui, settled.run);
+		}
+		abort.abort();
+		return;
+	}
+	const { run: plan } = await planRun;
 	if (plan.kind === 'error') {
 		await reportRunError(ui, plan);
 		return;
 	}
 	if (pick.kind === 'empty') {
 		await ui.notify('info', 'Nothing to clean.');
-		return;
-	}
-	if (pick.kind === 'closed') {
 		return;
 	}
 
@@ -61,23 +77,39 @@ export async function runCleanCommand({ client, ui }: CommandDeps, options: Clea
 		return;
 	}
 
+	const proven = local.filter((entry) => !entry.forced);
+	const forced = local.filter((entry) => entry.forced);
 	const runs: JsonRun<CleanDocument>[] = [];
-	if (local.length > 0) {
-		const force = local.some((entry) => entry.forced) ? ['--force'] : [];
-		runs.push(await ui.withProgress('Deleting branches', () => client.json<CleanDocument>(options.root, ['clean', '--yes', ...force, ...local.map((entry) => entry.arg)])));
+	const clean = (title: string, flags: readonly string[], entries: readonly CleanEntry[]) =>
+		ui.withProgress(title, () => client.json<CleanDocument>(options.root, ['clean', '--yes', ...flags, ...expectArgs(entries)]));
+	if (proven.length > 0) {
+		runs.push(await clean('Deleting branches', [], proven));
+	}
+	if (forced.length > 0) {
+		runs.push(await clean(`Force deleting ${forced.length === 1 ? forced[0].arg : `${forced.length} branches`}`, ['--force'], forced));
 	}
 	if (remote.length > 0 && remoteName !== undefined) {
-		runs.push(
-			await ui.withProgress(`Deleting branches on ${remoteName}`, () =>
-				client.json<CleanDocument>(options.root, ['clean', '--yes', `--remote=${remoteName}`, ...remote.map((entry) => entry.arg)])
-			)
-		);
+		runs.push(await clean(`Deleting branches on ${remoteName}`, [`--remote=${remoteName}`], remote));
 	}
-	await reportCleanResult({ client, ui }, options.root, runs, [...local, ...remote]);
+	await reportCleanResult(deps, options.root, runs, [...local, ...remote]);
+}
+
+/**
+ * The plan, read-only. With `--remote` and no remote it can pick (no origin,
+ * and not exactly one remote), the local plan, with a note saying why the
+ * remote branches are missing.
+ */
+async function readPlan(client: CommandDeps['client'], options: CleanCommandOptions, signal: AbortSignal): Promise<{ run: JsonRun<CleanDocument>; note?: string }> {
+	const run = await client.json<CleanDocument>(options.root, ['clean', ...(options.remote ? ['--remote'] : [])], { signal });
+	if (options.remote && run.kind === 'error' && run.code === 'unknown-remote' && !signal.aborted) {
+		return { run: await client.json<CleanDocument>(options.root, ['clean'], { signal }), note: NO_ORIGIN_NOTE };
+	}
+	return { run };
 }
 
 /** One notification for every run: what was deleted, what was not and why, with Undo. */
-async function reportCleanResult({ client, ui }: Pick<CommandDeps, 'client' | 'ui'>, root: string, runs: readonly JsonRun<CleanDocument>[], picked: readonly CleanEntry[]): Promise<void> {
+async function reportCleanResult(deps: CommandDeps, root: string, runs: readonly JsonRun<CleanDocument>[], picked: readonly CleanEntry[]): Promise<void> {
+	const { ui } = deps;
 	const documents = runs.flatMap((run) => (run.kind === 'document' ? [run.document] : []));
 	for (const run of runs) {
 		if (run.kind === 'error') {
@@ -104,7 +136,7 @@ async function reportCleanResult({ client, ui }: Pick<CommandDeps, 'client' | 'u
 	};
 	const choice = await ui.notify(kind, describeCleanResult(split, worktrees, problems), actions);
 	if (choice === UNDO) {
-		await client.run(root, ['restore', ...deleted]);
+		await undoDeletions(deps, root, deleted);
 	} else if (choice === SHOW_OUTPUT) {
 		ui.showOutput();
 	}

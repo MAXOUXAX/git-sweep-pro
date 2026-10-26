@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import type { CleanDocument } from '../../core/clean-plan';
 import { showCleanPicker } from '../../vscode/clean-picker';
 import type { CleanPickerOptions } from '../../vscode/command-ui';
-import { branch, cleanDocument } from './fakes';
+import { branch, cleanDocument, remoteBranch } from './fakes';
 
 type Item = vscode.QuickPickItem & { entry?: { arg: string } };
 
@@ -48,6 +48,11 @@ function createFakeQuickPick() {
 		quickPick,
 		fire,
 		args,
+		/** The user unchecks an item. */
+		uncheck: (arg: string) => {
+			quickPick.selectedItems = quickPick.selectedItems.filter((item) => item.entry?.arg !== arg);
+			fire('selection', quickPick.selectedItems);
+		},
 		/** The user checks an item: the selection changes, then VS Code reports it. */
 		check: (arg: string) => {
 			const item = quickPick.items.find((candidate) => candidate.entry?.arg === arg)!;
@@ -78,7 +83,7 @@ suite('clean picker', () => {
 	});
 
 	const open = (options: Partial<CleanPickerOptions> & { plan: Promise<CleanDocument | undefined> }) =>
-		showCleanPicker({ title: 'Sweep stale branches', readOnly: false, force: false, ...options });
+		showCleanPicker({ title: 'Sweep stale branches', readOnly: false, force: false, confirm: true, ...options });
 
 	test('opens busy, then lists sections with planned deletions checked', async () => {
 		let resolvePlan!: (document: CleanDocument) => void;
@@ -123,7 +128,10 @@ suite('clean picker', () => {
 		void open({ plan: Promise.resolve(plan) });
 		await tick();
 
-		fake.button('Also offer');
+		const forceIcon = () => (fake.quickPick.buttons[0].iconPath as vscode.ThemeIcon).id;
+		assert.strictEqual(forceIcon(), 'shield', 'the toggle shows it is off');
+		fake.button('Forced deletes are hidden');
+		assert.strictEqual(forceIcon(), 'warning', 'the toggle shows it is on');
 		assert.ok(fake.quickPick.items.some((item) => item.label === 'Needs a forced delete'));
 		assert.deepStrictEqual(fake.args(), ['feature/a']);
 		fake.button('Clear all');
@@ -133,8 +141,44 @@ suite('clean picker', () => {
 		fake.check('feature/unpushed');
 		assert.deepStrictEqual(fake.args(), ['feature/a', 'feature/unpushed']);
 
-		fake.button('Hide');
+		fake.button('Forced deletes are offered');
 		assert.deepStrictEqual(fake.args(), ['feature/a'], 'hidden forced deletes are unchecked');
+	});
+
+	test('without a confirmation, the placeholder says Enter deletes', async () => {
+		void open({ confirm: false, plan: Promise.resolve(plan) });
+		await tick();
+		assert.strictEqual(fake.quickPick.placeholder, 'Pick the branches to delete, then press Enter to delete them.');
+	});
+
+	test('a note about the plan comes first and cannot be checked', async () => {
+		void open({ plan: Promise.resolve(plan), note: Promise.resolve("Remote branches aren't shown: no remote is named origin.") });
+		await tick();
+		const noteItem = fake.quickPick.items[0];
+		assert.strictEqual(noteItem.label, "$(info) Remote branches aren't shown: no remote is named origin.");
+		fake.quickPick.selectedItems = [...fake.quickPick.selectedItems, noteItem];
+		fake.fire('selection', fake.quickPick.selectedItems);
+		assert.deepStrictEqual(fake.args(), ['feature/a']);
+		assert.strictEqual(fake.quickPick.placeholder, "Remote branches aren't shown: no remote is named origin.");
+	});
+
+	test('a remote branch goes only with the local branch tracking it', async () => {
+		const tracked = cleanDocument([branch({ name: 'feature/a' })], { remoteBranches: [remoteBranch({ name: 'feature/a', trackedBy: ['feature/a'] })] });
+		void open({ plan: Promise.resolve(tracked) });
+		await tick();
+		assert.deepStrictEqual(fake.args(), ['feature/a', 'origin/feature/a']);
+
+		fake.uncheck('feature/a');
+		assert.deepStrictEqual(fake.args(), []);
+		assert.strictEqual(fake.quickPick.placeholder, 'Also unchecked origin/feature/a: feature/a tracks it.');
+
+		fake.check('origin/feature/a');
+		assert.deepStrictEqual(fake.args(), []);
+		assert.strictEqual(fake.quickPick.placeholder, 'origin/feature/a goes only with feature/a, which tracks it.');
+
+		fake.check('feature/a');
+		fake.check('origin/feature/a');
+		assert.deepStrictEqual(fake.args(), ['feature/a', 'origin/feature/a']);
 	});
 
 	test('the copy button copies the fix', async () => {

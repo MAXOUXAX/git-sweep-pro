@@ -253,7 +253,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		const { report, outcome } = await runCleanWorkflow(
 			{ ...context, ssh: createSshRunner(), ...(options.github ? { gh: createGhRunner(repository.root) } : {}) },
 			{
-				patterns: options.positionals,
+				patterns: cleanPatterns(options),
 				dryRun: options.mode === 'dryRun',
 				yes: options.yes,
 				force: options.mode === 'forceDelete',
@@ -264,6 +264,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 				confirm: options.confirm,
 				...(options.remote === undefined ? {} : { remote: options.remote }),
 				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+				...(options.expect.size > 0 ? { expect: options.expect } : {}),
 			}
 		);
 		printCleanReport(report, outcome, options, frontend, io);
@@ -283,6 +284,11 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return EXIT.failed;
 	}
+}
+
+/** The branches `gsp clean` considers: those named or matched, and those `--expect` names. */
+function cleanPatterns(options: CliOptions): string[] {
+	return [...new Set([...options.positionals, ...options.expect.keys()])];
 }
 
 /** What to do next when the plan was not applied, or `undefined` when there is nothing to say. */
@@ -322,7 +328,7 @@ function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: C
 			? null
 			: nextCommand(report, {
 					...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-					patterns: options.positionals,
+					patterns: cleanPatterns(options),
 					protectedPatterns: options.protect,
 					github: options.github,
 					fetch: options.fetch,
@@ -452,6 +458,8 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 	if (!worktree) {
 		return 'failed';
 	}
+	// With --rpc, stdout carries only protocol events: a line goes to the output channel as a log event.
+	const print = (line: string) => (options.rpc ? context.output.appendLine(line) : io.stdout(`${line}\n`));
 	try {
 		switch (worktree.subcommand) {
 			case 'list': {
@@ -472,8 +480,8 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 				if (pruned.length === 0) {
 					io.stderr('No worktree registrations to prune.\n');
 				} else {
-					io.stdout(`${dryRun ? 'Would prune' : 'Pruned'} ${pruned.length} worktree registration(s):\n`);
-					pruned.forEach((path) => io.stdout(`  ${path}\n`));
+					print(`${dryRun ? 'Would prune' : 'Pruned'} ${pruned.length} worktree registration(s):`);
+					pruned.forEach((path) => print(`  ${path}`));
 				}
 				return 'ok';
 			}
@@ -524,7 +532,13 @@ async function runWorktreeRemove(context: WorkflowContext, options: CliOptions, 
 	}
 	if (result.kind === 'removed') {
 		if (!options.json) {
-			io.stdout(`Removed worktree ${result.worktree.path}.\n`);
+			const line = `Removed worktree ${result.worktree.path}.`;
+			// With --rpc, stdout carries only protocol events.
+			if (options.rpc) {
+				context.output.appendLine(line);
+			} else {
+				io.stdout(`${line}\n`);
+			}
 		}
 		return { kind: 'workflow', outcome: 'ok' };
 	}

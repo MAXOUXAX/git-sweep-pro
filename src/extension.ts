@@ -7,7 +7,7 @@ import type { SweepMode, SweepSettings } from './core/sweep-logic';
 import { runCleanCommand } from './vscode/clean-command';
 import { runCliProcess } from './vscode/cli-client';
 import type { CommandDeps } from './vscode/command-ui';
-import { createGspClient } from './vscode/gsp-client';
+import { createGspClient, type RunOptions } from './vscode/gsp-client';
 import { createVscodeHostUi } from './vscode/host-ui';
 import { runPostPrCommand } from './vscode/post-pr-command';
 import { applyTerminalPath } from './vscode/terminal-path';
@@ -121,9 +121,12 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	};
 
-	const runQuiet = (root: string, args: readonly string[]) => {
+	// Leaves the information messages to the command, which says what happened in its own words.
+	const quietHostUi: HostUi = { ...hostUi, showInformationMessage: () => undefined };
+	const runQuiet = (root: string, args: readonly string[], options: RunOptions = {}) => {
 		outputChannel.appendLine(`> gsp ${args.join(' ')}`);
-		return runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: root, args, ui: args.includes('--json') ? jsonHostUi : hostUi });
+		const ui = args.includes('--json') ? jsonHostUi : options.quiet ? quietHostUi : hostUi;
+		return runCliProcess({ nodePath: process.execPath, cliPath: CLI_PATH, cwd: root, args, ui, ...(options.signal ? { signal: options.signal } : {}) });
 	};
 	const deps: CommandDeps = {
 		client: createGspClient(runQuiet, settingsArgs),
