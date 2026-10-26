@@ -6,17 +6,17 @@ It is a command line for you and your coding agents, and a VS Code extension.
 
 ## For coding agents
 
-Use `gsp`, not raw Git: it checks the work is safe before deleting anything and records each deletion for `gsp restore`. Don't use `git branch -D`, `git worktree remove` or `git push --delete`.
+Use `gsp`, not raw Git: it checks that no work would be lost before deleting anything, and `gsp restore` can recreate the branches it deletes. Don't use `git branch -D`, `git worktree remove` or `git push --delete`.
 
 | Task | Command |
 | --- | --- |
-| After merging a pull request | `gsp post-pr --yes`, from the branch's worktree, or `gsp post-pr <branch> --yes` from the main checkout. Continue in `nextCwd` when it removed the worktree you were in |
-| Clean the repository | `gsp clean --json` to read the plan, then `gsp clean --yes`. Exit code 5: more needs approval, read `next` |
-| Delete one branch | `gsp clean <branch> --yes`. Add `--force` only when the person agreed to lose its unpushed work |
-| Remove a scratch or review worktree | `gsp worktree remove <path>`. Add `--force` when it holds uncommitted work you can throw away |
+| After merging a pull request | `gsp post-pr --yes`, from the branch's worktree, or `gsp post-pr <branch> --yes` from anywhere else. Continue in `nextCwd` when it removed the worktree you were in |
+| Clean the repository | `gsp clean --json` to read the plan, then `gsp clean --yes`. Exit code 5: something was kept or needs approval, read `next` |
+| Delete one branch | `gsp clean <branch> --yes`. Add `--force` only when the person agreed; `gsp restore` can bring the branch back |
+| Remove a worktree you created | `gsp worktree remove <path>`. If it is kept, read why. Add `--discard-changes` only when everything listed is yours to throw away: it is deleted for good |
 | List worktrees | `gsp worktree list --json` |
 | Delete merged branches on the remote | `gsp clean --remote` shows the plan; add `--yes` to apply it |
-| Undo a deletion | `gsp restore <branch>` |
+| Undo a branch deletion | `gsp restore <branch>`, or `gsp restore origin/<branch>` for a remote one |
 
 `gsp agents` writes these instructions into a repository's `AGENTS.md` or `CLAUDE.md`, and `gsp agents --check` finds advice there that contradicts gsp (see [With coding agents](#with-coding-agents)).
 
@@ -27,17 +27,17 @@ Use `gsp`, not raw Git: it checks the work is safe before deleting anything and 
 <!-- BEGIN:git-sweep-pro -->
 ## Git cleanup
 
-Use `gsp` (git-sweep-pro) for Git cleanup. Don't use `git branch -D`, `git worktree remove` or `git push --delete`: gsp checks the work is safe and records deletions for `gsp restore`.
+Use `gsp` (git-sweep-pro) for Git cleanup, not `git branch -D`, `git worktree remove` or `git push --delete`: gsp checks that no work would be lost, and `gsp restore` can recreate the branches it deletes.
 
-- After merging a pull request: `gsp post-pr --yes` from the branch's worktree, or `gsp post-pr <branch> --yes` from the main checkout. If it removed the worktree you were in, continue in `nextCwd` (with `--json`) or the directory it prints.
-- Clean the repository: `gsp clean --json` to read the plan, then `gsp clean --yes` to apply it.
-- Delete one branch: `gsp clean <branch> --yes`. Add `--force` only when the person agreed to lose its unpushed work.
-- Remove a scratch or review worktree: `gsp worktree remove <path>`. Add `--force` when it holds uncommitted work you can throw away.
+- After merging a pull request: `gsp post-pr --yes` from the branch's worktree, or `gsp post-pr <branch> --yes` from anywhere else. If it removed the worktree you were in, continue in `nextCwd` (with `--json`) or the directory it prints.
+- Clean the repository: `gsp clean --json` to read the plan, then `gsp clean --yes`.
+- Delete one branch: `gsp clean <branch> --yes`. Add `--force` only when the person agreed; `gsp restore` can bring the branch back.
+- Remove a worktree you created (review, scratch): `gsp worktree remove <path>`. If it is kept, read why. Add `--discard-changes` only when everything listed is yours to throw away: uncommitted changes and ignored files are deleted for good.
 - List worktrees: `gsp worktree list --json`.
 - Remote branches: `gsp clean --remote` shows the plan; add `--yes` to apply it.
-- Undo a deletion: `gsp restore <branch>`.
+- Undo a branch deletion: `gsp restore <branch>` (`gsp restore origin/<branch>` for a remote one).
 
-Without a terminal, gsp changes nothing unless `--yes` is passed; in a pseudo-terminal, add `--non-interactive`. `--yes` never forces: it deletes only branches whose work exists elsewhere. With `--json`, stdout is one document: each skipped branch has a `reason` and a `hint`, and `next` is the command to run next. Run `gsp sync` (rebase, then force-push with a lease) only when asked.
+Without a terminal, gsp changes nothing unless `--yes` is passed; in a pseudo-terminal, add `--non-interactive`. `--yes` never forces. With `--json`, stdout is one document: whatever gsp kept has a `reason` and a `hint`, and `next` is the command to run next. Run `gsp sync` (rebase, then force-push with a lease) only when asked.
 
 | Exit | Meaning |
 | --- | --- |
@@ -46,9 +46,9 @@ Without a terminal, gsp changes nothing unless `--yes` is passed; in a pseudo-te
 | 2 | Invalid arguments, or no such branch, remote or worktree |
 | 3 | `gsp sync` paused on conflicts: resolve and stage them, then `gsp resume` |
 | 4 | Cancelled at a prompt |
-| 5 | Not everything was done: more needs approval (`--yes`, `--force`), or post-pr or worktree remove kept something. Read `next` or the hint |
+| 5 | Something was kept or needs approval: read `next` or the `hint`, and ask before adding `--force` or `--discard-changes` |
 
-Run `gsp help` for every command, and `gsp agents --check` to find outdated advice in these files.
+Run `gsp help` for every command.
 <!-- END:git-sweep-pro -->
 ````
 
