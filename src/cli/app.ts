@@ -4,18 +4,19 @@ import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
 import { createDeletionLog, describeDeletion } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
-import { describeMergedBranch } from '../core/merged-branches';
+import { formatBranchLines, formatSummary, type CleanReport } from '../core/clean-plan';
+import { runCleanWorkflow, UnknownBranchError, type CleanOutcome } from '../core/clean-workflow';
+import { createGhRunner } from '../core/github-signal';
 import { runPostPullRequestWorkflow } from '../core/post-pull-request-workflow';
 import { inspectDeletions, runRestoreWorkflow } from '../core/restore-workflow';
-import { findStaleBranches, noBranchesFound } from '../core/stale-branches';
-import { runSweepWorkflow } from '../core/sweep-workflow';
 import { runResumeWorkflow } from '../core/sync-resume-workflow';
 import type { SyncContext } from '../core/sync-state';
 import { runSyncWorkflow } from '../core/sync-workflow';
 import type { WorkflowContext, WorkflowOutcome } from '../core/workflow';
 import { describeWorktree, listWorktrees, pruneWorktrees, removeWorktree } from '../core/worktrees';
-import { EXIT, parseArgs, USAGE, UsageError, type CliOptions } from './args';
+import { EXIT, parseArgs, UsageError, type CliOptions } from './args';
 import { createFrontend, type Frontend } from './frontend';
+import { helpFor, USAGE } from './help';
 import type { CliIo } from './io';
 import { createFileStateStore, stateFilePath } from './state-store';
 
@@ -24,9 +25,23 @@ export const PROTECTED_CONFIG_KEY = 'git-sweep-pro.protected';
 
 const EXIT_CODES: Record<WorkflowOutcome, number> = {
 	ok: EXIT.ok,
-	cancelled: EXIT.ok,
+	cancelled: EXIT.cancelled,
 	failed: EXIT.failed,
 	paused: EXIT.paused,
+};
+
+const CLEAN_EXIT_CODES: Record<CleanOutcome, number> = {
+	done: EXIT.ok,
+	'not-applied': EXIT.notApplied,
+	cancelled: EXIT.cancelled,
+	failed: EXIT.failed,
+};
+
+const CLEAN_OUTCOMES: Record<CleanOutcome, WorkflowOutcome> = {
+	done: 'ok',
+	'not-applied': 'ok',
+	cancelled: 'cancelled',
+	failed: 'failed',
 };
 
 function readVersion(): string {
@@ -78,7 +93,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 	}
 
 	if (options.command === 'help') {
-		io.stdout(`${USAGE}\n`);
+		io.stdout(`${helpFor(options.helpTopic)}\n`);
 		return EXIT.ok;
 	}
 	if (options.command === 'version') {
@@ -92,17 +107,36 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 		return EXIT.failed;
 	}
 
+	if (options.merged) {
+		io.stderr('note: --merged is deprecated and does nothing: merged branches are always cleaned.\n');
+	}
+
 	const frontend = await createFrontend(options, io);
 	frontend.intro?.(`gsp ${options.command}`);
 	const outcome = await runCommand(options, requestedDir, frontend, io);
-	frontend.outro?.(outcome);
-	if (options.nonInteractive && outcome === 'cancelled') {
-		return EXIT.cancelled;
+	const workflowOutcome = typeof outcome === 'number' ? 'failed' : outcome.kind === 'clean' ? CLEAN_OUTCOMES[outcome.outcome] : outcome.outcome;
+	frontend.outro?.(workflowOutcome);
+	if (typeof outcome === 'number') {
+		return outcome;
 	}
-	return EXIT_CODES[outcome];
+	if (outcome.kind === 'clean') {
+		return CLEAN_EXIT_CODES[outcome.outcome];
+	}
+	// Nobody could answer: the prompt was refused for lack of --yes, not cancelled.
+	return outcome.outcome === 'cancelled' && !frontend.canPrompt ? EXIT.notApplied : EXIT_CODES[outcome.outcome];
 }
 
-async function runCommand(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<WorkflowOutcome> {
+/** How a command ended: a workflow outcome, a `clean` outcome, or an exit code decided on the spot. */
+type CommandOutcome = { readonly kind: 'workflow'; readonly outcome: WorkflowOutcome } | { readonly kind: 'clean'; readonly outcome: CleanOutcome } | number;
+
+async function runCommand(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<CommandOutcome> {
+	if (options.command === 'clean') {
+		return runClean(options, dir, frontend, io);
+	}
+	return { kind: 'workflow', outcome: await runWorkflow(options, dir, frontend, io) };
+}
+
+async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<WorkflowOutcome> {
 	let repository: Repository;
 	try {
 		repository = await openRepository(dir, frontend.trace);
@@ -111,28 +145,10 @@ async function runCommand(options: CliOptions, dir: string, frontend: Frontend, 
 		return 'failed';
 	}
 
-	const { root, gitDir, commonDir, protectedPatterns } = repository;
-	const context: WorkflowContext = {
-		root,
-		settings: {
-			protectedBranches: [...options.protect, ...protectedPatterns],
-			autoFetchPrune: options.fetch,
-			confirmBeforeDelete: options.confirm,
-			includeMergedBranches: options.merged,
-		},
-		git: (args) => runGitCommand(args, root, { appendLine: frontend.trace }),
-		output: frontend.output,
-		ui: frontend.ui,
-		// Branches are shared by every worktree, and so is their undo history.
-		deletionLog: createDeletionLog(createFileStateStore(stateFilePath(commonDir))),
-	};
-
+	const { gitDir } = repository;
+	const context = createContext(repository, options, frontend);
 	const [requested] = options.positionals;
 	switch (options.command) {
-		case 'sweep':
-			return runSweepWorkflow(context, options.mode);
-		case 'list':
-			return runList(context, options, io);
 		case 'worktree':
 			return runWorktree(context, options, io, dir);
 		case 'post-pr':
@@ -153,40 +169,105 @@ async function runCommand(options: CliOptions, dir: string, frontend: Frontend, 
 			};
 			return options.command === 'sync' ? runSyncWorkflow(syncContext, requested) : runResumeWorkflow(syncContext);
 		}
+		case 'clean':
 		case 'help':
 		case 'version':
 			return 'ok';
 	}
 }
 
-/** `list`: prints stale branches without touching them (`--json` for scripts). */
-async function runList(context: WorkflowContext, options: CliOptions, io: CliIo): Promise<WorkflowOutcome> {
-	try {
-		const found = await findStaleBranches(context);
-		const { stale, protected: protectedStale, checkedOut, merged, worktrees } = found;
-		const withWorktree = (branch: string, note?: string) => {
-			const worktree = worktrees.get(branch);
-			const notes = [note, worktree && `worktree ${worktree}`].filter(Boolean);
-			return notes.length > 0 ? `${branch} (${notes.join(', ')})\n` : `${branch}\n`;
-		};
+function createContext({ root, commonDir, protectedPatterns }: Repository, options: CliOptions, frontend: Frontend): WorkflowContext {
+	return {
+		root,
+		settings: {
+			protectedBranches: [...options.protect, ...protectedPatterns],
+			autoFetchPrune: options.fetch,
+			confirmBeforeDelete: options.confirm,
+			// Only post-pr still runs the previous sweep; it never offered merged branches.
+			includeMergedBranches: false,
+		},
+		git: (args) => runGitCommand(args, root, { appendLine: frontend.trace }),
+		output: frontend.output,
+		ui: frontend.ui,
+		// Branches are shared by every worktree, and so is their undo history.
+		deletionLog: createDeletionLog(createFileStateStore(stateFilePath(commonDir))),
+	};
+}
 
-		if (options.json) {
-			const json = { stale, protected: protectedStale, checkedOut, merged, worktrees: Object.fromEntries(worktrees) };
-			io.stdout(`${JSON.stringify(json, null, 2)}\n`);
-		} else if (stale.length === 0 && protectedStale.length === 0 && checkedOut.length === 0 && merged.length === 0) {
-			io.stderr(`${noBranchesFound(context.settings, found)}\n`);
-		} else {
-			stale.forEach((branch) => io.stdout(withWorktree(branch)));
-			merged.forEach((branch) => io.stdout(withWorktree(branch.name, describeMergedBranch(branch))));
-			checkedOut.forEach((branch) =>
-				io.stdout(branch.where === 'current' ? `${branch.name} (current branch)\n` : `${branch.name} (main worktree ${branch.worktreePath})\n`)
-			);
-			protectedStale.forEach((branch) => io.stdout(`${branch} (protected)\n`));
-		}
-		return 'ok';
+/**
+ * `clean` (and its aliases `sweep` and `list`): plans, picks when someone can
+ * answer, applies, then reports. With `--json`, the report is the only thing
+ * on stdout; in a terminal, one line per branch and a summary line.
+ */
+async function runClean(options: CliOptions, dir: string, frontend: Frontend, io: CliIo): Promise<CommandOutcome> {
+	let repository: Repository;
+	try {
+		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
-		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
-		return 'failed';
+		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
+		return EXIT.failed;
+	}
+	const context = createContext(repository, options, frontend);
+	try {
+		const { report, outcome } = await runCleanWorkflow(
+			{ ...context, ...(options.github ? { gh: createGhRunner(repository.root) } : {}) },
+			{
+				patterns: options.positionals,
+				dryRun: options.mode === 'dryRun',
+				yes: options.yes,
+				force: options.mode === 'forceDelete',
+				fetch: options.fetch,
+				github: options.github,
+				protectedPatterns: options.protect,
+				canPrompt: frontend.canPrompt && !options.json,
+				confirm: options.confirm,
+			}
+		);
+		printCleanReport(report, outcome, options, frontend, io);
+		return { kind: 'clean', outcome };
+	} catch (error) {
+		if (error instanceof UnknownBranchError) {
+			io.stderr(`error: ${error.message}\n`);
+			return EXIT.usage;
+		}
+		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
+		return EXIT.failed;
+	}
+}
+
+/** What to do next when the plan was not applied, or `undefined` when there is nothing to say. */
+function nextStep(report: CleanReport, outcome: CleanOutcome): string | undefined {
+	if (outcome !== 'not-applied') {
+		return undefined;
+	}
+	if (report.summary.delete > 0 && !report.branches.some((branch) => branch.result !== undefined)) {
+		return 'Nothing was changed. To apply this plan, run: gsp clean --yes';
+	}
+	return 'Branches with work found nowhere else were kept: add --force to delete them, as shown above.';
+}
+
+function printCleanReport(report: CleanReport, outcome: CleanOutcome, options: CliOptions, frontend: Frontend, io: CliIo): void {
+	if (options.json) {
+		io.stdout(`${JSON.stringify(report, null, 2)}\n`);
+		return;
+	}
+	const lines = formatBranchLines(report);
+	const summary = formatSummary(report);
+	const next = nextStep(report, outcome);
+	if (options.rpc || frontend.canPrompt) {
+		lines.forEach((line) => frontend.output.appendLine(line));
+		const message = next ? `${summary}\n${next}` : summary;
+		if (outcome === 'failed') {
+			frontend.ui.showErrorMessage(message, { seeOutput: true });
+		} else {
+			frontend.ui.showInformationMessage(message, report.mode === 'plan' ? { dryRun: true } : undefined);
+		}
+		return;
+	}
+	lines.forEach((line) => io.stdout(`${line}\n`));
+	io.stdout(`${summary}\n`);
+	if (next) {
+		io.stdout(`${next}\n`);
 	}
 }
 

@@ -110,8 +110,8 @@
           ],
           "enumDescriptions": [
             "Only report the branches that would be deleted.",
-            "Delete branches with git branch -d (refuses unmerged branches).",
-            "Delete branches with git branch -D (force, even if unmerged)."
+            "Delete the branches whose work is proven merged or pushed.",
+            "Also offer the branches whose commits are found nowhere else."
           ],
           "default": "safeDelete",
           "description": "Default execution mode presented first in the Run command's mode picker."
@@ -137,7 +137,8 @@
         "gitSweepPro.includeMergedBranches": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Also offer local branches whose work is already in the remote default branch (merged, rebase-merged or squash-merged) even though their upstream is not gone — e.g. branches that were never pushed or whose remote branch was kept. They are listed but never pre-selected."
+          "markdownDescription": "Also offer local branches whose work is already in the remote default branch (merged, rebase-merged or squash-merged) even though their upstream is not gone — e.g. branches that were never pushed or whose remote branch was kept. They are listed but never pre-selected.",
+          "markdownDeprecationMessage": "Merged branches are always offered now, and pre-selected when their work is proven merged. This setting does nothing."
         },
         "gitSweepPro.cli.addToTerminalPath": {
           "type": "boolean",

@@ -28,6 +28,12 @@ suite('cli app (real git)', function () {
 		assert.strictEqual(await runCli(['--help'], help), EXIT.ok);
 		assert.ok(help.out.join('').includes('Usage: gsp'));
 
+		const cleanHelp = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', '--help'], cleanHelp), EXIT.ok);
+		assert.ok(cleanHelp.out.join('').startsWith('Usage: gsp clean'));
+		assert.ok(cleanHelp.out.join('').includes('Common tasks:'));
+		assert.ok(!cleanHelp.out.join('').includes('sync [upstream]'), 'only the help of clean');
+
 		const version = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['version'], version), EXIT.ok);
 		assert.match(version.out.join(''), /^\d+\.\d+\.\d+\n$/);
@@ -47,105 +53,174 @@ suite('cli app (real git)', function () {
 		assert.ok(notRepo.err.join('').includes('not a Git repository'));
 	});
 
-	test('list prints stale branches, marks protected ones, and supports --json', async () => {
+	test('list plans like clean --dry-run: one line per branch, then the summary', async () => {
 		makeGoneBranch(fx.repo, 'feature/a');
 		makeGoneBranch(fx.repo, 'release/1');
 
 		const io = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['list', '--protect', 'release/*'], io), EXIT.ok);
-		assert.deepStrictEqual(io.out, ['feature/a\n', 'release/1 (protected)\n']);
+		assert.strictEqual(await runCli(['list', '--protect', 'release/*'], io), EXIT.notApplied);
+		assert.deepStrictEqual(io.out.join('').split('\n').filter(Boolean), [
+			'delete  feature/a  no commits beyond origin/main',
+			'skip    release/1  protected (no commits beyond origin/main)',
+			'keep    main       default branch',
+			'1 to delete (1 empty) · 1 skipped',
+			'Nothing was changed. To apply this plan, run: gsp clean --yes',
+		]);
+		assert.ok(branchExists(fx.repo, 'feature/a'));
 
-		const json = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['list', '--json', '--no-fetch'], json), EXIT.ok);
-		assert.deepStrictEqual(JSON.parse(json.out.join('')), {
-			stale: ['feature/a', 'release/1'],
-			protected: [],
-			checkedOut: [],
-			merged: [],
-			worktrees: {},
-		});
-
-		const clean = createFakeIo(fx.repo);
 		git(['branch', '-D', 'feature/a', 'release/1'], fx.repo);
+		const clean = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['list'], clean), EXIT.ok);
-		assert.ok(clean.err.join('').includes('No stale branches found.'));
+		assert.ok(clean.out.join('').includes('Nothing to clean.'));
 	});
 
-	test('sweep refuses to delete without a terminal unless --yes', async () => {
+	test('clean only plans without a terminal, and applies with --yes', async () => {
 		makeGoneBranch(fx.repo, 'feature/a');
 
-		const refused = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli([], refused), EXIT.ok);
+		const planned = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli([], planned), EXIT.notApplied);
 		assert.ok(branchExists(fx.repo, 'feature/a'));
-		assert.ok(refused.out.join('').includes('Deletion cancelled.'));
+		assert.ok(planned.out.join('').includes('To apply this plan, run: gsp clean --yes'));
 
 		const accepted = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['--yes'], accepted), EXIT.ok);
+		assert.strictEqual(await runCli(['sweep', '--yes'], accepted), EXIT.ok);
 		assert.ok(!branchExists(fx.repo, 'feature/a'));
-		assert.ok(accepted.out.join('').includes('Deleted 1 branch(es)'));
+		assert.ok(accepted.out.join('').includes('1 deleted (1 empty) · restore with gsp restore feature/a'));
 	});
 
-	test('dry run lists branches without deleting them', async () => {
+	test('dry run plans even with --yes, and the deprecated --merged changes nothing', async () => {
 		makeGoneBranch(fx.repo, 'feature/a');
 		const io = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['--dry-run'], io), EXIT.ok);
+		assert.strictEqual(await runCli(['--dry-run', '--yes', '--merged'], io), EXIT.notApplied);
 		assert.ok(branchExists(fx.repo, 'feature/a'));
-		assert.ok(io.err.join('').includes('- feature/a'));
-		assert.ok(io.out.join('').includes('Dry run: 1 branch(es) would be deleted.'));
+		assert.ok(io.out.join('').includes('delete  feature/a'));
+		assert.ok(io.err.join('').includes('--merged is deprecated'));
 	});
 
-	test('explicit agent mode distinguishes refused deletion from success on a TTY', async () => {
+	test('named branches: only those are considered, and an unknown one is a usage error', async () => {
+		makeGoneBranch(fx.repo, 'feature/a');
+		makeGoneBranch(fx.repo, 'feature/b');
+		git(['branch', 'other'], fx.repo);
+
+		const unknown = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', 'feature/a', 'nope', '--yes'], unknown), EXIT.usage);
+		assert.ok(unknown.err.join('').includes('No local branch named "nope"'));
+		assert.ok(branchExists(fx.repo, 'feature/a'));
+
+		assert.strictEqual(await runCli(['clean', 'feature/a', '--yes'], createFakeIo(fx.repo)), EXIT.ok);
+		assert.ok(!branchExists(fx.repo, 'feature/a'));
+		assert.ok(branchExists(fx.repo, 'feature/b'));
+		assert.ok(branchExists(fx.repo, 'other'));
+
+		assert.strictEqual(await runCli(['clean', 'feature/*', '--yes'], createFakeIo(fx.repo)), EXIT.ok);
+		assert.ok(!branchExists(fx.repo, 'feature/b'));
+		assert.ok(branchExists(fx.repo, 'other'));
+	});
+
+	test('a branch with unmerged work needs --force, named exactly', async () => {
+		git(['checkout', '-q', '-b', 'feature/wip'], fx.repo);
+		commitFile(fx.repo, 'wip.txt', 'wip\n', 'wip');
+		git(['checkout', '-q', 'main'], fx.repo);
+
+		assert.strictEqual(await runCli(['--yes'], createFakeIo(fx.repo)), EXIT.ok, 'an alive branch is kept: nothing to do');
+		const unforced = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', 'feature/wip', '--yes'], unforced), EXIT.notApplied);
+		assert.ok(unforced.out.join('').includes('needs --force'));
+		assert.ok(unforced.out.join('').includes('→ gsp clean feature/wip --yes --force'));
+		assert.ok(branchExists(fx.repo, 'feature/wip'));
+
+		assert.strictEqual(await runCli(['clean', 'feature/*', '--yes', '--force'], createFakeIo(fx.repo)), EXIT.ok, 'a glob never forces');
+		assert.ok(branchExists(fx.repo, 'feature/wip'));
+
+		const forced = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['clean', 'feature/wip', '--yes', '--force'], forced), EXIT.ok);
+		assert.ok(!branchExists(fx.repo, 'feature/wip'));
+		assert.ok(forced.out.join('').includes('restore with gsp restore feature/wip'));
+	});
+
+	test('explicit agent mode plans on a TTY, and applies only with --yes', async () => {
 		makeGoneBranch(fx.repo, 'feature/agent');
 		const io = {
 			...createFakeIo(fx.repo, { interactive: true }),
 			loadPrompter: async () => { throw new Error('Widgets must not load'); },
 		};
-		assert.strictEqual(await runCli(['--non-interactive'], io), EXIT.cancelled);
+		assert.strictEqual(await runCli(['--non-interactive'], io), EXIT.notApplied);
 		assert.ok(branchExists(fx.repo, 'feature/agent'));
-		assert.strictEqual(await runCli(['--non-interactive', '--dry-run'], io), EXIT.ok);
+		assert.strictEqual(await runCli(['--non-interactive', '--dry-run'], io), EXIT.notApplied);
 		assert.ok(branchExists(fx.repo, 'feature/agent'));
 		assert.strictEqual(await runCli(['--non-interactive', '--yes'], io), EXIT.ok);
 		assert.ok(!branchExists(fx.repo, 'feature/agent'));
 		assert.strictEqual(await runCli(['--non-interactive'], io), EXIT.ok, 'nothing to do is success');
 	});
 
-	test('JSON discovery stays parseable on a TTY and invalid JSON mutations do nothing', async () => {
+	test('JSON stays parseable on a TTY: the plan without --yes, the result with it', async () => {
 		makeGoneBranch(fx.repo, 'feature/json');
 		const io = {
 			...createFakeIo(fx.repo, { interactive: true }),
 			loadPrompter: async () => { throw new Error('Widgets must not load'); },
 		};
-		assert.strictEqual(await runCli(['list', '--json'], io), EXIT.ok);
-		assert.deepStrictEqual(JSON.parse(io.out.join('')).stale, ['feature/json']);
-		assert.strictEqual(await runCli(['--json', '--yes'], createFakeIo(fx.repo)), EXIT.usage);
+		assert.strictEqual(await runCli(['clean', '--json'], io), EXIT.notApplied);
+		const plan = JSON.parse(io.out.join(''));
+		assert.strictEqual(plan.mode, 'plan');
+		assert.deepStrictEqual(
+			plan.branches.map((branch: { name: string; action: string }) => [branch.name, branch.action]),
+			[['feature/json', 'delete'], ['main', 'keep']]
+		);
 		assert.ok(branchExists(fx.repo, 'feature/json'));
+
+		const applied = createFakeIo(fx.repo);
+		assert.strictEqual(await runCli(['--json', '--yes'], applied), EXIT.ok);
+		const result = JSON.parse(applied.out.join(''));
+		assert.strictEqual(result.mode, 'apply');
+		assert.strictEqual(result.branches[0].result, 'deleted');
+		assert.strictEqual(result.restore, 'gsp restore feature/json');
+		assert.ok(!branchExists(fx.repo, 'feature/json'));
 	});
 
-	test('protected globs come from flags and git config', async () => {
+	test('protected globs come from flags and git config, and deleteMerged=false is honoured', async () => {
 		makeGoneBranch(fx.repo, 'release/1');
 		makeGoneBranch(fx.repo, 'keep/me');
+		makeGoneBranch(fx.repo, 'opted/out');
 		git(['config', '--add', PROTECTED_CONFIG_KEY, 'keep/*'], fx.repo);
+		git(['config', 'branch.opted/out.deleteMerged', 'false'], fx.repo);
 
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['-y', '-p', 'release/*'], io), EXIT.ok);
 		assert.ok(branchExists(fx.repo, 'release/1'));
 		assert.ok(branchExists(fx.repo, 'keep/me'));
-		assert.ok(io.out.join('').includes('All 2 stale branch(es) are protected.'));
+		assert.ok(branchExists(fx.repo, 'opted/out'));
+		assert.ok(io.out.join('').includes('branch.opted/out.deleteMerged is false'));
+		assert.ok(io.out.join('').includes('→ git config --unset branch.opted/out.deleteMerged'));
+		assert.ok(io.out.join('').includes('Nothing to clean · 3 skipped.'));
 	});
 
-	test('interactive sweep follows the answers given to the widgets', async () => {
+	test('interactive clean follows the answers given to the widgets', async () => {
 		makeGoneBranch(fx.repo, 'feature/a');
 		makeGoneBranch(fx.repo, 'feature/b');
 
 		// Keep only feature/b (index 1) selected, then confirm.
-		const { prompter, calls } = createFakePrompter({ multiselect: [1], confirm: true });
+		const { prompter, calls, seen } = createFakePrompter({ multiselect: [1], confirm: true });
 		const io = { ...createFakeIo(fx.repo, { interactive: true }), loadPrompter: async () => prompter };
 		assert.strictEqual(await runCli(['-C', fx.repo], io), EXIT.ok);
+		assert.deepStrictEqual(seen.initial, [0, 1], 'every planned deletion is pre-selected');
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 		assert.ok(!branchExists(fx.repo, 'feature/b'));
-		assert.strictEqual(calls[0], 'intro gsp sweep');
-		assert.ok(calls.includes('success Deleted 1 branch(es); 0 skipped, 0 failed.'));
+		assert.strictEqual(calls[0], 'intro gsp clean');
+		assert.ok(calls.includes('success 1 deleted (1 empty) · 1 skipped · restore with gsp restore feature/b'), calls.join('\n'));
 		assert.strictEqual(calls.at(-1), 'outro Done.');
+	});
+
+	test('an interactive cancel exits 4 and deletes nothing', async () => {
+		makeGoneBranch(fx.repo, 'feature/a');
+		const { prompter } = createFakePrompter({ multiselect: [0], confirm: false });
+		const io = { ...createFakeIo(fx.repo, { interactive: true }), loadPrompter: async () => prompter };
+		assert.strictEqual(await runCli([], io), EXIT.cancelled);
+		assert.ok(branchExists(fx.repo, 'feature/a'));
+
+		const dismissed = createFakePrompter({});
+		const dismissedIo = { ...createFakeIo(fx.repo, { interactive: true }), loadPrompter: async () => dismissed.prompter };
+		assert.strictEqual(await runCli([], dismissedIo), EXIT.cancelled);
+		assert.ok(branchExists(fx.repo, 'feature/a'));
 	});
 
 	test('post-pr switches to the given branch, deletes the merged one and pulls', async () => {
@@ -225,51 +300,57 @@ suite('cli app (real git)', function () {
 			return dir;
 		};
 
-		test('sweep removes a clean worktree before deleting its stale branch', async () => {
+		test('clean removes a clean worktree before deleting its dead branch', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');
 
-			// Not pre-selected: the user explicitly picks it (index 0).
-			const { prompter } = createFakePrompter({ multiselect: [0], confirm: true });
+			const { prompter, seen } = createFakePrompter({ multiselect: [0], confirm: true });
 			const io = { ...createFakeIo(fx.repo, { interactive: true }), loadPrompter: async () => prompter };
 			assert.strictEqual(await runCli([], io), EXIT.ok);
 
+			assert.deepStrictEqual(seen.initial, [0], 'pre-selected');
 			assert.ok(!fs.existsSync(wt), 'worktree directory removed');
 			assert.ok(!branchExists(fx.repo, 'feature/wt'));
 		});
 
-		test('list shows the worktree of a stale branch and the stale current branch', async () => {
+		test('list shows the worktree of a dead branch and skips the current branch', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			makeGoneBranch(fx.repo, 'feature/here');
 			const wt = addWorktree('feature/wt');
 			git(['checkout', '-q', 'feature/here'], fx.repo);
 
 			const io = createFakeIo(fx.repo);
-			assert.strictEqual(await runCli(['list', '--no-fetch'], io), EXIT.ok);
+			assert.strictEqual(await runCli(['list', '--no-fetch'], io), EXIT.notApplied);
 			const realWt = fs.realpathSync(wt);
-			assert.deepStrictEqual(io.out.join('').split('\n').filter(Boolean), [
-				`feature/wt (worktree ${realWt})`,
-				'feature/here (current branch)',
-			]);
+			const lines = io.out.join('').split('\n');
+			assert.ok(lines.includes(`delete  feature/wt    no commits beyond origin/main, removes worktree ${realWt}`), lines.join('\n'));
+			assert.ok(lines.includes('skip    feature/here  current branch (no commits beyond origin/main) → gsp post-pr main'), lines.join('\n'));
 
 			const json = createFakeIo(fx.repo);
-			assert.strictEqual(await runCli(['list', '--json', '--no-fetch'], json), EXIT.ok);
-			assert.deepStrictEqual(JSON.parse(json.out.join('')), {
-				stale: ['feature/wt'],
-				protected: [],
-				checkedOut: [{ name: 'feature/here', where: 'current' }],
-				merged: [],
-				worktrees: { 'feature/wt': realWt },
-			});
+			assert.strictEqual(await runCli(['list', '--json', '--no-fetch'], json), EXIT.notApplied);
+			const report = JSON.parse(json.out.join(''));
+			assert.deepStrictEqual(report.checks.remote, { source: 'local-refs', reason: 'no-fetch' });
+			const byName = new Map(
+				(report.branches as Array<{ name: string; worktree: unknown; reason: string }>).map((branch) => [branch.name, branch])
+			);
+			assert.deepStrictEqual(byName.get('feature/wt')?.worktree, { path: realWt, isMain: false, dirty: false, locked: false, prunable: false });
+			assert.strictEqual(byName.get('feature/here')?.reason, 'current-branch');
 		});
 
-		test('--yes never removes a worktree on its own', async () => {
+		test('--yes removes the clean worktree of a dead branch, never a locked one', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
+			makeGoneBranch(fx.repo, 'feature/locked');
 			const wt = addWorktree('feature/wt');
+			const locked = addWorktree('feature/locked');
+			git(['worktree', 'lock', locked], fx.repo);
 
-			assert.strictEqual(await runCli(['--yes'], createFakeIo(fx.repo)), EXIT.ok);
-			assert.ok(fs.existsSync(wt));
-			assert.ok(branchExists(fx.repo, 'feature/wt'));
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--yes'], io), EXIT.ok);
+			assert.ok(!fs.existsSync(wt));
+			assert.ok(!branchExists(fx.repo, 'feature/wt'));
+			assert.ok(fs.existsSync(locked));
+			assert.ok(branchExists(fx.repo, 'feature/locked'));
+			assert.ok(io.out.join('').includes(`→ git worktree unlock ${fs.realpathSync(locked)}`));
 		});
 
 		test('a worktree with uncommitted changes is kept, and so is its branch', async () => {
@@ -277,14 +358,14 @@ suite('cli app (real git)', function () {
 			const wt = addWorktree('feature/wt');
 			fs.writeFileSync(path.join(wt, 'wip.txt'), 'work in progress\n');
 
-			const { prompter } = createFakePrompter({ multiselect: [0], confirm: true });
-			const io = { ...createFakeIo(fx.repo, { interactive: true }), loadPrompter: async () => prompter };
-			assert.strictEqual(await runCli([], io), EXIT.failed);
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--yes'], io), EXIT.ok);
 			assert.ok(fs.existsSync(path.join(wt, 'wip.txt')));
 			assert.ok(branchExists(fx.repo, 'feature/wt'));
+			assert.ok(io.out.join('').includes(`has uncommitted changes (no commits beyond origin/main) → gsp worktree remove ${fs.realpathSync(wt)} --force`));
 		});
 
-		test('branches of worktrees whose directory was deleted are swept', async () => {
+		test('branches of worktrees whose directory was deleted are cleaned', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			fs.rmSync(addWorktree('feature/wt'), { recursive: true, force: true });
 
@@ -293,7 +374,7 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(git(['worktree', 'list', '--porcelain'], fx.repo).match(/^worktree /gm)?.length, 1);
 		});
 
-		test('sweep run from a linked worktree skips the stale branch of the main worktree', async () => {
+		test('clean run from a linked worktree skips the stale branch of the main worktree', async () => {
 			makeGoneBranch(fx.repo, 'feature/main-wt');
 			makeGoneBranch(fx.repo, 'feature/wt');
 			git(['checkout', '-q', 'feature/main-wt'], fx.repo);
@@ -308,7 +389,7 @@ suite('cli app (real git)', function () {
 			assert.ok(!branchExists(fx.repo, 'feature/wt'));
 		});
 
-		test('sweep run from a linked worktree skips the branch checked out there', async () => {
+		test('clean run from a linked worktree skips the branch checked out there', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			makeGoneBranch(fx.repo, 'feature/other');
 			const wt = addWorktree('feature/wt');

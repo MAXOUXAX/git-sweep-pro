@@ -92,7 +92,9 @@ export function activate(context: vscode.ExtensionContext) {
 			ui: hostUi,
 		});
 		// A crash only reaches stderr, which lands in the output channel: point there.
-		if (exitCode !== EXIT.ok && exitCode !== EXIT.paused && !errorShown) {
+		// A paused sync, a cancelled prompt and a dry run are expected endings.
+		const expected: readonly number[] = [EXIT.ok, EXIT.paused, EXIT.cancelled, EXIT.notApplied];
+		if (!expected.includes(exitCode) && !errorShown) {
 			const choice = await vscode.window.showErrorMessage(
 				`Git Sweep Pro: The command stopped unexpectedly (exit code ${exitCode}).`,
 				SHOW_OUTPUT

@@ -6,7 +6,6 @@ import { getDefaultBranch } from '../../core/default-branch';
 import { describeMergedBranch, findMergedBranches } from '../../core/merged-branches';
 import { GONE_REFS_ARGS, parseLocalBranchRefs } from '../../core/sweep-logic';
 import { DEFAULT_SETTINGS } from '../fake-context';
-import { createFakePrompter } from './fake-prompter';
 import { branchExists, commitFile, createFakeIo, createRepoFixture, git, type RepoFixture } from './git-fixture';
 
 suite('merged branch detection (real git)', function () {
@@ -84,48 +83,35 @@ suite('merged branch detection (real git)', function () {
 		assert.deepStrictEqual(await detect(), { 'feature/kept-remote': 'squash-merged into origin/main' });
 	});
 
-	test('sweep --merged offers them unselected and force-deletes a squash-merged one after confirmation', async () => {
+	test('clean --yes deletes a squash-merged branch, keeps unmerged work, and the deletion can be undone', async () => {
 		makeLocalBranch('feature/squashed', 'squashed.txt', ['x\n', 'x\ny\n']);
 		git(['merge', '-q', '--squash', 'feature/squashed'], fx.repo);
 		git(['commit', '-q', '-m', 'squash'], fx.repo);
 		pushMain();
 		makeLocalBranch('feature/wip', 'wip.txt', ['todo\n']);
 
-		// Without --merged nothing is offered.
-		const plain = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['--yes'], plain), EXIT.ok);
-		assert.ok(plain.out.join('').includes('No stale branches found.'));
 		const listed = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['list', '--merged'], listed), EXIT.ok);
-		assert.strictEqual(listed.out.join(''), 'feature/squashed (squash-merged into origin/main)\n');
-
-		// --yes alone never selects merged branches.
-		assert.strictEqual(await runCli(['--merged', '--yes'], createFakeIo(fx.repo)), EXIT.ok);
+		assert.strictEqual(await runCli(['list'], listed), EXIT.notApplied);
+		assert.ok(listed.out.join('').includes('delete  feature/squashed  squash-merged into origin/main'));
 		assert.ok(branchExists(fx.repo, 'feature/squashed'));
 
-		const { prompter, calls } = createFakePrompter({ multiselect: [0], confirm: true });
-		const io = { ...createFakeIo(fx.repo, { interactive: true }), loadPrompter: async () => prompter };
-		assert.strictEqual(await runCli(['--merged'], io), EXIT.ok);
-		assert.ok(!branchExists(fx.repo, 'feature/squashed'), 'deleted after the force-delete confirmation');
+		assert.strictEqual(await runCli(['--yes'], createFakeIo(fx.repo)), EXIT.ok);
+		assert.ok(!branchExists(fx.repo, 'feature/squashed'));
 		assert.ok(branchExists(fx.repo, 'feature/wip'));
-		assert.ok(calls.some((call) => call.startsWith('confirm Force-delete 1')));
 
 		assert.strictEqual(await runCli(['restore', 'feature/squashed'], createFakeIo(fx.repo)), EXIT.ok);
 		assert.ok(branchExists(fx.repo, 'feature/squashed'), 'and it can be undone');
 	});
 
-	test('explains when there is no remote default branch', async () => {
+	test('without origin/HEAD, the remote main branch is the base', async () => {
 		git(['remote', 'set-head', 'origin', '--delete'], fx.repo);
 		makeLocalBranch('feature/x', 'x.txt', ['x\n']);
 
 		const io = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['--merged', '--yes'], io), EXIT.ok);
-		assert.ok(io.out.join('').includes('No stale branches found. Merged branches were not checked.'));
-		assert.ok(
-			io.err.join('').includes(
-				'Merged branches were not checked: the default branch of "origin" is unknown. To set it, run: git remote set-head origin --auto'
-			)
-		);
+		assert.strictEqual(await runCli(['--json', '--yes'], io), EXIT.ok);
+		const report = JSON.parse(io.out.join(''));
+		assert.deepStrictEqual([report.checks.base.ref, report.checks.base.source], ['refs/remotes/origin/main', 'remote-branch']);
+		assert.ok(branchExists(fx.repo, 'feature/x'));
 	});
 
 	test('a local branch named like the remote default branch is not taken for it', async () => {
@@ -156,7 +142,6 @@ suite('merged branch detection (real git)', function () {
 		git(['push', '-q', 'origin', 'main:trunk'], fx.repo);
 		git(['symbolic-ref', 'HEAD', 'refs/heads/trunk'], fx.remote);
 		makeLocalBranch('feature/on-trunk', 't.txt', ['t\n']);
-		// Merged into trunk, which then moves on (a branch at the base itself is never offered).
 		git(['checkout', '-q', '-b', 'later', 'feature/on-trunk'], fx.repo);
 		commitFile(fx.repo, 'later.txt', 'later\n', 'later');
 		git(['push', '-q', 'origin', 'later:trunk'], fx.repo);
@@ -164,12 +149,12 @@ suite('merged branch detection (real git)', function () {
 		git(['branch', '-q', '-D', 'later'], fx.repo);
 
 		const io = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['list', '--merged', '--json'], io), EXIT.ok);
-		const json = JSON.parse(io.out.join('')) as { merged: unknown[] };
-		assert.deepStrictEqual(json.merged, [{ name: 'feature/on-trunk', how: 'merged', into: 'origin/trunk' }]);
+		assert.strictEqual(await runCli(['clean', 'feature/on-trunk', '--yes', '--json'], io), EXIT.ok);
+		const [branch] = JSON.parse(io.out.join('')).branches;
+		assert.deepStrictEqual([branch.result, branch.reason, branch.evidence.base], ['deleted', 'empty', 'refs/remotes/origin/trunk']);
 	});
 
-	test('list skips protected, current and stale branches, and keeps the default branch out', async () => {
+	test('the plan skips protected and current branches, and keeps the default branch', async () => {
 		makeLocalBranch('feature/done', 'd.txt', ['d\n']);
 		makeLocalBranch('release/1', 'r.txt', ['r\n']);
 		makeLocalBranch('feature/here', 'h.txt', ['h\n']);
@@ -177,7 +162,6 @@ suite('merged branch detection (real git)', function () {
 			git(['merge', '-q', '--no-ff', '-m', `merge ${branch}`, branch], fx.repo);
 		}
 		pushMain();
-		// Merged and gone: listed once, as a stale branch.
 		makeLocalBranch('feature/gone', 'g.txt', ['g\n']);
 		git(['merge', '-q', '--no-ff', '-m', 'merge gone', 'feature/gone'], fx.repo);
 		pushMain();
@@ -186,13 +170,21 @@ suite('merged branch detection (real git)', function () {
 		git(['checkout', '-q', 'feature/here'], fx.repo);
 
 		const io = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['list', '--merged', '--json', '-p', 'release/*'], io), EXIT.ok);
-		const json = JSON.parse(io.out.join('')) as { stale: string[]; merged: { name: string }[] };
-		assert.deepStrictEqual(json.stale, ['feature/gone']);
-		assert.deepStrictEqual(json.merged, [{ name: 'feature/done', how: 'merged', into: 'origin/main' }]);
+		assert.strictEqual(await runCli(['list', '--json', '-p', 'release/*'], io), EXIT.notApplied);
+		const report = JSON.parse(io.out.join('')) as { branches: Array<{ name: string; action: string; reason: string; upstreamState: string }> };
+		assert.deepStrictEqual(
+			report.branches.map(({ name, action, reason, upstreamState }) => [name, action, reason, upstreamState]),
+			[
+				['feature/done', 'delete', 'merged', 'none'],
+				['feature/gone', 'delete', 'merged', 'gone'],
+				['feature/here', 'skip', 'current-branch', 'none'],
+				['main', 'keep', 'default-branch', 'tracking'],
+				['release/1', 'skip', 'protected', 'none'],
+			]
+		);
 	});
 
-	test('works on a detached HEAD, and offers merged branches checked out in a linked worktree', async () => {
+	test('works on a detached HEAD, and plans merged branches checked out in a linked worktree', async () => {
 		makeLocalBranch('feature/wt', 'w.txt', ['w\n']);
 		git(['merge', '-q', '--no-ff', '-m', 'merge', 'feature/wt'], fx.repo);
 		pushMain();
@@ -201,15 +193,13 @@ suite('merged branch detection (real git)', function () {
 		git(['checkout', '-q', '--detach', 'main'], fx.repo);
 
 		const io = createFakeIo(fx.repo);
-		assert.strictEqual(await runCli(['list', '--merged'], io), EXIT.ok);
-		assert.match(io.out.join(''), /^feature\/wt \(merged into origin\/main, worktree .*\/wt\)$/m);
+		assert.strictEqual(await runCli(['list'], io), EXIT.notApplied);
+		assert.match(io.out.join(''), /^delete {2}feature\/wt {2}merged into origin\/main, removes worktree .*\/wt$/m);
 	});
 
-	test('flag and setting wiring', () => {
+	test('the merged setting is no longer passed to the CLI', () => {
 		assert.strictEqual(parseArgs(['-m']).merged, true);
 		assert.strictEqual(parseArgs([]).merged, false);
-		assert.strictEqual(parseArgs(['--merged']).merged, true);
-		assert.deepStrictEqual(settingsToCliArgs({ ...DEFAULT_SETTINGS, includeMergedBranches: true }), ['--merged']);
-		assert.deepStrictEqual(settingsToCliArgs(DEFAULT_SETTINGS), []);
+		assert.deepStrictEqual(settingsToCliArgs({ ...DEFAULT_SETTINGS, includeMergedBranches: true }), []);
 	});
 });
