@@ -144,8 +144,10 @@ function printJsonError(io: CliIo, message: string, code: JsonErrorCode): void {
 	io.stdout(`${JSON.stringify({ schema: CLEAN_SCHEMA, error: { message, code } }, null, 2)}\n`);
 }
 
-function gitErrorCode(message: string): JsonErrorCode {
-	return message.toLowerCase().includes('not a git repository') ? 'not-a-repository' : 'failed';
+/** {@link printJsonError} for a failed Git command, or any other error. */
+function printJsonGitError(io: CliIo, error: unknown): void {
+	const message = toErrorMessage(error);
+	printJsonError(io, describeGitFailure(message)[0], message.toLowerCase().includes('not a git repository') ? 'not-a-repository' : 'failed');
 }
 
 /** How a command ended: a workflow outcome, a `clean` outcome, or an exit code decided on the spot. */
@@ -163,6 +165,9 @@ async function runWorkflow(options: CliOptions, dir: string, frontend: Frontend,
 	try {
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return 'failed';
 	}
@@ -227,7 +232,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 		repository = await openRepository(dir, frontend.trace);
 	} catch (error) {
 		if (options.json) {
-			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+			printJsonGitError(io, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error)));
 		return EXIT.failed;
@@ -259,7 +264,7 @@ async function runClean(options: CliOptions, dir: string, frontend: Frontend, io
 			return EXIT.usage;
 		}
 		if (options.json) {
-			printJsonError(io, describeGitFailure(toErrorMessage(error))[0], gitErrorCode(toErrorMessage(error)));
+			printJsonGitError(io, error);
 		}
 		frontend.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return EXIT.failed;
@@ -390,6 +395,9 @@ async function runWorktree(context: WorkflowContext, options: CliOptions, io: Cl
 			}
 		}
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	}
@@ -419,6 +427,9 @@ async function runRestore(context: WorkflowContext, options: CliOptions, fronten
 		}
 		return 'ok';
 	} catch (error) {
+		if (options.json) {
+			printJsonGitError(io, error);
+		}
 		context.ui.showErrorMessage(...describeGitFailure(toErrorMessage(error), { failed: true }));
 		return 'failed';
 	}
