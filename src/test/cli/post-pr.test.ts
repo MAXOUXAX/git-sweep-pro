@@ -398,6 +398,27 @@ suite('cli post-pr (real git)', function () {
 		assert.strictEqual(git(['reflog', '-1', '--format=%gs', 'main'], fx.repo).trim(), 'gsp post-pr');
 	});
 
+	test('in a bare repository, continues in another worktree', async () => {
+		const bare = path.join(fx.dir, 'bare.git');
+		git(['clone', '-q', '--bare', fx.remote, bare], fx.dir);
+		git(['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'], bare);
+		git(['fetch', '-q', 'origin'], bare);
+		git(['remote', 'set-head', 'origin', 'main'], bare);
+		const home = path.join(fx.dir, 'home');
+		git(['worktree', 'add', '-q', home, 'main'], bare);
+		const wt = path.join(fx.dir, 'wt-x');
+		git(['worktree', 'add', '-q', '-b', 'feature/x', wt, 'origin/main'], bare);
+		commitFile(wt, 'x.txt', 'x\n', 'work');
+		git(['push', '-q', '-u', 'origin', 'feature/x'], wt);
+		squashMergeOnRemote('feature/x');
+
+		const io = createFakeIo(wt);
+		assert.strictEqual(await runCli(['post-pr', '--yes', '--json', '--no-github'], io), EXIT.ok, io.err.join(''));
+		const report = json(io.out);
+		assert.strictEqual(report.branch?.result, 'deleted');
+		assert.strictEqual(report.nextCwd, fs.realpathSync(home));
+	});
+
 	test('--into compares with another branch, which stays protected like the default one', async () => {
 		git(['checkout', '-q', '-b', 'develop'], fx.repo);
 		git(['push', '-q', '-u', 'origin', 'develop'], fx.repo);

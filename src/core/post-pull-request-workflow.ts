@@ -461,6 +461,8 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	const targetRecorder = createDeletionRecorder(context.deletionLog, 'post-pr', output.appendLine);
 	const cleanRecorder = createDeletionRecorder(context.deletionLog, 'sweep', output.appendLine);
 	let switched = false;
+	/** Where to continue once the worktree gsp runs in is removed: the main checkout, or another worktree when it is bare. */
+	let continueIn: string | null = mainCheckout;
 	const targetWorktree = () => (analysed?.worktree && !analysed.worktree.prunable ? analysed.worktree : null);
 	const inMain = () => targetWorktree()?.isMain === true;
 	// Once the worktree gsp runs in is gone, git can only start from the main checkout.
@@ -472,6 +474,9 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	const finish = (outcome: CleanOutcome | undefined, defaultBranch: DefaultBranchUpdate): PostPrRun => {
 		const worktree = targetWorktree();
 		const removed = worktree !== null && !worktree.isMain && (target?.result === 'deleted' || target?.result === 'worktree-removed');
+		if (removed && leaving() && continueIn === null) {
+			output.appendLine('The worktree you ran gsp in was removed, and the repository has no other worktree to continue in: cd to another directory.');
+		}
 		const report: PostPrReport = {
 			schema: CLEAN_SCHEMA,
 			command: 'post-pr',
@@ -480,7 +485,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 			worktree: { path: worktree?.path ?? null, removed, switched: mode === 'plan' ? target?.action === 'delete' && inMain() : switched },
 			defaultBranch,
 			clean: buildReport(mode, analysis, remote, others, worktreesPruned, cleanRecorder.recorded),
-			nextCwd: removed && leaving() ? mainCheckout : null,
+			nextCwd: removed && leaving() ? continueIn : null,
 			restore: restoreCommand([...targetRecorder.recorded, ...cleanRecorder.recorded]),
 		};
 		return { report, outcome: outcome ?? runOutcome(report) };
@@ -521,6 +526,11 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		output.appendLine(held.message);
 	}
 	const gitAfter = leaving() ? context.gitAt(mainCheckout) : git;
+	if (leaving() && (await gitAfter(['rev-parse', '--is-bare-repository'])).stdout.trim() === 'true') {
+		continueIn =
+			worktrees.find((other) => other.state !== 'main' && other.state !== 'prunable' && canonical(other.path) !== canonical(context.root))?.path ?? null;
+	}
+
 	const worktree = targetWorktree();
 	if (target?.action === 'delete' && worktree?.isMain) {
 		try {
