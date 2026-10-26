@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isAgentFile, runAgentsWorkflow } from '../core/agent-instructions';
-import { createDeletionLog, deletionLabel, describeDeletion } from '../core/deletion-log';
+import { createDeletionLog, describeDeletion, describeDeletionTarget } from '../core/deletion-log';
 import { describeGitFailure, toErrorMessage } from '../core/errors';
 import { runGitCommand } from '../core/git-command';
 import { CLEAN_SCHEMA, formatBranchLines, formatRemoteLines, formatSummary, nextCommand, type CleanDocument, type CleanReport } from '../core/clean-plan';
@@ -422,8 +422,8 @@ async function runRestore(context: WorkflowContext, options: CliOptions, fronten
 			io.stderr('No deleted branches to restore.\n');
 		} else {
 			const now = new Date();
-			const width = Math.max(...entries.map((entry) => deletionLabel(entry).length));
-			entries.forEach((entry) => io.stdout(`${deletionLabel(entry).padEnd(width)}  ${describeDeletion(entry, now)}\n`));
+			const width = Math.max(...entries.map((entry) => describeDeletionTarget(entry).length));
+			entries.forEach((entry) => io.stdout(`${describeDeletionTarget(entry).padEnd(width)}  ${describeDeletion(entry, now)}\n`));
 			io.stderr('To restore them, run: gsp restore <branch>...\n');
 		}
 		return 'ok';

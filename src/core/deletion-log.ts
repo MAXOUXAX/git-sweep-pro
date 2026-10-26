@@ -116,15 +116,29 @@ export function canRecordDeletions(log: DeletionLog): boolean {
 	}
 }
 
-/** How `gsp restore` names a deletion: the branch, prefixed with its remote for a remote one ("origin/feature/x"). */
+/**
+ * How `gsp restore` names a deletion: the branch, prefixed with its remote for
+ * a remote one ("origin/feature/x"). A local branch can be named like that
+ * too: see {@link deletionKey} and {@link describeDeletionTarget}.
+ */
 export function deletionLabel(entry: Pick<DeletedBranch, 'branch' | 'remote'>): string {
 	return entry.remote ? `${entry.remote}/${entry.branch}` : entry.branch;
+}
+
+/** Tells a local branch named "origin/x" from the branch x deleted on origin. */
+export function deletionKey(entry: Pick<DeletedBranch, 'branch' | 'remote'>): string {
+	return entry.remote ? `remote\0${entry.remote}\0${entry.branch}` : `local\0${entry.branch}`;
+}
+
+/** A deletion as lists show it: "origin/x (remote)" for one on a remote, the branch otherwise. */
+export function describeDeletionTarget(entry: Pick<DeletedBranch, 'branch' | 'remote'>): string {
+	return entry.remote ? `${deletionLabel(entry)} (remote)` : entry.branch;
 }
 
 /** Newest deletion of each branch, local or remote (a name can be deleted, recreated and deleted again). */
 export function latestDeletions(entries: readonly DeletedBranch[]): DeletedBranch[] {
 	const seen = new Set<string>();
-	return entries.filter((entry) => !seen.has(deletionLabel(entry)) && seen.add(deletionLabel(entry)));
+	return entries.filter((entry) => !seen.has(deletionKey(entry)) && seen.add(deletionKey(entry)));
 }
 
 /** "just now", "3 min ago", "5 h ago", "2 d ago": compact enough for a picker. */

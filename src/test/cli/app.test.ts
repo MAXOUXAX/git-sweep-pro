@@ -658,7 +658,7 @@ suite('cli app (real git)', function () {
 			assert.ok(applied.out.join('').includes('on origin: 1 deleted · restore with gsp restore origin/feature/r'), applied.out.join(''));
 			const listed = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['restore'], listed), EXIT.ok);
-			assert.ok(listed.out.join('').startsWith('origin/feature/r  '), listed.out.join(''));
+			assert.ok(listed.out.join('').startsWith('origin/feature/r (remote)  '), listed.out.join(''));
 		});
 
 		test('worktree list --json gives each worktree its state, and what gsp clean would do with its branch', async () => {

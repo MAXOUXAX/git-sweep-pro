@@ -1,4 +1,4 @@
-import { deletionLabel, describeDeletion, latestDeletions, type DeletedBranch } from './deletion-log';
+import { deletionLabel, describeDeletion, describeDeletionTarget, latestDeletions, type DeletedBranch } from './deletion-log';
 import { describeGitFailure, toErrorMessage } from './errors';
 import { quoteShellArg } from './git-command';
 import type { WorkflowContext, WorkflowOutcome } from './workflow';
@@ -117,6 +117,12 @@ async function chooseDeletions(
 			ui.showErrorMessage(`No recorded deletion for: ${unknown.join(', ')}.`);
 			return 'failed';
 		}
+		// A local branch named "origin/x" and x deleted on origin: only the picker tells them apart.
+		const ambiguous = requested.filter((name) => named(name).length > 1);
+		if (ambiguous.length > 0) {
+			ui.showErrorMessage(`${ambiguous.join(', ')} names both a local branch and a branch on a remote. Run gsp restore without a name to pick one.`);
+			return 'failed';
+		}
 		// In the order given, once each.
 		return [...new Set(requested)].flatMap(named);
 	}
@@ -128,10 +134,10 @@ async function chooseDeletions(
 		return 'ok';
 	}
 	const picked = await ui.pickMany({
-		items: restorable.map(({ entry }) => ({ label: deletionLabel(entry), picked: false, description: describeDeletion(entry, now) })),
+		items: restorable.map(({ entry }) => ({ label: describeDeletionTarget(entry), picked: false, description: describeDeletion(entry, now) })),
 		title: 'Select branches to restore',
 	});
-	const chosen = restorable.filter(({ entry }) => picked?.includes(deletionLabel(entry)));
+	const chosen = restorable.filter(({ entry }) => picked?.includes(describeDeletionTarget(entry)));
 	if (chosen.length === 0) {
 		output.appendLine('Operation cancelled or no branches selected.');
 		ui.showInformationMessage('No branches selected.');
@@ -164,7 +170,7 @@ export async function runRestoreWorkflow(
 		const restored: string[] = [];
 		const failed: string[] = [];
 		for (const candidate of chosen) {
-			const branch = deletionLabel(candidate.entry);
+			const branch = describeDeletionTarget(candidate.entry);
 			const reason = await restoreBranch(context, candidate);
 			if (reason === undefined) {
 				restored.push(branch);

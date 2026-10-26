@@ -167,6 +167,23 @@ suite('deletion log', () => {
 		assert.deepStrictEqual(latestDeletions([newer, other, older]), [newer, other]);
 	});
 
+	test('a local branch named origin/x and x deleted on origin stay apart', async () => {
+		const local = entry('origin/x', SHA_A, '2026-01-01T01:00:00Z');
+		const remote = entry('x', SHA_B, '2026-01-01T00:00:00Z', { remote: 'origin' });
+		assert.deepStrictEqual(latestDeletions([local, remote]), [local, remote]);
+
+		const named = createHarness({ log: logWith([local, remote]).log });
+		assert.strictEqual(await named.restore(['origin/x']), 'failed');
+		assert.deepStrictEqual(named.errors, ['origin/x names both a local branch and a branch on a remote. Run gsp restore without a name to pick one.']);
+
+		const picker = createHarness({ log: logWith([local, remote]).log, picked: [] });
+		assert.strictEqual(await picker.restore([]), 'cancelled');
+		assert.deepStrictEqual(
+			picker.pickRequests[0].items.map((item) => item.label),
+			['origin/x', 'origin/x (remote)']
+		);
+	});
+
 	test('formatAge picks a compact unit', () => {
 		const now = new Date('2026-01-10T00:00:00Z');
 		assert.strictEqual(formatAge('2026-01-09T23:59:50Z', now), 'just now');
