@@ -107,11 +107,20 @@ function branchExists(repo: string, name: string): boolean {
 	return git(['branch', '--list', name], repo).trim().length > 0;
 }
 
-/** Creates a local branch, pushes it, then deletes it on the remote so its upstream is gone. */
+/**
+ * Creates a local branch with a commit, pushes it, fast-forwards main over
+ * it, then deletes it on the remote so its upstream is gone.
+ */
 function makeGoneBranch(repo: string, name: string): void {
 	git(['checkout', '-b', name], repo);
+	const file = `${name.replace(/\//g, '-')}.txt`;
+	fs.writeFileSync(path.join(repo, file), `work on ${name}\n`);
+	git(['add', file], repo);
+	git(['-c', 'commit.gpgsign=false', 'commit', '-m', `work on ${name}`], repo);
 	git(['push', '-u', 'origin', name], repo);
 	git(['checkout', 'main'], repo);
+	git(['merge', '--ff-only', name], repo);
+	git(['push', 'origin', 'main'], repo);
 	git(['push', 'origin', '--delete', name], repo);
 }
 

@@ -155,5 +155,10 @@ suite('worktree commands', () => {
 			canForce: true,
 		});
 		assert.deepStrictEqual(describeWorktreeState(worktreeEntry({ path: '/x', submodules: true })), ['Submodules']);
+		assert.deepStrictEqual(describeWorktreeState(worktreeEntry({ path: '/x', action: 'skip', reason: 'never-committed' })), [
+			'Clean',
+			'No commits yet: Sweep Stale Branches keeps it',
+		]);
+		assert.deepStrictEqual(describeWorktreeState(worktreeEntry({ path: '/x', action: 'skip', reason: 'worktree-in-use' })), ['Clean', 'In use: Sweep Stale Branches keeps it']);
 	});
 });

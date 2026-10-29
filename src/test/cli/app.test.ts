@@ -1,11 +1,12 @@
 import * as assert from 'assert';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { PROTECTED_CONFIG_KEY, runCli } from '../../cli/app';
 import { EXIT } from '../../cli/args';
 import { stateFilePath } from '../../cli/state-store';
 import { createFakePrompter } from './fake-prompter';
-import { branchExists, commitFile, createFakeIo, createRepoFixture, git, makeGoneBranch, type RepoFixture } from './git-fixture';
+import { branchExists, commitFile, createFakeIo, createRepoFixture, git, makeGoneBranch, makeGoneEmptyBranch, type RepoFixture } from './git-fixture';
 
 /*
  * Runs the real CLI in-process against real git repositories: only the
@@ -60,10 +61,10 @@ suite('cli app (real git)', function () {
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['list', '--protect', 'release/*'], io), EXIT.notApplied);
 		assert.deepStrictEqual(io.out.join('').split('\n').filter(Boolean), [
-			'delete  feature/a  already in origin/main',
-			'skip    release/1  protected (already in origin/main)',
+			'delete  feature/a  merged into origin/main',
+			'skip    release/1  protected (merged into origin/main)',
 			'keep    main       default branch',
-			'1 to delete (1 empty) · 1 skipped',
+			'1 to delete (1 merged) · 1 skipped',
 			"Nothing was changed. To apply this plan, run: gsp clean feature/a --protect 'release/*' --yes",
 		]);
 		assert.ok(branchExists(fx.repo, 'feature/a'));
@@ -89,7 +90,7 @@ suite('cli app (real git)', function () {
 		const accepted = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['sweep', '--yes'], accepted), EXIT.ok);
 		assert.ok(!branchExists(fx.repo, 'feature/a'));
-		assert.ok(accepted.out.join('').includes('1 deleted (1 empty) · restore with gsp restore feature/a'));
+		assert.ok(accepted.out.join('').includes('1 deleted (1 merged) · restore with gsp restore feature/a'));
 
 		const done = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['--json'], done), EXIT.ok);
@@ -214,7 +215,7 @@ suite('cli app (real git)', function () {
 		assert.ok(branchExists(fx.repo, 'feature/a'));
 		assert.ok(!branchExists(fx.repo, 'feature/b'));
 		assert.strictEqual(calls[0], 'intro gsp clean');
-		assert.ok(calls.includes('success 1 deleted (1 empty) · 1 skipped · restore with gsp restore feature/b'), calls.join('\n'));
+		assert.ok(calls.includes('success 1 deleted (1 merged) · 1 skipped · restore with gsp restore feature/b'), calls.join('\n'));
 		assert.strictEqual(calls.at(-1), 'outro Done.');
 	});
 
@@ -238,7 +239,10 @@ suite('cli app (real git)', function () {
 
 	test('a repository without a remote is cleaned from its local branches', async () => {
 		git(['remote', 'remove', 'origin'], fx.repo);
-		git(['branch', 'feature/a'], fx.repo);
+		git(['checkout', '-q', '-b', 'feature/a'], fx.repo);
+		commitFile(fx.repo, 'a.txt', 'a\n', 'a');
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['merge', '-q', '--ff-only', 'feature/a'], fx.repo);
 
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['--json', '--yes'], io), EXIT.ok);
@@ -442,8 +446,8 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(await runCli(['list', '--no-fetch'], io), EXIT.notApplied);
 			const realWt = fs.realpathSync(wt);
 			const lines = io.out.join('').split('\n');
-			assert.ok(lines.includes(`delete  feature/wt    already in origin/main, removes worktree ${realWt}`), lines.join('\n'));
-			assert.ok(lines.includes('skip    feature/here  current branch (already in origin/main) → gsp post-pr feature/here --no-fetch --yes'), lines.join('\n'));
+			assert.ok(lines.includes(`delete  feature/wt    merged into origin/main, removes worktree ${realWt}`), lines.join('\n'));
+			assert.ok(lines.includes('skip    feature/here  current branch (merged into origin/main) → gsp post-pr feature/here --no-fetch --yes'), lines.join('\n'));
 
 			const json = createFakeIo(fx.repo);
 			assert.strictEqual(await runCli(['list', '--json', '--no-fetch'], json), EXIT.notApplied);
@@ -452,7 +456,7 @@ suite('cli app (real git)', function () {
 			const byName = new Map(
 				(report.branches as Array<{ name: string; worktree: unknown; reason: string }>).map((branch) => [branch.name, branch])
 			);
-			assert.deepStrictEqual(byName.get('feature/wt')?.worktree, { path: realWt, isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false, changedFiles: null });
+			assert.deepStrictEqual(byName.get('feature/wt')?.worktree, { path: realWt, isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false, processes: [], changedFiles: null });
 			assert.strictEqual(byName.get('feature/here')?.reason, 'current-branch');
 		});
 
@@ -472,6 +476,77 @@ suite('cli app (real git)', function () {
 			assert.ok(io.out.join('').includes(`→ git worktree unlock ${fs.realpathSync(locked)}`));
 		});
 
+		test("--yes keeps an agent's fresh worktree and its branch, deletes merged ones; --include-empty deletes it, and says so", async () => {
+			makeGoneBranch(fx.repo, 'feature/done');
+			const done = addWorktree('feature/done');
+			const fresh = path.join(fx.dir, 'wt-agent');
+			git(['worktree', 'add', '-q', '-b', 'agent/task', fresh, 'main'], fx.repo);
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--yes', '--json', '--no-github'], io), EXIT.ok, 'a branch never committed on is not "more to clean"');
+			const report = JSON.parse(io.out.join(''));
+			const agent = report.branches.find((branch: { name: string }) => branch.name === 'agent/task');
+			assert.deepStrictEqual([agent.action, agent.reason, agent.verdictReason, agent.hint], ['skip', 'never-committed', 'empty', 'gsp clean agent/task --no-github --yes']);
+			const merged = report.branches.find((branch: { name: string }) => branch.name === 'feature/done');
+			assert.deepStrictEqual([merged.action, merged.verdictReason, merged.result], ['delete', 'merged', 'deleted']);
+			assert.deepStrictEqual([report.summary.neverCommitted, report.summary.reasons], [1, { merged: 1 }]);
+			assert.ok(!fs.existsSync(done));
+			assert.ok(fs.existsSync(fresh) && branchExists(fx.repo, 'agent/task'));
+
+			const plan = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--dry-run', '--include-empty', '--no-github'], plan), EXIT.notApplied);
+			const lines = plan.out.join('').split('\n');
+			assert.ok(lines.includes(`delete  agent/task  no commits beyond origin/main, removes worktree ${fs.realpathSync(fresh)}`), lines.join('\n'));
+			assert.ok(lines.includes('1 to delete (1 empty)'), lines.join('\n'));
+
+			assert.strictEqual(await runCli(['--yes', '--include-empty', '--no-github'], createFakeIo(fx.repo)), EXIT.ok);
+			assert.ok(!fs.existsSync(fresh) && !branchExists(fx.repo, 'agent/task'));
+		});
+
+		test('a branch never committed on stays though its upstream is gone, until --include-empty', async () => {
+			makeGoneEmptyBranch(fx.repo, 'feature/abandoned');
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--yes', '--json', '--no-github'], io), EXIT.ok);
+			const branch = JSON.parse(io.out.join('')).branches.find((entry: { name: string }) => entry.name === 'feature/abandoned');
+			assert.deepStrictEqual([branch.action, branch.reason, branch.verdictReason], ['skip', 'never-committed', 'empty']);
+			assert.ok(branchExists(fx.repo, 'feature/abandoned'));
+
+			assert.strictEqual(await runCli(['--yes', '--include-empty', '--no-github'], createFakeIo(fx.repo)), EXIT.ok);
+			assert.ok(!branchExists(fx.repo, 'feature/abandoned'));
+		});
+
+		test('naming a branch never committed on is enough to delete it', async () => {
+			const fresh = path.join(fx.dir, 'wt-agent');
+			git(['worktree', 'add', '-q', '-b', 'agent/task', fresh, 'main'], fx.repo);
+			assert.strictEqual(await runCli(['clean', 'agent/task', '--yes', '--no-github'], createFakeIo(fx.repo)), EXIT.ok);
+			assert.ok(!fs.existsSync(fresh) && !branchExists(fx.repo, 'agent/task'));
+		});
+
+		test('--yes keeps a worktree a process runs in, and says which one', async function () {
+			if (process.platform === 'win32') {
+				this.skip();
+			}
+			makeGoneBranch(fx.repo, 'feature/busy');
+			const busy = addWorktree('feature/busy');
+			const child = spawn('sleep', ['60'], { cwd: busy, stdio: 'ignore' });
+			try {
+				const io = createFakeIo(fx.repo);
+				assert.strictEqual(await runCli(['--yes', '--json', '--no-github', '--discard-changes', '--force'], io), EXIT.ok);
+				const report = JSON.parse(io.out.join(''));
+				const branch = report.branches.find((entry: { name: string }) => entry.name === 'feature/busy');
+				assert.deepStrictEqual([branch.action, branch.reason, branch.worktree.processes], ['skip', 'worktree-in-use', [{ pid: child.pid, command: 'sleep' }]]);
+				assert.strictEqual(branch.hint, `stop sleep (pid ${child.pid}) in ${fs.realpathSync(busy)}, then: gsp clean feature/busy --no-github --yes`);
+				assert.deepStrictEqual(report.checks.processes, { used: true });
+				assert.ok(fs.existsSync(busy) && branchExists(fx.repo, 'feature/busy'));
+			} finally {
+				child.kill();
+			}
+			await new Promise((resolve) => child.once('exit', resolve));
+			assert.strictEqual(await runCli(['--yes', '--no-github'], createFakeIo(fx.repo)), EXIT.ok);
+			assert.ok(!fs.existsSync(busy) && !branchExists(fx.repo, 'feature/busy'));
+		});
+
 		test('a worktree with uncommitted changes is kept, and so is its branch, even when status hides untracked files', async () => {
 			makeGoneBranch(fx.repo, 'feature/wt');
 			const wt = addWorktree('feature/wt');
@@ -485,7 +560,7 @@ suite('cli app (real git)', function () {
 			assert.ok(branchExists(fx.repo, 'feature/wt'));
 			assert.ok(
 				io.out.join('').includes(
-					`has uncommitted changes to 1 file (wip.txt) (already in origin/main) → git -C ${fs.realpathSync(wt)} stash --include-untracked && gsp clean feature/wt --yes, or, to delete them for good: gsp worktree remove ${fs.realpathSync(wt)} --discard-changes && gsp clean feature/wt --yes`
+					`has uncommitted changes to 1 file (wip.txt) (merged into origin/main) → git -C ${fs.realpathSync(wt)} stash --include-untracked && gsp clean feature/wt --yes, or, to delete them for good: gsp worktree remove ${fs.realpathSync(wt)} --discard-changes && gsp clean feature/wt --yes`
 				),
 				io.out.join('')
 			);
@@ -564,7 +639,7 @@ suite('cli app (real git)', function () {
 				// Compiled code named after a module (`dist/auth/credentials.js`) is build output, not a secret.
 				'feature/dist': ['ignored-files', { count: 3, sample: ['build/secrets.txt', 'dist/.env', 'dist/credentials.json'] }],
 				// Packages ship their own `.env` files: dependency folders are not searched.
-				'feature/deps': ['empty', { count: 0, sample: [] }],
+				'feature/deps': ['merged', { count: 0, sample: [] }],
 			});
 		});
 
@@ -589,7 +664,7 @@ suite('cli app (real git)', function () {
 			const real = fs.realpathSync(sub);
 			assert.ok(
 				io.out.join('').includes(
-					`skip    feature/sub   worktree ${real} holds submodules, which git worktree remove refuses to delete (already in origin/main) → check the submodules of ${real}`
+					`skip    feature/sub   worktree ${real} holds submodules, which git worktree remove refuses to delete (merged into origin/main) → check the submodules of ${real}`
 				),
 				io.out.join('')
 			);
@@ -738,7 +813,7 @@ suite('cli app (real git)', function () {
 				const branch = document.branches.find((candidate: { name: string }) => candidate.name === name);
 				return branch && [branch.action, branch.reason, branch.result ?? null];
 			};
-			assert.deepStrictEqual(outcome('feature/a'), ['delete', 'empty', 'deleted']);
+			assert.deepStrictEqual(outcome('feature/a'), ['delete', 'empty', 'deleted'], 'named, a branch no commit was made on goes');
 			assert.deepStrictEqual(outcome('feature/b'), ['skip', 'plan-changed', null]);
 			assert.deepStrictEqual(outcome('feature/gone'), ['skip', 'plan-changed', null]);
 			assert.strictEqual(outcome('feature/c'), undefined, 'only the expected branches are considered');
@@ -832,9 +907,9 @@ suite('cli app (real git)', function () {
 				inProgress: null,
 				...none,
 				verdict: 'dead',
-				verdictReason: 'empty',
+				verdictReason: 'merged',
 				action: 'delete',
-				reason: 'empty',
+				reason: 'merged',
 				hint: 'gsp clean feature/clean --no-github --yes',
 			});
 			const pick = (entry: Record<string, unknown>, keys: string[]) => keys.map((key) => entry[key]);
@@ -866,7 +941,7 @@ suite('cli app (real git)', function () {
 				false,
 				null,
 				'delete',
-				'empty',
+				'merged',
 				'gsp clean feature/gone --no-github --yes',
 				null,
 			]);
@@ -891,7 +966,7 @@ suite('cli app (real git)', function () {
 			const width = linked.length;
 			assert.deepStrictEqual(io.out.join('').split('\n').filter(Boolean), [
 				`${root.padEnd(width)}  main        [main]       keep    default branch`,
-				`${linked}  feature/wt  [1 ignored]  skip    removing worktree ${linked} would delete 1 ignored file (.env), needs --discard-changes (already in origin/main) → move what you need out of ${linked}, then: gsp clean feature/wt --no-github --yes --discard-changes`,
+				`${linked}  feature/wt  [1 ignored]  skip    removing worktree ${linked} would delete 1 ignored file (.env), needs --discard-changes (merged into origin/main) → move what you need out of ${linked}, then: gsp clean feature/wt --no-github --yes --discard-changes`,
 			]);
 		});
 

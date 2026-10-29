@@ -65,11 +65,11 @@ const update = (overrides: Partial<DefaultBranchUpdate> = {}): DefaultBranchUpda
 const clean: CleanReport = {
 	schema: CLEAN_SCHEMA,
 	mode: 'apply',
-	checks: { base: null, fetched: true, github: { used: false, reason: 'disabled' }, durationMs: 1, remote: { source: 'fetch', remotes: ['origin'] } },
+	checks: { base: null, fetched: true, github: { used: false, reason: 'disabled' }, durationMs: 1, remote: { source: 'fetch', remotes: ['origin'] }, processes: { used: false, reason: 'not-needed' } },
 	branches: [],
 	worktreesPruned: [],
 	restore: null,
-	summary: { delete: 0, deleted: 0, failed: 0, skipped: 0, kept: 0, needsForce: 0, needsDiscardChanges: 0, reasons: {} },
+	summary: { delete: 0, deleted: 0, failed: 0, skipped: 0, kept: 0, needsForce: 0, needsDiscardChanges: 0, neverCommitted: 0, reasons: {} },
 };
 
 function report(overrides: Partial<PostPrReport> = {}): PostPrReport {

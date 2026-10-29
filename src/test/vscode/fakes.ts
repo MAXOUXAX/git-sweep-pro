@@ -51,11 +51,12 @@ export function cleanDocument(branches: readonly CleanBranch[], overrides: Parti
 			github: { used: false, reason: 'disabled' },
 			durationMs: 1,
 			remote: { source: 'ls-remote', remotes: ['origin'] },
+			processes: { used: false, reason: 'not-needed' },
 		} as CleanDocument['checks'],
 		branches,
 		worktreesPruned: [],
 		restore: null,
-		summary: { delete: 0, deleted: 0, failed: 0, skipped: 0, kept: 0, needsForce: branches.filter((b) => b.reason === 'needs-force').length, needsDiscardChanges: branches.filter((b) => b.reason === 'ignored-files').length, reasons: {} },
+		summary: { delete: 0, deleted: 0, failed: 0, skipped: 0, kept: 0, needsForce: branches.filter((b) => b.reason === 'needs-force').length, needsDiscardChanges: branches.filter((b) => b.reason === 'ignored-files').length, neverCommitted: branches.filter((b) => b.reason === 'never-committed').length, reasons: {} },
 		next: null,
 		...overrides,
 	};

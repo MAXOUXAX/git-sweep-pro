@@ -222,6 +222,66 @@ suite('branch analysis (real git)', function () {
 		assert.strictEqual(branches['feature/wip'].unpushedCommits, 1);
 	});
 
+	test('no commit ahead: merged when a commit was made on the branch, empty when it never carried one', async () => {
+		// Committed on, then fast-forwarded into main: finished work.
+		makeBranch('feature/ff', [['ff.txt', 'ff\n']]);
+		git(['merge', '-q', '--ff-only', 'feature/ff'], fx.repo);
+		// Committed on, rebased onto a newer main, then fast-forwarded: the rebase replayed its own commit.
+		makeBranch('feature/rebased-ff', [['rb.txt', 'rb\n']]);
+		commitFile(fx.repo, 'moves.txt', 'moves\n', 'moves main');
+		git(['rebase', '-q', 'main', 'feature/rebased-ff'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['merge', '-q', '--ff-only', 'feature/rebased-ff'], fx.repo);
+		// An agent's worktree, created before its first commit.
+		git(['worktree', 'add', '-q', '-b', 'agent/fresh', path.join(fx.dir, 'wt-fresh'), 'main'], fx.repo);
+		// Created at an older main, then fast-forwarded and rebased onto main: still nothing of its own.
+		git(['branch', 'agent/old', 'main~1'], fx.repo);
+		git(['rebase', '-q', 'main', 'agent/old'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		// A commit squash-merged, then the branch reset onto main to start over: what it holds now is new.
+		makeBranch('agent/reused', [['reused.txt', 'v1\n']]);
+		squashInto('agent/reused');
+		git(['branch', '-f', 'agent/reused', 'main'], fx.repo);
+		// A commit fast-forwarded into main, then the branch reset onto a newer main: its old commit is in the tip, but from a previous life.
+		makeBranch('agent/restarted', [['restarted.txt', 'v1\n']]);
+		git(['merge', '-q', '--ff-only', 'agent/restarted'], fx.repo);
+		commitFile(fx.repo, 'after-restart.txt', 'x\n', 'main moves on');
+		git(['branch', '-f', 'agent/restarted', 'main'], fx.repo);
+		// Committed on, fast-forwarded into main, then fast-forwarded to a newer main: still finished work.
+		makeBranch('feature/caught-up', [['caught-up.txt', 'x\n']]);
+		git(['merge', '-q', '--ff-only', 'feature/caught-up'], fx.repo);
+		commitFile(fx.repo, 'after-catch-up.txt', 'x\n', 'main moves on');
+		git(['checkout', '-q', 'feature/caught-up'], fx.repo);
+		git(['merge', '-q', '--ff-only', 'main'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		// Committed on, rebased by `git pull --rebase`, then fast-forwarded into main.
+		makeBranch('feature/pulled', [['pulled.txt', 'x\n']]);
+		commitFile(fx.repo, 'before-pull.txt', 'x\n', 'main moves on');
+		pushMain();
+		git(['checkout', '-q', 'feature/pulled'], fx.repo);
+		git(['pull', '-q', '--rebase', 'origin', 'main'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['merge', '-q', '--ff-only', 'feature/pulled'], fx.repo);
+		// No reflog at all: nothing proves a commit was made on it.
+		git(['-c', 'core.logAllRefUpdates=false', 'branch', 'agent/no-reflog', 'main'], fx.repo);
+		pushMain();
+
+		const result = await analyze();
+		assert.deepStrictEqual(verdicts(result), {
+			'agent/fresh': 'dead empty',
+			'agent/no-reflog': 'dead empty',
+			'agent/old': 'dead empty',
+			'agent/restarted': 'dead empty',
+			'agent/reused': 'dead empty',
+			'feature/caught-up': 'dead merged',
+			'feature/ff': 'dead merged',
+			'feature/pulled': 'dead merged',
+			'feature/rebased-ff': 'dead merged',
+			main: 'alive default-branch',
+		});
+		assert.deepStrictEqual(byName(result)['feature/ff'].evidence, { method: 'ancestor', base: 'refs/remotes/origin/main' });
+	});
+
 	test('a branch whose patch is larger than 1 MB is still analysed', async () => {
 		const large = Array.from({ length: 40000 }, (_, index) => `line ${index} of a generated file`).join('\n');
 		makeBranch('feature/large', [['generated.txt', `${large}\n`]]);
@@ -555,6 +615,36 @@ suite('branch analysis (real git)', function () {
 		const branches = byName(await analyze({}, gh));
 		assert.strictEqual(`${branches['feature/into-release'].verdict} ${branches['feature/into-release'].reason}`, 'alive unmerged-commits');
 		assert.strictEqual(`${branches['feature/stacked'].verdict} ${branches['feature/stacked'].reason}`, 'alive unmerged-commits');
+	});
+
+	test('no commit ahead, none made locally: merged only when GitHub shows its tip is a merged pull request head', async () => {
+		pretendGitHub();
+		// Someone else's pull request branch, checked out with no local commit, then fast-forward merged on GitHub.
+		makeBranch('feature/theirs', [['theirs.txt', 'x\n']]);
+		git(['push', '-q', 'origin', 'feature/theirs'], fx.repo);
+		git(['branch', '-q', '-D', 'feature/theirs'], fx.repo);
+		git(['checkout', '-q', '-b', 'review/theirs', 'origin/feature/theirs'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		const head = rev('review/theirs');
+		git(['merge', '-q', '--ff-only', head], fx.repo);
+		commitFile(fx.repo, 'later.txt', 'x\n', 'main moves on');
+		pushMain();
+		// A fresh branch at another commit of main: no pull request has it as head.
+		git(['branch', 'agent/fresh', 'main'], fx.repo);
+		const gh = fakeGh([
+			{ number: 7, state: 'MERGED', headRefOid: head },
+			{ number: 8, state: 'MERGED', headRefOid: rev('main'), baseRefName: 'release' },
+		]);
+
+		const withGitHub = byName(await analyze({}, gh));
+		assert.strictEqual(`${withGitHub['review/theirs'].verdict} ${withGitHub['review/theirs'].reason}`, 'dead pr-merged');
+		assert.deepStrictEqual(withGitHub['review/theirs'].evidence, { method: 'pull-request', pullRequest: 7, state: 'merged', headSha: head, match: 'head' });
+		// Matched by SHA, and only for a pull request merged into the default branch.
+		assert.strictEqual(`${withGitHub['agent/fresh'].verdict} ${withGitHub['agent/fresh'].reason}`, 'dead empty');
+
+		// Without the GitHub signal, nothing shows a commit was made on it: kept as before.
+		const withoutGitHub = verdicts(await analyze({ github: false }, gh));
+		assert.deepStrictEqual([withoutGitHub['review/theirs'], withoutGitHub['agent/fresh']], ['dead empty', 'dead empty']);
 	});
 
 	test('a tip that is a merged pull request head, and one that is an open pull request head', async () => {

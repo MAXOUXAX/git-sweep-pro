@@ -52,8 +52,22 @@ export function createRepoFixture(): RepoFixture {
 	return { dir, repo, remote, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
-/** Pushes a branch, then deletes it on the remote so its upstream is gone after `fetch -p`. */
+/**
+ * A finished branch: one commit on it, pushed, fast-forwarded into main and
+ * pushed there, then deleted on the remote so its upstream is gone after `fetch -p`.
+ */
 export function makeGoneBranch(repo: string, name: string): void {
+	git(['checkout', '-q', '-b', name], repo);
+	commitFile(repo, `${name.replace(/\//g, '-')}.txt`, `${name}\n`, `work on ${name}`);
+	git(['push', '-q', '-u', 'origin', name], repo);
+	git(['checkout', '-q', 'main'], repo);
+	git(['merge', '-q', '--ff-only', name], repo);
+	git(['push', '-q', 'origin', 'main'], repo);
+	git(['push', '-q', 'origin', '--delete', name], repo);
+}
+
+/** A branch no commit was made on, pushed, then deleted on the remote: work that never started. */
+export function makeGoneEmptyBranch(repo: string, name: string): void {
 	git(['checkout', '-q', '-b', name], repo);
 	git(['push', '-q', '-u', 'origin', name], repo);
 	git(['checkout', '-q', 'main'], repo);

@@ -1,6 +1,6 @@
 import * as os from 'node:os';
 import type { AliveReason, DeadReason } from '../core/branch-analysis';
-import { describeVerdict, remoteBranchArg, type CleanBranch, type CleanDocument, type CleanRemoteBranch, type IgnoredFiles } from '../core/clean-plan';
+import { describeProcesses, describeVerdict, remoteBranchArg, type CleanBranch, type CleanDocument, type CleanRemoteBranch, type IgnoredFiles } from '../core/clean-plan';
 
 /*
  * What the extension shows of a `gsp clean --json` document: picker sections,
@@ -18,7 +18,7 @@ export type CleanEntry = {
 	readonly label: string;
 	readonly description: string;
 	readonly detail?: string;
-	/** Can be picked: planned deletions, and in force mode the branches only a forced delete removes. */
+	/** Can be picked: planned deletions, branches no commit was made on, and in force mode the branches only a forced delete removes. */
 	readonly selectable: boolean;
 	readonly picked: boolean;
 	/** Picking it needs `--force`. */
@@ -70,6 +70,12 @@ export function describeLocalSkip(branch: CleanBranch): string {
 			return 'Checked out in the main checkout';
 		case 'locked-worktree':
 			return 'Its worktree is locked';
+		case 'worktree-in-use': {
+			const processes = branch.worktree?.processes ?? [];
+			return processes.length > 0 ? `Its worktree is in use by ${describeProcesses(processes)}` : 'Its worktree is in use';
+		}
+		case 'never-committed':
+			return 'No commits yet: it may be work just starting';
 		case 'dirty-worktree':
 			return 'Its worktree has uncommitted changes';
 		case 'submodules':
@@ -114,6 +120,8 @@ export function describeRemoteSkip(branch: CleanRemoteBranch): string {
 			return `The default branch of ${branch.remote} is unknown`;
 		case 'github-unavailable':
 			return 'Its open pull requests could not be checked on GitHub';
+		case 'never-committed':
+			return 'No commits of its own: it may be work just starting';
 		default: {
 			const verdict: DeadReason | AliveReason = reason;
 			return remoteVerdict({ ...branch, verdictReason: verdict });
@@ -147,12 +155,16 @@ const remoteVerdict = (branch: CleanRemoteBranch) => describeVerdict({ ...branch
  */
 export const isForceable = (branch: CleanBranch): boolean => branch.reason === 'needs-force';
 
-function localEntry(branch: CleanBranch, kind: 'delete' | 'force' | 'skip' | 'keep'): CleanEntry {
+/** A branch no commit was made on: offered, never picked, since it may be work just starting. */
+const isEmpty = (branch: CleanBranch): boolean => branch.action === 'skip' && branch.reason === 'never-committed';
+
+function localEntry(branch: CleanBranch, kind: 'delete' | 'force' | 'empty' | 'skip' | 'keep'): CleanEntry {
 	const worktree = branch.worktree && !branch.worktree.isMain && !branch.worktree.prunable ? branch.worktree : undefined;
-	const removes = worktree && (kind === 'delete' || kind === 'force') ? `Removes the worktree ${displayPath(worktree.path)}` : undefined;
+	const removes = worktree && kind !== 'skip' && kind !== 'keep' ? `Removes the worktree ${displayPath(worktree.path)}` : undefined;
 	const details: Record<typeof kind, string | undefined> = {
 		delete: removes,
 		force: removes,
+		empty: removes ? `May be work just starting. ${removes}` : 'May be work just starting',
 		skip: describeLocalSkip(branch),
 		keep: undefined,
 	};
@@ -164,7 +176,7 @@ function localEntry(branch: CleanBranch, kind: 'delete' | 'force' | 'skip' | 'ke
 		label: `$(${kind === 'force' ? 'warning' : 'git-branch'}) ${branch.name}`,
 		description: describeVerdict(branch),
 		...(detail ? { detail } : {}),
-		selectable: kind === 'delete' || kind === 'force',
+		selectable: kind === 'delete' || kind === 'force' || kind === 'empty',
 		picked: kind === 'delete',
 		forced: kind === 'force',
 		unproven: kind === 'force' && branch.reason === 'needs-force',
@@ -173,15 +185,20 @@ function localEntry(branch: CleanBranch, kind: 'delete' | 'force' | 'skip' | 'ke
 	};
 }
 
-function remoteEntry(branch: CleanRemoteBranch, kind: 'delete' | 'skip'): CleanEntry {
+/** The same on the remote: its qualified name, given with `--expect`, lets it go. */
+const isRemoteEmpty = (branch: CleanRemoteBranch): boolean => branch.action === 'skip' && branch.reason === 'never-committed';
+
+function remoteEntry(branch: CleanRemoteBranch, kind: 'delete' | 'empty' | 'skip'): CleanEntry {
+	const details: Record<typeof kind, string | undefined> = { delete: undefined, empty: 'May be work just starting', skip: describeRemoteSkip(branch) };
+	const detail = details[kind];
 	return {
 		scope: 'remote',
 		arg: remoteBranchArg(branch),
 		tip: branch.tip,
 		label: `$(cloud) ${branch.remote}/${branch.name}`,
 		description: remoteVerdict(branch),
-		...(kind === 'skip' ? { detail: describeRemoteSkip(branch) } : {}),
-		selectable: kind === 'delete',
+		...(detail ? { detail } : {}),
+		selectable: kind === 'delete' || kind === 'empty',
 		picked: kind === 'delete',
 		forced: false,
 		unproven: false,
@@ -193,7 +210,8 @@ function remoteEntry(branch: CleanRemoteBranch, kind: 'delete' | 'skip'): CleanE
 /**
  * The picker's sections, in reading order: what will be deleted (here, then
  * on the remote), what needs a forced delete (force mode only, never
- * picked), what is skipped and why, then what is kept. Kept remote branches
+ * picked), branches no commit was made on (offered, never picked), what is skipped
+ * and why, then what is kept. Kept remote branches
  * are left out: a remote holds many.
  */
 export function buildCleanSections(document: CleanDocument, options: { readonly force: boolean }): CleanSection[] {
@@ -205,11 +223,15 @@ export function buildCleanSections(document: CleanDocument, options: { readonly 
 		{ title: 'To delete', entries: branches.filter((branch) => branch.action === 'delete').map((branch) => localEntry(branch, 'delete')) },
 		{ title: `To delete on ${remote}`, entries: remoteBranches.filter((branch) => branch.action === 'delete').map((branch) => remoteEntry(branch, 'delete')) },
 		{ title: 'Needs a forced delete', entries: options.force ? branches.filter(forceable).map((branch) => localEntry(branch, 'force')) : [] },
+		{ title: 'No commits yet', entries: branches.filter(isEmpty).map((branch) => localEntry(branch, 'empty')) },
+		{ title: `No commits yet on ${remote}`, entries: remoteBranches.filter(isRemoteEmpty).map((branch) => remoteEntry(branch, 'empty')) },
 		{
 			title: 'Skipped',
-			entries: branches.filter((branch) => branch.action === 'skip' && !(options.force && forceable(branch))).map((branch) => localEntry(branch, 'skip')),
+			entries: branches
+				.filter((branch) => branch.action === 'skip' && !(options.force && forceable(branch)) && !isEmpty(branch))
+				.map((branch) => localEntry(branch, 'skip')),
 		},
-		{ title: `Skipped on ${remote}`, entries: remoteBranches.filter((branch) => branch.action === 'skip').map((branch) => remoteEntry(branch, 'skip')) },
+		{ title: `Skipped on ${remote}`, entries: remoteBranches.filter((branch) => branch.action === 'skip' && !isRemoteEmpty(branch)).map((branch) => remoteEntry(branch, 'skip')) },
 		{ title: 'Kept', entries: branches.filter((branch) => branch.action === 'keep').map((branch) => localEntry(branch, 'keep')) },
 	];
 	return sections.filter((section) => section.entries.length > 0);

@@ -30,7 +30,7 @@ import {
 } from './post-pull-request-plan';
 import { canonical, listWorktrees, type Worktree } from './worktrees';
 
-export type PostPrOptions = Pick<CleanOptions, 'dryRun' | 'yes' | 'force' | 'discardChanges' | 'fetch' | 'github' | 'protectedPatterns' | 'canPrompt' | 'confirm'> & {
+export type PostPrOptions = Pick<CleanOptions, 'dryRun' | 'yes' | 'force' | 'discardChanges' | 'includeEmpty' | 'fetch' | 'github' | 'protectedPatterns' | 'canPrompt' | 'confirm'> & {
 	/** The merged branch; the branch checked out where gsp runs when undefined. */
 	readonly branch: string | undefined;
 	/** The branch it was merged into; the default branch when undefined. */
@@ -450,7 +450,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 	const decideOthers = (planned: readonly PlannedBranch[]) =>
 		decideActions(
 			planned.filter((branch) => !excluded.has(branch.name) && (options.others === undefined || options.others.includes(branch.name))),
-			{ force: false, discardChanges: false, named: new Set(), defaultBranch: base?.name, scope }
+			{ force: false, discardChanges: false, includeEmpty: options.includeEmpty ?? false, named: new Set(), defaultBranch: base?.name, scope }
 		);
 	let others = decideOthers(plan.planned);
 	const plannedIgnored = new Map(plan.ignored);
@@ -485,7 +485,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 			branch: noLocal ? { name: noLocal, action: 'no-local-branch' } : target,
 			worktree: { path: worktree?.path ?? null, removed, switched: mode === 'plan' ? target?.action === 'delete' && inMain() : switched },
 			defaultBranch,
-			clean: buildReport(mode, analysis, remote, others, undefined, worktreesPruned, cleanRecorder.recorded),
+			clean: buildReport(mode, analysis, remote, others, undefined, worktreesPruned, cleanRecorder.recorded, plan.processes.check()),
 			nextCwd: removed && leaving() ? continueIn : null,
 			restore: restoreCommand([...targetRecorder.recorded, ...cleanRecorder.recorded]),
 		};
@@ -566,7 +566,7 @@ export async function runPostPullRequestWorkflow(context: PostPrContext, options
 		[target] = await ui.withProgress({ title: `Deleting ${deleting.name}` }, () => applyDeletions(gitAfter, [deleting], shown, targetRecorder));
 	}
 	const defaultBranch = await updateDefaultBranch(context, gitAfter, into, upstreamRef, { apply });
-	others = await applyDeletions(gitAfter, others, shown, cleanRecorder);
+	others = await applyDeletions(gitAfter, others, shown, cleanRecorder, plan.processes);
 	return finish(undefined, defaultBranch);
 }
 

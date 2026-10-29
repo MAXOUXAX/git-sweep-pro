@@ -7,7 +7,7 @@ import { branch, cleanDocument, createFakeClient, createFakeUi, deps, ok, remote
 
 const OPTIONS: CleanCommandOptions = { root: '/repo', readOnly: false, force: false, remote: false, confirm: true };
 
-const squashed = branch({ name: 'feature/squash', worktree: { path: '/work/wt-squash', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false, changedFiles: null } });
+const squashed = branch({ name: 'feature/squash', worktree: { path: '/work/wt-squash', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false, processes: null, changedFiles: null } });
 const empty = branch({ name: 'feature/empty', reason: 'empty', verdictReason: 'empty' });
 const unpushed = branch({
 	name: 'feature/unpushed',
@@ -47,12 +47,28 @@ suite('clean model', () => {
 		assert.strictEqual(kept.entries[0].description, '1 commit not merged into origin/main');
 	});
 
+	test('branches no commit was made on are offered apart, never picked; a worktree in use says what runs in it', () => {
+		const wt = { path: '/work/wt-agent', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: null, submodules: null, changedFiles: null };
+		const fresh = branch({ name: 'agent/task', action: 'skip', reason: 'never-committed', verdictReason: 'empty', hint: 'gsp clean agent/task --yes', worktree: { ...wt, processes: null } });
+		const busy = branch({ name: 'feature/busy', action: 'skip', reason: 'worktree-in-use', worktree: { ...wt, path: '/work/wt-busy', processes: [{ pid: 42, command: 'node' }] } });
+		const sections = buildCleanSections(cleanDocument([fresh, busy, squashed]), { force: false });
+		assert.deepStrictEqual(sections.map((s) => [s.title, s.entries.map((e) => [e.arg, e.selectable, e.picked])]), [
+			['To delete', [['feature/squash', true, true]]],
+			['No commits yet', [['agent/task', true, false]]],
+			['Skipped', [['feature/busy', false, false]]],
+		]);
+		assert.strictEqual(sections[1].entries[0].description, 'no commits beyond origin/main');
+		assert.strictEqual(sections[1].entries[0].detail, 'May be work just starting. Removes the worktree /work/wt-agent');
+		assert.strictEqual(sections[2].entries[0].detail, 'Its worktree is in use by node (pid 42)');
+		assert.strictEqual(pickerPlaceholder(sections, false), 'Pick the branches to delete, then press Enter to review them.');
+	});
+
 	test('force mode offers what only a forced delete removes, never picked; a worktree holding ignored files stays skipped', () => {
 		const ignored = branch({
 			name: 'feature/ignored',
 			action: 'skip',
 			reason: 'ignored-files',
-			worktree: { path: '/work/wt-ignored', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 4, sample: ['.env', 'notes/', 'a.key', 'b.key'] }, submodules: false, changedFiles: null },
+			worktree: { path: '/work/wt-ignored', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 4, sample: ['.env', 'notes/', 'a.key', 'b.key'] }, submodules: false, processes: null, changedFiles: null },
 		});
 		const sections = buildCleanSections(cleanDocument([unpushed, ignored, dirty]), { force: true });
 		assert.deepStrictEqual(sections.map((s) => [s.title, s.entries.map((e) => [e.arg, e.selectable, e.picked, e.forced])]), [
@@ -69,15 +85,21 @@ suite('clean model', () => {
 
 	test('remote branches get their own sections, named by remote', () => {
 		const document = cleanDocument([], {
-			remoteBranches: [remoteBranch({ name: 'feature/a' }), remoteBranch({ name: 'release/1', action: 'skip', reason: 'protected', protected: { by: 'pattern', pattern: 'release/*' } })],
+			remoteBranches: [
+				remoteBranch({ name: 'feature/a' }),
+				remoteBranch({ name: 'agent/task', action: 'skip', reason: 'never-committed', verdictReason: 'empty' }),
+				remoteBranch({ name: 'release/1', action: 'skip', reason: 'protected', protected: { by: 'pattern', pattern: 'release/*' } }),
+			],
 			checks: { ...cleanDocument([]).checks, cleanedRemote: { remote: 'origin', defaultBranch: 'main', github: null } } as never,
 		});
 		const sections = buildCleanSections(document, { force: false });
-		assert.deepStrictEqual(sections.map((s) => [s.title, s.entries.map((e) => [e.arg, e.label, e.selectable])]), [
-			['To delete on origin', [['origin/feature/a', '$(cloud) origin/feature/a', true]]],
-			['Skipped on origin', [['origin/release/1', '$(cloud) origin/release/1', false]]],
+		assert.deepStrictEqual(sections.map((s) => [s.title, s.entries.map((e) => [e.arg, e.label, e.selectable, e.picked])]), [
+			['To delete on origin', [['origin/feature/a', '$(cloud) origin/feature/a', true, true]]],
+			['No commits yet on origin', [['origin/agent/task', '$(cloud) origin/agent/task', true, false]]],
+			['Skipped on origin', [['origin/release/1', '$(cloud) origin/release/1', false, false]]],
 		]);
-		assert.strictEqual(sections[1].entries[0].detail, 'Protected by "release/*"');
+		assert.strictEqual(sections[1].entries[0].detail, 'May be work just starting');
+		assert.strictEqual(sections[2].entries[0].detail, 'Protected by "release/*"');
 		assert.deepStrictEqual(confirmRemote(sections[0].entries, 'origin'), {
 			message: 'Delete feature/a on origin?',
 			detail: 'This deletes it for everyone who uses origin. You can push it back from the notification, or with gsp restore.',

@@ -469,13 +469,16 @@ suite('clean --remote (real git)', function () {
 		git(['remote', 'set-head', 'upstream', '--delete'], fx.repo);
 		git(['config', 'remote.upstream.followRemoteHEAD', 'never'], fx.repo);
 
-		const plan = await runCleanWorkflow(contextFor().context, { ...PLAN, remote: 'upstream' });
+		// feature/old never had a commit of its own: only --include-empty lets it go.
+		const kept = await runCleanWorkflow(contextFor().context, { ...PLAN, remote: 'upstream' });
+		assert.deepStrictEqual(actions(kept.report.remoteBranches)['feature/old'], ['skip', 'never-committed', 'gsp clean upstream/feature/old --remote=upstream --yes']);
+		const plan = await runCleanWorkflow(contextFor().context, { ...PLAN, remote: 'upstream', includeEmpty: true });
 		assert.strictEqual(plan.report.checks.cleanedRemote?.defaultBranch, 'trunkx');
 		assert.deepStrictEqual(actions(plan.report.remoteBranches), {
 			'feature/old': ['delete', 'empty', 'gsp clean upstream/feature/old --remote=upstream --yes'],
 			trunkx: ['keep', 'default-branch', null],
 		});
-		const { report } = await runCleanWorkflow(contextFor().context, { ...APPLY, remote: 'upstream' });
+		const { report } = await runCleanWorkflow(contextFor().context, { ...APPLY, remote: 'upstream', includeEmpty: true });
 		assert.deepStrictEqual(actions(report.remoteBranches).trunkx, ['keep', 'default-branch', null]);
 		assert.ok(upstream.has('trunkx') && !upstream.has('feature/old'));
 	});
