@@ -237,6 +237,43 @@ suite('clean --remote (real git)', function () {
 		assert.strictEqual(report.restore, null);
 	});
 
+	test('a remote branch whose merge commit adds work of its own is kept, with no local branch holding a merge', async () => {
+		// Merges main in, resolving with extra work; its own commit is then cherry-picked onto main.
+		git(['checkout', '-q', '-b', 'feature/evil', 'main'], fx.repo);
+		commitFile(fx.repo, 'e.txt', 'e\n', 'e');
+		git(['checkout', '-q', 'main'], fx.repo);
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		git(['checkout', '-q', 'feature/evil'], fx.repo);
+		git(['merge', '-q', '--no-ff', '--no-commit', 'main'], fx.repo);
+		commitFile(fx.repo, 'resolution.txt', 'only in the merge\n', 'merge main');
+		git(['push', '-q', 'origin', 'feature/evil'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['cherry-pick', 'feature/evil^1'], fx.repo);
+		git(['push', '-q', 'origin', 'main'], fx.repo);
+		git(['branch', '-q', '-D', 'feature/evil'], fx.repo);
+
+		const { report } = await runCleanWorkflow(contextFor().context, APPLY);
+		assert.deepStrictEqual(actions(report.remoteBranches)['feature/evil'], ['keep', 'unmerged-commits', null]);
+		assert.ok(remoteHas('feature/evil'));
+	});
+
+	test('--expect <remote>/<name> selects the branch on the remote, never a local branch of that name', async () => {
+		pushBranch('feature/sq', 's.txt', ['s\n']);
+		squashIntoMain('feature/sq');
+		// A dead local branch literally named "origin/feature/sq".
+		git(['branch', 'origin/feature/sq', 'main'], fx.repo);
+		const tip = git(['rev-parse', 'refs/remotes/origin/feature/sq'], fx.repo).trim();
+
+		const { report } = await runCleanWorkflow(contextFor().context, {
+			...APPLY,
+			patterns: ['origin/feature/sq'],
+			expect: new Map([['origin/feature/sq', tip]]),
+		});
+		assert.deepStrictEqual(actions(report.remoteBranches)['feature/sq'], ['delete', 'rebase-merged', null]);
+		assert.deepStrictEqual(report.branches, []);
+		assert.ok(git(['branch', '--list', 'origin/feature/sq'], fx.repo).trim().length > 0);
+	});
+
 	test('the head of an open pull request is kept, even when its content is on the default branch', async () => {
 		git(['remote', 'set-url', 'origin', GITHUB_URL], fx.repo);
 		git(['config', `url.${fx.remote}.insteadOf`, GITHUB_URL], fx.repo);
