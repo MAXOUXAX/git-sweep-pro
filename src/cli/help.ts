@@ -68,11 +68,17 @@ merged, squash- or rebase-merged into the default branch, it is the head of
 a merged pull request, or its upstream is gone and every commit is on a
 remote. Branches with work found nowhere else need --force.
 
+A branch with no commit of its own (its reflog shows none made on it) may
+be work just starting, such as an agent's new worktree: it is kept unless
+it is named, picked, or --include-empty is given.
+
 Never deleted: the default branch, protected branches, a branch named
 main, master, trunk or develop unless named exactly, branches with
 "branch.<name>.deleteMerged" set to false, a branch being rebased or
 bisected, the current branch, a branch checked out in the main worktree or
-in a dirty or locked worktree, and a branch another kept branch tracks.
+in a dirty or locked worktree or one a process runs in (lsof, or /proc on
+Linux), and a branch another kept branch tracks. To keep a worktree out of
+every cleanup, lock it: "git worktree lock <path>".
 A worktree holding ignored files that a build does not recreate (a .env,
 notes) is kept too, unless --discard-changes is given. For a dirty worktree
 or one holding submodules, run "gsp worktree remove" first.
@@ -91,6 +97,8 @@ Options:
       --discard-changes
                      Also remove worktrees holding ignored files a build
                      does not recreate. They are deleted for good
+      --include-empty
+                     Also delete branches no commit was made on
       --json         Print the plan or the result as one JSON document
       --remote[=<name>]
                      Also delete the branches on <name> (origin by default)
@@ -138,6 +146,10 @@ const WORKTREE_HELP = `Usage: gsp worktree <list|prune|remove> [options]
                      files, submodules, or ignored files a build does not
                      recreate (a .env, notes), and says why. Its branch
                      stays; the main worktree is never removed
+
+To protect a worktree you or an agent work in from every cleanup, lock it:
+"git worktree lock <path>", then "git worktree unlock <path>" when done.
+No gsp flag removes a locked worktree.
 
 Options:
       --json         worktree list, worktree remove: print one JSON
@@ -196,7 +208,9 @@ Works from any worktree:
 
 Without a terminal, gsp post-pr prints the plan and changes nothing unless
 --yes is given. The command that applies the plan names every other branch
-it deletes with --clean, or says --no-clean when there is none.
+it deletes with --clean, or says --no-clean when there is none. Like
+"gsp clean", the clean step keeps branches no commit was made on, and
+worktrees that are locked or that a process runs in.
 
 Options:
       --into <branch>  The branch the pull request was merged into (default:
@@ -210,6 +224,8 @@ Options:
       --discard-changes
                      Remove its worktree even when it holds ignored files a
                      build does not recreate. They are deleted for good
+      --include-empty
+                     Also clean other branches no commit was made on
       --json         Print the plan or the result as one JSON document
   -p, --protect <glob>
                      Never delete branches matching <glob> (repeatable)

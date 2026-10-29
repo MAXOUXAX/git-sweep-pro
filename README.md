@@ -15,6 +15,7 @@ Use `gsp`, not raw Git: it checks that no work would be lost before deleting any
 | Delete one branch | `gsp clean <branch> --yes`. Add `--force` only when the person agreed; `gsp restore` can bring the branch back |
 | Remove a worktree you created | `gsp worktree remove <path>`. If it is kept, read why. Add `--discard-changes` only when everything listed is yours to throw away: it is deleted for good |
 | List worktrees | `gsp worktree list --json` |
+| Work in a worktree of your own | `git worktree lock <path>` while you work: no cleanup removes a locked worktree. `git worktree unlock <path>` when you are done |
 | Delete merged branches on the remote | `gsp clean --remote` shows the plan; add `--yes` to apply it |
 | Undo a branch deletion | `gsp restore <branch>`, or `gsp restore origin/<branch>` for a remote one |
 
@@ -34,6 +35,7 @@ Use `gsp` (git-sweep-pro) for Git cleanup, not `git branch -D`, `git worktree re
 - Delete one branch: `gsp clean <branch> --yes`. Add `--force` only when the person agreed; `gsp restore` can bring the branch back.
 - Remove a worktree you created (review, scratch): `gsp worktree remove <path>`. If it is kept, read why. Add `--discard-changes` only when everything listed is yours to throw away: uncommitted changes and ignored files are deleted for good.
 - List worktrees: `gsp worktree list --json`.
+- Working in a worktree of your own: run `git worktree lock <path>` while you work, so no cleanup removes it, and `git worktree unlock <path>` when you are done.
 - Remote branches: `gsp clean --remote` shows the plan; add `--yes` to apply it.
 - Undo a branch deletion: `gsp restore <branch>` (`gsp restore origin/<branch>` for a remote one).
 
@@ -107,11 +109,13 @@ The fetch follows your `remote.<name>.followRemoteHEAD` setting. If it changes t
 
 `--yes` deletes a branch only with proof that its work exists elsewhere:
 
-- it is merged into the default branch, or points at a commit already on it;
+- it is merged into the default branch: a merge commit brought it in, or the default branch fast-forwarded over commits made on it;
 - each of its commits has an equivalent patch there (rebase merge);
 - the default branch reached the exact content of every file it changed (squash merge);
 - its tip is the head of a merged pull request (GitHub, through `gh`, when it is signed in; `--no-github` turns it off);
 - its upstream is gone and every commit is on a remote.
+
+A branch that never carried a commit of its own is not finished work: agents and parallel sessions create a branch and its worktree before their first commit. So when a branch has no commit ahead of the default branch, `gsp clean` reads its reflog. If a commit was made on that branch and its tip still holds it, the work landed in the default branch (`merged`). Otherwise, it is `empty`, and skipped with `never-committed`: a new branch, one created from an older commit of the default branch, one reset onto it to start over, or one whose reflog is missing or expired (`core.logAllRefUpdates` off, `git reflog expire`). The same goes for a remote branch with no commit of its own, whose reflog gsp can't read. `--include-empty` deletes them, and so does naming the branch (`gsp clean agent/task --yes`) or picking it. `--force` does not. These skips don't change the exit code: someone may be about to work there.
 
 A branch with commits found nowhere else is skipped with `needs-force`. Only `--force` deletes it, and only `--force` on a branch you name deletes a branch whose work is not merged. A glob never turns an unmerged branch into a candidate.
 
@@ -123,9 +127,12 @@ Whatever the flags, `gsp clean` never deletes:
 - a branch being rebased or bisected, in any worktree;
 - the current branch, or a branch checked out in the main worktree;
 - a branch checked out in a worktree that is locked, has uncommitted changes or holds checked-out submodules. `gsp clean` never deletes what they hold: the hint stashes the changes, or names `gsp worktree remove <path> --discard-changes` to delete them yourself first;
+- a branch checked out in a worktree in use: a process (an agent, a shell, a dev server) has its current directory inside it. The plan names the processes (`worktree-in-use`), and gsp looks again right before removing each worktree. gsp itself and the shell that started it don't count. It reads them with `lsof`, or `/proc` on Linux; when it can't (Windows, `lsof` missing or failing), it removes the worktree as if nothing ran in it, and says why in `checks.processes`;
 - a branch that another kept local branch uses as its upstream.
 
-A dead branch checked out in a clean, unlocked linked worktree is deleted with its worktree (`git worktree remove`). Each skipped branch comes with a hint: what resolves it, usually one command, sometimes after a step you take by hand (for ignored files, moving what you need out of the worktree). A hint never suggests losing work first: for uncommitted changes, it stashes them, then names the command that deletes them; for ignored files, it asks you to move what you need out of the worktree first.
+To keep a worktree out of every cleanup, lock it: `git worktree lock <path> --reason "agent at work"`, then `git worktree unlock <path>` when you are done. A lock is the protection that always holds; no flag lifts it, in `gsp clean`, `gsp post-pr` or `gsp worktree remove`.
+
+A dead branch checked out in a clean, unlocked linked worktree nothing runs in is deleted with its worktree (`git worktree remove`). Each skipped branch comes with a hint: what resolves it, usually one command, sometimes after a step you take by hand (for ignored files, moving what you need out of the worktree). A hint never suggests losing work first: for uncommitted changes, it stashes them, then names the command that deletes them; for ignored files, it asks you to move what you need out of the worktree first.
 
 `--force` and `--discard-changes` lift different things. `--force` only lifts the proof that a branch's work exists elsewhere: what it deletes, `gsp restore` brings back. `--discard-changes` lets a worktree go with files that are lost for good, and `--force` alone never does.
 
@@ -167,12 +174,13 @@ Each remote deletion is recorded too: `gsp restore origin/<branch>` pushes it ba
 One line per branch, then one summary line:
 
 ```text
-deleted feature/empty   already in origin/main
+deleted feature/ff      merged into origin/main
 deleted feature/squash  squash-merged into origin/main, removed worktree /work/wt-squash
 skip    feature/gone    needs --force (upstream origin/feature/gone is gone, 2 commits found nowhere else) → gsp clean feature/gone --yes --force
+skip    agent/task      may be work just starting: name it or use --include-empty (no commits beyond origin/main) → gsp clean agent/task --yes
 keep    feature/wip     1 commit not merged into origin/main
 keep    main            default branch
-2 deleted (1 empty, 1 squash-merged) · 1 skipped (1 needs --force) · restore with gsp restore feature/empty feature/squash
+2 deleted (1 merged, 1 squash-merged) · 2 skipped (1 needs --force, 1 never committed) · restore with gsp restore feature/ff feature/squash
 ```
 
 With `--remote`, an "On origin" section follows, in the same format, and the summary line ends with what happened there, for instance `on origin: 3 deleted`.
@@ -187,7 +195,8 @@ gsp post-pr feature/x --yes       # from anywhere else
 gsp post-pr --dry-run             # preview, change nothing
 ```
 
-- The branch is deleted only when its work is proven to be in the default branch, with the same rules as `gsp clean`. Otherwise nothing changes on it, gsp says why (for example `1 commit not merged into origin/main`), exits with 5 and hints at what may still prove it: fetching first, `git push` for commits found nowhere else, or `--into <branch>` when another branch holds its work. `--force` deletes it anyway, unless it is protected, and is only suggested when nothing else can prove it. A branch kept because its worktree has uncommitted changes, or ignored files a build does not recreate, also exits with 5: for `post-pr`, 5 means the branch you asked to finish isn't finished. `--discard-changes` removes a worktree holding such ignored files; for uncommitted changes, the hint stashes them, or names `gsp worktree remove <path> --discard-changes`.
+- The branch is deleted only when its work is proven to be in the default branch, with the same rules as `gsp clean`. Otherwise nothing changes on it, gsp says why (for example `1 commit not merged into origin/main`), exits with 5 and hints at what may still prove it: fetching first, `git push` for commits found nowhere else, or `--into <branch>` when another branch holds its work. `--force` deletes it anyway, unless it is protected, and is only suggested when nothing else can prove it. A branch kept because its worktree has uncommitted changes, or ignored files a build does not recreate, also exits with 5: for `post-pr`, 5 means the branch you asked to finish isn't finished. `--discard-changes` removes a worktree holding such ignored files; for uncommitted changes, the hint stashes them, or names `gsp worktree remove <path> --discard-changes`. Processes running in its worktree don't keep it: you may well still be in it.
+- The other branches go only with proof, as with `gsp clean --yes`: a branch no commit was made on, an agent's new worktree for instance, is kept and listed apart (`never-committed`), unless you pass `--include-empty`; so is a worktree in use.
 - A branch with no local branch, because `gh pr merge --delete-branch` deleted it for example, is not an error: gsp says `feature/x has no local branch; nothing to delete here.`, then updates the default branch and cleans as usual. That holds when gsp deleted it, a remote branch of that name is still listed, or GitHub shows its pull request merged; any other missing branch is a usage error (exit 2, JSON code `unknown-branch`) that suggests the closest branch names.
 - Run from the branch's own linked worktree, gsp removes that worktree, carries on from the main checkout and ends with `cd <main checkout>`.
 - When the branch is checked out in the main checkout, gsp switches that checkout to the default branch first, and refuses when it has uncommitted changes.
@@ -265,7 +274,8 @@ Only those branches are considered. Each is deleted only if its tip is still tha
     "fetched": false,
     "github": { "used": false, "reason": "gh-unauthenticated" },
     "durationMs": 115,
-    "remote": { "source": "ls-remote", "remotes": ["origin"] }
+    "remote": { "source": "ls-remote", "remotes": ["origin"] },
+    "processes": { "used": true }
   },
   "branches": [
     {
@@ -279,14 +289,14 @@ Only those branches are considered. Each is deleted only if its tip is still tha
       "unpushedCommits": 0,
       "upstream": "origin/feature/squash",
       "upstreamState": "gone",
-      "worktree": { "path": "/work/wt-squash", "isMain": false, "dirty": false, "locked": false, "prunable": false, "inProgress": null, "ignoredFiles": { "count": 0, "sample": [] }, "submodules": false },
+      "worktree": { "path": "/work/wt-squash", "isMain": false, "dirty": false, "locked": false, "prunable": false, "inProgress": null, "ignoredFiles": { "count": 0, "sample": [] }, "submodules": false, "processes": [], "changedFiles": null },
       "needsForce": false,
       "hint": "gsp clean feature/squash --yes"
     }
   ],
   "worktreesPruned": [],
   "restore": null,
-  "summary": { "delete": 1, "deleted": 0, "failed": 0, "skipped": 0, "kept": 1, "needsForce": 0, "needsDiscardChanges": 0, "reasons": { "squash-merged": 1 } },
+  "summary": { "delete": 1, "deleted": 0, "failed": 0, "skipped": 0, "kept": 1, "needsForce": 0, "needsDiscardChanges": 0, "neverCommitted": 0, "reasons": { "squash-merged": 1 } },
   "next": "gsp clean feature/squash --yes"
 }
 ```
@@ -295,19 +305,20 @@ Only those branches are considered. Each is deleted only if its tip is still tha
 | --- | --- |
 | `mode` | `plan` (nothing changed) or `apply` |
 | `checks.remote.source` | `fetch` (apply), `ls-remote` (plan), or `local-refs` with a `reason`: `no-fetch`, `no-remote` or `unreachable` |
+| `checks.processes` | Whether gsp could see the processes running in the worktrees it may remove: `{ "used": true }`, or `{ "used": false, reason, detail? }` with `reason` one of `not-needed` (no such worktree), `unsupported` (Windows), `lsof-missing` or `failed`. When not used, worktrees are removed as if nothing ran in them |
 | `branches[].action` | `delete`, `keep` (its work exists nowhere else) or `skip` (a rule or a missing flag stops it) |
-| `branches[].reason` | For `skip`: `protected`, `delete-merged-false`, `rebase-in-progress`, `bisect-in-progress`, `current-branch`, `main-worktree`, `locked-worktree`, `dirty-worktree`, `submodules`, `ignored-files`, `needs-force`, `tracked-by-kept-branch`, `not-selected`, and while applying `plan-changed`, `fetch-failed`, `worktree-changed`. With `--expect`, `plan-changed` also marks a branch whose tip is not the expected one, and one that no longer exists (`verdictReason` `analysis-failed`, `tip` the expected commit). Otherwise the same as `verdictReason` |
-| `branches[].verdictReason` | Dead: `empty`, `merged`, `rebase-merged`, `squash-merged`, `pr-merged`, `commits-merged`, `upstream-gone`. Alive: `default-branch`, `open-pr`, `open-pr-base` (remote branches only: an open pull request targets it; `evidence.match` is `base`), `unmerged-commits`, `no-base`, `analysis-failed` (`evidence` is `{ "method": "error", "message" }`) |
-| `branches[].worktree` | `null`, or `path`, `isMain`, `dirty`, `locked`, `prunable`, `inProgress` (`rebase`, `bisect` or `null`) and `ignoredFiles`: `{ count, sample }` for the ignored files removing it would delete (at most 10 in `sample`; a trailing `/` is a whole folder), and `submodules`: whether it holds submodules. Both are `null` when they were not looked for. `changedFiles`: `{ count, sample }` for the uncommitted changes and untracked files of a dirty one, else `null` |
+| `branches[].reason` | For `skip`: `protected`, `delete-merged-false`, `rebase-in-progress`, `bisect-in-progress`, `current-branch`, `main-worktree`, `locked-worktree`, `worktree-in-use` (a process runs in it: see `worktree.processes`), `dirty-worktree`, `submodules`, `ignored-files`, `needs-force`, `never-committed` (`empty`, and not named, picked or passed `--include-empty`), `tracked-by-kept-branch`, `not-selected`, and while applying `plan-changed`, `fetch-failed`, `worktree-changed`. With `--expect`, `plan-changed` also marks a branch whose tip is not the expected one, and one that no longer exists (`verdictReason` `analysis-failed`, `tip` the expected commit). Otherwise the same as `verdictReason` |
+| `branches[].verdictReason` | Dead: `empty` (no commit ahead, and its reflog shows none made on it), `merged` (its tip is on the default branch, and a merge commit brought it in or a commit made on it is there), `rebase-merged`, `squash-merged`, `pr-merged`, `commits-merged`, `upstream-gone`. Alive: `default-branch`, `open-pr`, `open-pr-base` (remote branches only: an open pull request targets it; `evidence.match` is `base`), `unmerged-commits`, `no-base`, `analysis-failed` (`evidence` is `{ "method": "error", "message" }`) |
+| `branches[].worktree` | `null`, or `path`, `isMain`, `dirty`, `locked`, `prunable`, `inProgress` (`rebase`, `bisect` or `null`) and `ignoredFiles`: `{ count, sample }` for the ignored files removing it would delete (at most 10 in `sample`; a trailing `/` is a whole folder), and `submodules`: whether it holds submodules. Both are `null` when they were not looked for. `processes`: `[{ pid, command }]` for the processes running inside it, or `null` when they were not or could not be looked for (see `checks.processes`). `changedFiles`: `{ count, sample }` for the uncommitted changes and untracked files of a dirty one, else `null` |
 | `branches[].protected` | Why it is kept whatever its verdict, or `null`: `{ "by": "default-branch" }`, `{ "by": "pattern", "pattern" }`, `{ "by": "branch-config", "key" }` (`deleteMerged` is false) or `{ "by": "default-name" }` (`main`, `master`, `trunk` or `develop`, not named exactly) |
 | `branches[].hint` | The command that resolves a skip or applies a planned deletion; for `ignored-files`, it first says what to do by hand: `move what you need out of <path>, then: <command>`. For `dirty-worktree` and `rebase-in-progress`, the way that loses nothing comes first, then `, or, …:` and the command that deletes the changes with `--discard-changes`. `null` when there is nothing to do, and for `protected` (except `default-name`: `gsp clean <name>`) and `delete-merged-false` |
 | `branches[].result` | Apply mode, deleted branches only: `deleted`, `worktree-removed` (the worktree went, the branch did not: see `error`) or `failed` (nothing changed: see `error`) |
-| `remoteBranches` | With `--remote` only: the branches on that remote, each with `remote`, `name`, `tip`, `action`, `reason`, `verdict`, `verdictReason`, `evidence`, `protected`, `trackedBy` (the local branches whose upstream it is), `hint`, and once applied `result` (`deleted` or `failed`, with `error`). `name` is the branch on the remote; the command line names it `<remote>/<name>`. `reason` for `skip`: `protected` (including `{ "by": "branch-config" }` for the upstream of a local branch that keeps it), `tracked-by-kept-branch`, `remote-default-unknown` (every branch, see `checks.cleanedRemote`), `github-unavailable` (each branch that would be deleted), and while applying `plan-changed` (it moved since it was analysed, or a default branch changed) or `fetch-failed` |
+| `remoteBranches` | With `--remote` only: the branches on that remote, each with `remote`, `name`, `tip`, `action`, `reason`, `verdict`, `verdictReason`, `evidence`, `protected`, `trackedBy` (the local branches whose upstream it is), `hint`, and once applied `result` (`deleted` or `failed`, with `error`). `name` is the branch on the remote; the command line names it `<remote>/<name>`. `reason` for `skip`: `protected` (including `{ "by": "branch-config" }` for the upstream of a local branch that keeps it), `never-committed` (no commit of its own: only `--include-empty` or its qualified name deletes it), `tracked-by-kept-branch`, `remote-default-unknown` (every branch, see `checks.cleanedRemote`), `github-unavailable` (each branch that would be deleted), and while applying `plan-changed` (it moved since it was analysed, or a default branch changed) or `fetch-failed` |
 | `checks.cleanedRemote` | With `--remote` only: `{ remote, defaultBranch, github }`. `defaultBranch` is what the server names, or `null` (nothing there is deleted). `github` is `null` for a remote known not to be on GitHub, else `{ "used": true, repo, parent, source, openPullRequests }` (`repo`: as GitHub names it today; `parent`: the repository it is a fork of, or `null`; `source`: the root of its fork network when it is not the parent, or `null`) or `{ "used": false, reason, detail? }` with `reason` one of `disabled` (`--no-github`), `unknown-host` (`detail` is the host: gsp can't tell whether it is GitHub), `gh-missing`, `gh-unauthenticated`, `offline`, `timeout`, `gh-failed` or `too-many-open-prs` |
 | `summary.remote` | With `--remote` only: `{ remote, delete, deleted, failed, skipped, kept }` for its branches |
 | `worktreesPruned` | Registrations whose directory is gone: pruned (apply) or to prune (plan) |
 | `restore` | `gsp restore <names>` for the branches deleted by this run (`<remote>/<name>` for a remote one), or `null` |
-| `summary` | Counts: `delete`, `deleted`, `failed`, `skipped`, `kept`, `needsForce` (skipped as `needs-force`; before 2.0 it also counted `ignored-files`), `needsDiscardChanges` (skipped as `ignored-files`) and `reasons` (per verdict reason, of what was deleted or planned) |
+| `summary` | Counts: `delete`, `deleted`, `failed`, `skipped`, `kept`, `needsForce` (skipped as `needs-force`; before 2.0 it also counted `ignored-files`), `needsDiscardChanges` (skipped as `ignored-files`), `neverCommitted` (skipped as `never-committed`) and `reasons` (per verdict reason, of what was deleted or planned) |
 | `next` | The command to run next, the one the terminal output prints: it applies the planned deletions not carried out, or, when some changed while applying, plans again within the same branches and options (`--dry-run`) so you can review them. `null` when nothing is left, or when what is left needs `--force`, `--discard-changes` or your action: each branch's `hint` says what to do |
 
 Other JSON outputs:
