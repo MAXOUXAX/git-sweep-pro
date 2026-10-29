@@ -195,6 +195,13 @@ suite('cli args', () => {
 		assert.throws(() => parseArgs(['worktree', 'remove', '/tmp/x', '--force']), /use --discard-changes\./);
 	});
 
+	test('--include-empty is for clean and post-pr only', () => {
+		assert.strictEqual(parseArgs(['clean', '--include-empty']).includeEmpty, true);
+		assert.strictEqual(parseArgs(['post-pr', '--include-empty']).includeEmpty, true);
+		assert.strictEqual(parseArgs(['clean']).includeEmpty, false);
+		assert.throws(() => parseArgs(['worktree', 'remove', '/tmp/x', '--include-empty']), /--include-empty can only be used with clean or post-pr\./);
+	});
+
 	test('--force selects a force delete', () => {
 		assert.strictEqual(parseArgs(['-f']).mode, 'forceDelete');
 	});
