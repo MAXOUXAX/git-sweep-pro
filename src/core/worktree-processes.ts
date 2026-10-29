@@ -62,22 +62,30 @@ export function parseLsof(output: string): RunningProcess[] {
 	return processes;
 }
 
+/**
+ * What an lsof run proves. A run that exited with 1 could not read some
+ * process: what it read still counts. A run cut short (timeout, output past
+ * the buffer) stopped mid-scan: what it printed is not the whole picture.
+ */
+export function lsofScan(error: (Error & { code?: unknown; killed?: boolean }) | null, stdout: string): ProcessScan {
+	if (error?.code === 'ENOENT') {
+		return { ok: false, reason: 'lsof-missing' };
+	}
+	if (error?.killed) {
+		return { ok: false, reason: 'failed', detail: `lsof took more than ${LSOF_TIMEOUT_MS / 1000} s` };
+	}
+	const processes = parseLsof(stdout);
+	if (error && (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || processes.length === 0)) {
+		return { ok: false, reason: 'failed', detail: error.message.split('\n')[0] };
+	}
+	return { ok: true, processes };
+}
+
 function scanWithLsof(): Promise<ProcessScan> {
 	return new Promise((resolve) => {
 		// -d cwd: only the current directory; -n -P: no name lookups; -w: no warnings.
 		execFile('lsof', ['-n', '-P', '-w', '-d', 'cwd', '-F', 'pRcn'], { timeout: LSOF_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
-			const code = (error as NodeJS.ErrnoException | null)?.code;
-			if (code === 'ENOENT') {
-				resolve({ ok: false, reason: 'lsof-missing' });
-				return;
-			}
-			const processes = parseLsof(stdout);
-			// lsof exits with 1 when some process could not be read: what it could read still counts.
-			if (error && processes.length === 0) {
-				resolve({ ok: false, reason: 'failed', detail: error.killed ? `lsof took more than ${LSOF_TIMEOUT_MS / 1000} s` : error.message.split('\n')[0] });
-				return;
-			}
-			resolve({ ok: true, processes });
+			resolve(lsofScan(error, stdout));
 		});
 	});
 }

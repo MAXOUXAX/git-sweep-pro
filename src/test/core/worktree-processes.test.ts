@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parseLsof, scanProcesses, WorktreeProcesses, type ProcessScan } from '../../core/worktree-processes';
+import { lsofScan, parseLsof, scanProcesses, WorktreeProcesses, type ProcessScan } from '../../core/worktree-processes';
 
 const running = (pid: number, cwd: string, command = 'node', ppid = 1) => ({ pid, ppid, command, cwd });
 
@@ -23,6 +23,23 @@ suite('worktree processes', () => {
 	test('parses lsof field output, keeping only processes with a directory', () => {
 		const output = ['p12', 'R1', 'czsh', 'fcwd', 'n/work/wt', 'p13', 'R12', 'cnode', 'fcwd', 'n/work/wt/src', 'p14', 'R1', 'ckernel_task', ''].join('\n');
 		assert.deepStrictEqual(parseLsof(output), [running(12, '/work/wt', 'zsh'), running(13, '/work/wt/src', 'node', 12)]);
+	});
+
+	test('an lsof run cut short is a failed scan, even with some output; one that skipped a process still counts', () => {
+		const partial = ['p12', 'R1', 'czsh', 'n/work/wt', ''].join('\n');
+		const failure = (message: string, extra: object) => Object.assign(new Error(message), extra);
+		assert.deepStrictEqual(lsofScan(failure('Command failed: lsof', { killed: true, signal: 'SIGTERM' }), partial), {
+			ok: false,
+			reason: 'failed',
+			detail: 'lsof took more than 5 s',
+		});
+		assert.deepStrictEqual(lsofScan(failure('stdout maxBuffer length exceeded', { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }), partial), {
+			ok: false,
+			reason: 'failed',
+			detail: 'stdout maxBuffer length exceeded',
+		});
+		assert.deepStrictEqual(lsofScan(failure('Command failed: lsof', { code: 1 }), partial), { ok: true, processes: [running(12, '/work/wt', 'zsh')] });
+		assert.deepStrictEqual(lsofScan(failure('spawn lsof ENOENT', { code: 'ENOENT' }), ''), { ok: false, reason: 'lsof-missing' });
 	});
 
 	test('finds the processes inside a worktree, its subfolders included, never a sibling folder', async () => {
