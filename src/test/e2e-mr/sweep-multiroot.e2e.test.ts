@@ -102,8 +102,13 @@ function setupRepoWithGoneBranch(repo: string, goneBranch: string): void {
 	git(['push', '-u', 'origin', 'main'], repo);
 
 	git(['checkout', '-b', goneBranch], repo);
+	fs.writeFileSync(path.join(repo, 'work.txt'), `work on ${goneBranch}\n`);
+	git(['add', 'work.txt'], repo);
+	git(['-c', 'commit.gpgsign=false', 'commit', '-m', `work on ${goneBranch}`], repo);
 	git(['push', '-u', 'origin', goneBranch], repo);
 	git(['checkout', 'main'], repo);
+	git(['merge', '--ff-only', goneBranch], repo);
+	git(['push', 'origin', 'main'], repo);
 	git(['push', 'origin', '--delete', goneBranch], repo);
 }
 
