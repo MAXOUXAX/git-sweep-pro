@@ -34,6 +34,11 @@ Settled by Maxence on 2026-10-26.
 - `post-pr --clean <branch>` (repeatable) limits its clean step to the named branches and `--no-clean` skips it, so its `next` and hints name exactly what they delete, like `gsp clean`'s apply command.
 - An ignored symlink counts as regenerable only when it is named like a regenerable folder or file (e.g. a linked `node_modules`); any other ignored symlink keeps the worktree.
 - The extension offers `--remote` and the worktree list in 2.0.
+- **Telling "never committed" from "commits merged"**: a branch with no commit ahead of the default branch is `merged` when a merge commit brought its tip in, or when its reflog records a commit made on it (`commit`, `cherry-pick`, `revert`, `am`, a merge commit, or a rebase that replayed commits past its `onto`) that its tip still contains. Otherwise it is `empty` and skipped as `never-committed`: a new branch, one created at an older commit, rebased or reset onto the default branch, or with no reflog left (`core.logAllRefUpdates` off, expired). When unsure, keep. A remote branch with no commit ahead has no reflog to read: always `never-committed`.
+- `never-committed` is lifted by `--include-empty`, by naming the branch, or by picking it (offered, never pre-selected); not by `--force`, which lifts the merge proof only. It doesn't change the exit code, so an agent is never invited to delete another agent's new branch.
+- **Worktree in use**: a process whose current directory is inside the worktree (`/proc` on Linux, `lsof` elsewhere), gsp's own process and its ancestors left out. Checked in the plan and again right before each removal; no flag lifts it. Fail-open: when processes can't be read (Windows, `lsof` missing, failing or over 5 s), the worktree is treated as unused and `checks.processes` says why, since failing closed would stop every worktree cleanup there; `git worktree lock` is the protection that always holds. The branch `post-pr` is asked to finish is not held by processes: the person finishing it is often still in its worktree.
+- A lock is never lifted by a flag, in `gsp worktree remove` too (`--discard-changes` included): the hint is `git worktree unlock <path>`, as Git itself needs `-f -f`.
+- `--json` schema stays 2: new reason codes and fields are additions.
 
 ## Release workflow for 2.0
 
