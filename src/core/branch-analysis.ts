@@ -514,6 +514,8 @@ class Prover {
 	private firstParent: Promise<ReadonlySet<string>> | undefined;
 	private pullRequestCommits: Promise<ReadonlyMap<string, PullRequest>> | undefined;
 	private anyMerges: Promise<boolean> | undefined;
+	/** Tips judged here that may sit under no ref, such as a remote branch read with ls-remote. */
+	private readonly unreferencedTips = new Set<string>();
 	private readonly verdicts = new Map<string, Promise<Verdict>>();
 
 	constructor(
@@ -738,8 +740,10 @@ class Prover {
 	 * never looks at merges, so patch ids alone would miss that work.
 	 */
 	async mergesOf(tip: string): Promise<{ merges: number; ownChanges: boolean }> {
-		// One look at every local branch first: most repositories have no merge off the base at all.
-		this.anyMerges ??= this.gitRead(['rev-list', '--merges', '--max-count=1', '--branches', '--not', this.base.ref]).then((output) => output.trim() !== '');
+		// One look at every branch first: most repositories have no merge off the base at all.
+		this.anyMerges ??= this.gitRead(['rev-list', '--merges', '--max-count=1', '--branches', '--remotes', ...this.unreferencedTips, '--not', this.base.ref]).then(
+			(output) => output.trim() !== ''
+		);
 		if (!(await this.anyMerges)) {
 			return { merges: 0, ownChanges: false };
 		}
@@ -759,6 +763,17 @@ class Prover {
 		]);
 		const headers = lines(output).filter((line) => /^commit [0-9a-f]{40,64}$/.test(line));
 		return { merges: headers.length, ownChanges: lines(output).length > headers.length };
+	}
+
+	/** Adds tips {@link mergesOf}'s first look must cover; they must exist in the repository. */
+	judgeTips(tips: Iterable<string>): void {
+		const before = this.unreferencedTips.size;
+		for (const tip of tips) {
+			this.unreferencedTips.add(tip);
+		}
+		if (this.unreferencedTips.size > before) {
+			this.anyMerges = undefined;
+		}
 	}
 
 	openPullRequest(commit: string): PullRequest | undefined {
@@ -1260,6 +1275,7 @@ async function classifyRemote(
 
 	const tips = [...new Set(selected.map(([, tip]) => tip))];
 	const present = new Set(tips.length > 0 ? lines((await git(['rev-list', '--no-walk', '--ignore-missing', ...tips])).stdout) : []);
+	prover?.judgeTips(present);
 
 	const verdictOf = async (name: string, tip: string): Promise<Verdict> => {
 		const head = openHead(name, tip);

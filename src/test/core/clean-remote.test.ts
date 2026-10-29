@@ -237,6 +237,26 @@ suite('clean --remote (real git)', function () {
 		assert.strictEqual(report.restore, null);
 	});
 
+	test('a remote branch whose merge commit adds work of its own is kept, with no local branch holding a merge', async () => {
+		// Merges main in, resolving with extra work; its own commit is then cherry-picked onto main.
+		git(['checkout', '-q', '-b', 'feature/evil', 'main'], fx.repo);
+		commitFile(fx.repo, 'e.txt', 'e\n', 'e');
+		git(['checkout', '-q', 'main'], fx.repo);
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		git(['checkout', '-q', 'feature/evil'], fx.repo);
+		git(['merge', '-q', '--no-ff', '--no-commit', 'main'], fx.repo);
+		commitFile(fx.repo, 'resolution.txt', 'only in the merge\n', 'merge main');
+		git(['push', '-q', 'origin', 'feature/evil'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['cherry-pick', 'feature/evil^1'], fx.repo);
+		git(['push', '-q', 'origin', 'main'], fx.repo);
+		git(['branch', '-q', '-D', 'feature/evil'], fx.repo);
+
+		const { report } = await runCleanWorkflow(contextFor().context, APPLY);
+		assert.deepStrictEqual(actions(report.remoteBranches)['feature/evil'], ['keep', 'unmerged-commits', null]);
+		assert.ok(remoteHas('feature/evil'));
+	});
+
 	test('the head of an open pull request is kept, even when its content is on the default branch', async () => {
 		git(['remote', 'set-url', 'origin', GITHUB_URL], fx.repo);
 		git(['config', `url.${fx.remote}.insteadOf`, GITHUB_URL], fx.repo);
