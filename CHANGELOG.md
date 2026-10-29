@@ -4,6 +4,13 @@ All notable changes to the "git-sweep-pro" extension are documented in this file
 
 This project adheres to [Semantic Versioning](https://semver.org) and the changelog is generated automatically from [Conventional Commits](https://www.conventionalcommits.org).
 
+## [2.0.1](https://github.com/MAXOUXAX/git-sweep-pro/compare/v2.0.0...v2.0.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **git:** let git output more than 1 MB before failing a command ([#34](https://github.com/MAXOUXAX/git-sweep-pro/issues/34)) ([eda2b20](https://github.com/MAXOUXAX/git-sweep-pro/commit/eda2b20a75fb8f3229ccf10df5f153c76009bb48))
+
 # [2.0.0](https://github.com/MAXOUXAX/git-sweep-pro/compare/v1.4.0...v2.0.0) (2026-10-29)
 
 
