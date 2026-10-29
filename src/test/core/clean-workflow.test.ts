@@ -122,7 +122,8 @@ suite('clean workflow (real git)', function () {
 		git(['worktree', 'add', '-q', '-b', 'agent/task', wt, 'main'], fx.repo);
 		const fake = contextFor({ pickMany: (items) => items.filter((item) => item.label === 'agent/task').map((item) => item.label) });
 		const { report, outcome } = await runCleanWorkflow(fake.context, { ...APPLY, yes: false, canPrompt: true });
-		assert.ok(fake.pickManyRequests[0].items.some((item) => item.label === 'agent/task'));
+		const offered = fake.pickManyRequests[0].items.find((item) => item.label === 'agent/task');
+		assert.strictEqual(offered?.picked, false, 'offered, never pre-selected');
 		assert.deepStrictEqual([report.branches.find((branch) => branch.name === 'agent/task')?.result, outcome], ['deleted', 'done']);
 		assert.ok(!branchExists(fx.repo, 'agent/task'));
 		assert.ok(!fs.existsSync(wt));
