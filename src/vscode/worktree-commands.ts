@@ -17,7 +17,16 @@ function describeCleanAction(worktree: WorktreeEntry): string | undefined {
 		case 'delete':
 			return 'Sweep Stale Branches would delete its branch and remove it';
 		case 'skip':
-			return worktree.reason === 'needs-force' ? 'Only a forced delete would remove it' : undefined;
+			switch (worktree.reason) {
+				case 'needs-force':
+					return 'Only a forced delete would remove it';
+				case 'never-committed':
+					return 'No commits yet: Sweep Stale Branches keeps it';
+				case 'worktree-in-use':
+					return 'In use: Sweep Stale Branches keeps it';
+				default:
+					return undefined;
+			}
 		default:
 			return undefined;
 	}
