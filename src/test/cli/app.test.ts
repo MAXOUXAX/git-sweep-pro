@@ -6,7 +6,7 @@ import { PROTECTED_CONFIG_KEY, runCli } from '../../cli/app';
 import { EXIT } from '../../cli/args';
 import { stateFilePath } from '../../cli/state-store';
 import { createFakePrompter } from './fake-prompter';
-import { branchExists, commitFile, createFakeIo, createRepoFixture, git, makeGoneBranch, type RepoFixture } from './git-fixture';
+import { branchExists, commitFile, createFakeIo, createRepoFixture, git, makeGoneBranch, makeGoneEmptyBranch, type RepoFixture } from './git-fixture';
 
 /*
  * Runs the real CLI in-process against real git repositories: only the
@@ -501,6 +501,19 @@ suite('cli app (real git)', function () {
 
 			assert.strictEqual(await runCli(['--yes', '--include-empty', '--no-github'], createFakeIo(fx.repo)), EXIT.ok);
 			assert.ok(!fs.existsSync(fresh) && !branchExists(fx.repo, 'agent/task'));
+		});
+
+		test('a branch never committed on stays though its upstream is gone, until --include-empty', async () => {
+			makeGoneEmptyBranch(fx.repo, 'feature/abandoned');
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--yes', '--json', '--no-github'], io), EXIT.ok);
+			const branch = JSON.parse(io.out.join('')).branches.find((entry: { name: string }) => entry.name === 'feature/abandoned');
+			assert.deepStrictEqual([branch.action, branch.reason, branch.verdictReason], ['skip', 'never-committed', 'empty']);
+			assert.ok(branchExists(fx.repo, 'feature/abandoned'));
+
+			assert.strictEqual(await runCli(['--yes', '--include-empty', '--no-github'], createFakeIo(fx.repo)), EXIT.ok);
+			assert.ok(!branchExists(fx.repo, 'feature/abandoned'));
 		});
 
 		test('naming a branch never committed on is enough to delete it', async () => {
