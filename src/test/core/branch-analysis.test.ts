@@ -242,6 +242,14 @@ suite('branch analysis (real git)', function () {
 		makeBranch('agent/reused', [['reused.txt', 'v1\n']]);
 		squashInto('agent/reused');
 		git(['branch', '-f', 'agent/reused', 'main'], fx.repo);
+		// Committed on, rebased by `git pull --rebase`, then fast-forwarded into main.
+		makeBranch('feature/pulled', [['pulled.txt', 'x\n']]);
+		commitFile(fx.repo, 'before-pull.txt', 'x\n', 'main moves on');
+		pushMain();
+		git(['checkout', '-q', 'feature/pulled'], fx.repo);
+		git(['pull', '-q', '--rebase', 'origin', 'main'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['merge', '-q', '--ff-only', 'feature/pulled'], fx.repo);
 		// No reflog at all: nothing proves a commit was made on it.
 		git(['-c', 'core.logAllRefUpdates=false', 'branch', 'agent/no-reflog', 'main'], fx.repo);
 		pushMain();
@@ -253,6 +261,7 @@ suite('branch analysis (real git)', function () {
 			'agent/old': 'dead empty',
 			'agent/reused': 'dead empty',
 			'feature/ff': 'dead merged',
+			'feature/pulled': 'dead merged',
 			'feature/rebased-ff': 'dead merged',
 			main: 'alive default-branch',
 		});

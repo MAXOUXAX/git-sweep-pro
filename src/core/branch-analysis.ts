@@ -960,10 +960,11 @@ async function proveTip(git: RunGit, prover: Prover, tip: string, isAncestor: bo
  * Reflog entries that record a commit made on the branch itself, rather than
  * a move to a commit made elsewhere (creation, fast-forward, reset): Git
  * writes these messages, in English whatever the locale. A rebase counts when
- * it moved the branch past the commit it rebased onto (it replayed commits).
+ * it moved the branch past the commit it rebased onto (it replayed commits);
+ * `git pull --rebase` writes its own command line before "(finish)".
  */
 const OWN_COMMIT = /^(commit|cherry-pick|revert|am)\b|^(merge|pull)\b.*: Merge made by /;
-const REBASE_FINISH = /^rebase\b.*\bfinish(ed)?\b.* onto ([0-9a-f]+)$/;
+const REBASE_FINISH = /^(rebase|pull)\b.*\bfinish(ed)?\b.* onto ([0-9a-f]+)$/;
 
 /**
  * Whether the reflog of `ref` shows a commit made on that branch which its
@@ -981,7 +982,7 @@ export async function hasOwnCommit(git: RunGit, ref: string, tip: string): Promi
 	const own = entries.flatMap((entry) => {
 		const tab = entry.indexOf('\t');
 		const [commit, message] = [entry.slice(0, tab), entry.slice(tab + 1)];
-		const onto = REBASE_FINISH.exec(message)?.[2];
+		const onto = REBASE_FINISH.exec(message)?.[3];
 		return OWN_COMMIT.test(message) || (onto !== undefined && !commit.startsWith(onto)) ? [commit] : [];
 	});
 	for (const commit of [...new Set(own)].slice(0, MAX_OWN_COMMITS)) {
