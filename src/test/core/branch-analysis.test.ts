@@ -242,6 +242,18 @@ suite('branch analysis (real git)', function () {
 		makeBranch('agent/reused', [['reused.txt', 'v1\n']]);
 		squashInto('agent/reused');
 		git(['branch', '-f', 'agent/reused', 'main'], fx.repo);
+		// A commit fast-forwarded into main, then the branch reset onto a newer main: its old commit is in the tip, but from a previous life.
+		makeBranch('agent/restarted', [['restarted.txt', 'v1\n']]);
+		git(['merge', '-q', '--ff-only', 'agent/restarted'], fx.repo);
+		commitFile(fx.repo, 'after-restart.txt', 'x\n', 'main moves on');
+		git(['branch', '-f', 'agent/restarted', 'main'], fx.repo);
+		// Committed on, fast-forwarded into main, then fast-forwarded to a newer main: still finished work.
+		makeBranch('feature/caught-up', [['caught-up.txt', 'x\n']]);
+		git(['merge', '-q', '--ff-only', 'feature/caught-up'], fx.repo);
+		commitFile(fx.repo, 'after-catch-up.txt', 'x\n', 'main moves on');
+		git(['checkout', '-q', 'feature/caught-up'], fx.repo);
+		git(['merge', '-q', '--ff-only', 'main'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
 		// Committed on, rebased by `git pull --rebase`, then fast-forwarded into main.
 		makeBranch('feature/pulled', [['pulled.txt', 'x\n']]);
 		commitFile(fx.repo, 'before-pull.txt', 'x\n', 'main moves on');
@@ -259,7 +271,9 @@ suite('branch analysis (real git)', function () {
 			'agent/fresh': 'dead empty',
 			'agent/no-reflog': 'dead empty',
 			'agent/old': 'dead empty',
+			'agent/restarted': 'dead empty',
 			'agent/reused': 'dead empty',
+			'feature/caught-up': 'dead merged',
 			'feature/ff': 'dead merged',
 			'feature/pulled': 'dead merged',
 			'feature/rebased-ff': 'dead merged',

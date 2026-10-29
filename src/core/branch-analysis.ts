@@ -965,6 +965,8 @@ async function proveTip(git: RunGit, prover: Prover, tip: string, isAncestor: bo
  */
 const OWN_COMMIT = /^(commit|cherry-pick|revert|am)\b|^(merge|pull)\b.*: Merge made by /;
 const REBASE_FINISH = /^(rebase|pull)\b.*\bfinish(ed)?\b.* onto ([0-9a-f]+)$/;
+/** Moves that keep the branch's history: a fast-forward, a rename. Any other move (creation, reset, `branch -f`) starts it over. */
+const KEEPS_HISTORY = /^(merge|pull)\b.*: Fast-forward$|^[Bb]ranch: renamed /;
 
 /**
  * Whether the reflog of `ref` shows a commit made on that branch which its
@@ -979,12 +981,18 @@ export async function hasOwnCommit(git: RunGit, ref: string, tip: string): Promi
 		(result) => lines(result.stdout),
 		() => []
 	);
-	const own = entries.flatMap((entry) => {
+	// Newest first, back to the last move that started the branch over: older commits belong to a previous life of the name.
+	const own: string[] = [];
+	for (const entry of entries) {
 		const tab = entry.indexOf('\t');
 		const [commit, message] = [entry.slice(0, tab), entry.slice(tab + 1)];
 		const onto = REBASE_FINISH.exec(message)?.[3];
-		return OWN_COMMIT.test(message) || (onto !== undefined && !commit.startsWith(onto)) ? [commit] : [];
-	});
+		if (OWN_COMMIT.test(message) || (onto !== undefined && !commit.startsWith(onto))) {
+			own.push(commit);
+		} else if (onto === undefined && !KEEPS_HISTORY.test(message)) {
+			break;
+		}
+	}
 	for (const commit of [...new Set(own)].slice(0, MAX_OWN_COMMITS)) {
 		const contained = await git(['merge-base', '--is-ancestor', commit, tip]).then(
 			() => true,
