@@ -617,6 +617,36 @@ suite('branch analysis (real git)', function () {
 		assert.strictEqual(`${branches['feature/stacked'].verdict} ${branches['feature/stacked'].reason}`, 'alive unmerged-commits');
 	});
 
+	test('no commit ahead, none made locally: merged only when GitHub shows its tip is a merged pull request head', async () => {
+		pretendGitHub();
+		// Someone else's pull request branch, checked out with no local commit, then fast-forward merged on GitHub.
+		makeBranch('feature/theirs', [['theirs.txt', 'x\n']]);
+		git(['push', '-q', 'origin', 'feature/theirs'], fx.repo);
+		git(['branch', '-q', '-D', 'feature/theirs'], fx.repo);
+		git(['checkout', '-q', '-b', 'review/theirs', 'origin/feature/theirs'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		const head = rev('review/theirs');
+		git(['merge', '-q', '--ff-only', head], fx.repo);
+		commitFile(fx.repo, 'later.txt', 'x\n', 'main moves on');
+		pushMain();
+		// A fresh branch at another commit of main: no pull request has it as head.
+		git(['branch', 'agent/fresh', 'main'], fx.repo);
+		const gh = fakeGh([
+			{ number: 7, state: 'MERGED', headRefOid: head },
+			{ number: 8, state: 'MERGED', headRefOid: rev('main'), baseRefName: 'release' },
+		]);
+
+		const withGitHub = byName(await analyze({}, gh));
+		assert.strictEqual(`${withGitHub['review/theirs'].verdict} ${withGitHub['review/theirs'].reason}`, 'dead pr-merged');
+		assert.deepStrictEqual(withGitHub['review/theirs'].evidence, { method: 'pull-request', pullRequest: 7, state: 'merged', headSha: head, match: 'head' });
+		// Matched by SHA, and only for a pull request merged into the default branch.
+		assert.strictEqual(`${withGitHub['agent/fresh'].verdict} ${withGitHub['agent/fresh'].reason}`, 'dead empty');
+
+		// Without the GitHub signal, nothing shows a commit was made on it: kept as before.
+		const withoutGitHub = verdicts(await analyze({ github: false }, gh));
+		assert.deepStrictEqual([withoutGitHub['review/theirs'], withoutGitHub['agent/fresh']], ['dead empty', 'dead empty']);
+	});
+
 	test('a tip that is a merged pull request head, and one that is an open pull request head', async () => {
 		pretendGitHub();
 		makeBranch('feature/done', [['d.txt', 'd\n']]);

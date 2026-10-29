@@ -26,7 +26,8 @@ export type UpstreamState = 'tracking' | 'gone' | 'none';
 
 /**
  * Why a branch is dead:
- * - `empty`: it points at a commit of the base's own history, and nothing shows a commit was ever made on it:
+ * - `empty`: it points at a commit of the base's own history, nothing shows a commit was ever made on it,
+ *   and it is not the head of a merged pull request:
  *   it may be work just starting (see {@link hasOwnCommit}). Only `--include-empty` or naming it deletes it;
  * - `merged`: its tip is reachable from the base: a merge commit brought it in, or the base fast-forwarded over commits made on it;
  * - `rebase-merged`: each of its commits has exactly the same patch on the base, whitespace included, and its merges add nothing;
@@ -675,6 +676,11 @@ class Prover {
 		return this.pullRequestCommits;
 	}
 
+	/** The pull request merged into the default branch whose head is exactly `commit`, if the GitHub signal knows one. */
+	mergedPullRequestAt(commit: string): PullRequest | undefined {
+		return this.github?.pullRequests.find((pr) => this.isMergedIntoBase(pr) && pr.headSha === commit);
+	}
+
 	/**
 	 * Proves `commit` belongs to a pull request merged into the default branch:
 	 * its head, or behind its final head. The API only finds candidates; the
@@ -686,7 +692,7 @@ class Prover {
 		if (!github) {
 			return undefined;
 		}
-		const head = github.pullRequests.find((pr) => this.isMergedIntoBase(pr) && pr.headSha === commit);
+		const head = this.mergedPullRequestAt(commit);
 		if (head) {
 			return { pullRequest: head, match: 'head' };
 		}
@@ -1021,9 +1027,20 @@ async function classify(prover: Prover | undefined, ref: Ref, name: string, ance
 		return { verdict: 'alive', reason: 'default-branch', evidence: null };
 	}
 	const verdict = await prover.verdictOf(ref.oid, ancestors.has(ref.name));
-	// No commit of its own on the base's line: finished work only if commits were made on this branch.
-	if (verdict.reason === 'empty' && (await hasOwnCommit(prover.git, ref.name, ref.oid))) {
-		return { ...verdict, reason: 'merged' };
+	// No commit of its own on the base's line: finished work only if commits were made on this branch,
+	// or if its tip is the head of a merged pull request (fast-forwarded, or checked out with no local commit).
+	if (verdict.reason === 'empty') {
+		if (await hasOwnCommit(prover.git, ref.name, ref.oid)) {
+			return { ...verdict, reason: 'merged' };
+		}
+		const pr = prover.mergedPullRequestAt(ref.oid);
+		if (pr) {
+			return {
+				verdict: 'dead',
+				reason: 'pr-merged',
+				evidence: { method: 'pull-request', pullRequest: pr.number, state: 'merged', headSha: pr.headSha, match: 'head' },
+			};
+		}
 	}
 	return verdict.verdict === 'alive' && gone ? gone : verdict;
 }
