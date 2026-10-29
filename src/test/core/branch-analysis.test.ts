@@ -222,6 +222,17 @@ suite('branch analysis (real git)', function () {
 		assert.strictEqual(branches['feature/wip'].unpushedCommits, 1);
 	});
 
+	test('a branch whose patch is larger than 1 MB is still analysed', async () => {
+		const large = Array.from({ length: 40000 }, (_, index) => `line ${index} of a generated file`).join('\n');
+		makeBranch('feature/large', [['generated.txt', `${large}\n`]]);
+		commitFile(fx.repo, 'other.txt', 'main moves\n', 'unrelated');
+		git(['cherry-pick', 'feature/large'], fx.repo);
+		pushMain();
+
+		const branches = byName(await analyze());
+		assert.strictEqual(`${branches['feature/large'].verdict} ${branches['feature/large'].reason}`, 'dead rebase-merged');
+	});
+
 	test('a patch that only matches the base ignoring whitespace is not rebase-merged', async () => {
 		commitFile(fx.repo, 'a.js', 'a();\nc();\nb();\n', 'add a.js');
 		makeBranch('feature/indent', [['a.js', 'a();\nif (x) {\n  c();\n}\nb();\n']]);

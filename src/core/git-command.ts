@@ -3,6 +3,9 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
+/** Git's output can be large (a patch of a lockfile or of generated code): Node's 1 MB default would fail the command. */
+const GIT_MAX_BUFFER = 512 * 1024 * 1024;
+
 /**
  * Escapes a string for safe display in shell-style command strings.
  * Used when showing commands to users (e.g. in error messages).
@@ -42,7 +45,7 @@ export type RunGit = (args: readonly string[]) => Promise<CommandResult>;
 export type ExecFileFn = (
 	file: string,
 	args: readonly string[],
-	options: { cwd: string; env?: NodeJS.ProcessEnv }
+	options: { cwd: string; env?: NodeJS.ProcessEnv; maxBuffer?: number }
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export type OutputWriter = {
@@ -104,7 +107,7 @@ export async function runGitCommand(
 ): Promise<CommandResult> {
 	outputChannel.appendLine(`$ ${buildDisplayCmd(args)}`);
 	try {
-		const { stdout, stderr } = await exec('git', args, { cwd, env: gitEnv() });
+		const { stdout, stderr } = await exec('git', args, { cwd, env: gitEnv(), maxBuffer: GIT_MAX_BUFFER });
 		logStreams(outputChannel, { stdout, stderr });
 		return { stdout, stderr };
 	} catch (error) {
