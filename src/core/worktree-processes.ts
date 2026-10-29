@@ -100,9 +100,12 @@ async function scanProc(): Promise<ProcessScan> {
 				const close = stat.lastIndexOf(')');
 				const ppid = Number(stat.slice(close + 2).split(' ')[1]);
 				return { pid: Number(pid), ppid, command: stat.slice(stat.indexOf('(') + 1, close), cwd };
-			} catch {
-				// Gone meanwhile, or another user's.
-				return undefined;
+			} catch (error) {
+				// Gone meanwhile, or another user's (lsof cannot read those either). Anything else: the scan is incomplete.
+				if (['ENOENT', 'ESRCH', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+					return undefined;
+				}
+				throw error;
 			}
 		})
 	);
