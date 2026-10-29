@@ -455,7 +455,7 @@ suite('clean plan', () => {
 			'skip    feature/here  current branch (squash-merged into origin/main) → gsp post-pr feature/here --yes',
 			'skip    feature/gone  needs --force (upstream origin/feature/gone is gone, 2 commits found nowhere else) → gsp clean feature/gone --yes --force',
 			// Apart from merged work, last among the skipped: it may be an agent starting.
-			'skip    feature/new   no commit made on it yet: it may be work just starting, needs --include-empty or its name (no commits beyond origin/main) → gsp clean feature/new --yes',
+			'skip    feature/new   may be work just starting: name it or use --include-empty (no commits beyond origin/main) → gsp clean feature/new --yes',
 		]);
 		assert.strictEqual(
 			formatSummary(plan),

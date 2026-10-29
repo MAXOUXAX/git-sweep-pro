@@ -222,6 +222,43 @@ suite('branch analysis (real git)', function () {
 		assert.strictEqual(branches['feature/wip'].unpushedCommits, 1);
 	});
 
+	test('no commit ahead: merged when a commit was made on the branch, empty when it never carried one', async () => {
+		// Committed on, then fast-forwarded into main: finished work.
+		makeBranch('feature/ff', [['ff.txt', 'ff\n']]);
+		git(['merge', '-q', '--ff-only', 'feature/ff'], fx.repo);
+		// Committed on, rebased onto a newer main, then fast-forwarded: the rebase replayed its own commit.
+		makeBranch('feature/rebased-ff', [['rb.txt', 'rb\n']]);
+		commitFile(fx.repo, 'moves.txt', 'moves\n', 'moves main');
+		git(['rebase', '-q', 'main', 'feature/rebased-ff'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		git(['merge', '-q', '--ff-only', 'feature/rebased-ff'], fx.repo);
+		// An agent's worktree, created before its first commit.
+		git(['worktree', 'add', '-q', '-b', 'agent/fresh', path.join(fx.dir, 'wt-fresh'), 'main'], fx.repo);
+		// Created at an older main, then fast-forwarded and rebased onto main: still nothing of its own.
+		git(['branch', 'agent/old', 'main~1'], fx.repo);
+		git(['rebase', '-q', 'main', 'agent/old'], fx.repo);
+		git(['checkout', '-q', 'main'], fx.repo);
+		// A commit squash-merged, then the branch reset onto main to start over: what it holds now is new.
+		makeBranch('agent/reused', [['reused.txt', 'v1\n']]);
+		squashInto('agent/reused');
+		git(['branch', '-f', 'agent/reused', 'main'], fx.repo);
+		// No reflog at all: nothing proves a commit was made on it.
+		git(['-c', 'core.logAllRefUpdates=false', 'branch', 'agent/no-reflog', 'main'], fx.repo);
+		pushMain();
+
+		const result = await analyze();
+		assert.deepStrictEqual(verdicts(result), {
+			'agent/fresh': 'dead empty',
+			'agent/no-reflog': 'dead empty',
+			'agent/old': 'dead empty',
+			'agent/reused': 'dead empty',
+			'feature/ff': 'dead merged',
+			'feature/rebased-ff': 'dead merged',
+			main: 'alive default-branch',
+		});
+		assert.deepStrictEqual(byName(result)['feature/ff'].evidence, { method: 'ancestor', base: 'refs/remotes/origin/main' });
+	});
+
 	test('a branch whose patch is larger than 1 MB is still analysed', async () => {
 		const large = Array.from({ length: 40000 }, (_, index) => `line ${index} of a generated file`).join('\n');
 		makeBranch('feature/large', [['generated.txt', `${large}\n`]]);

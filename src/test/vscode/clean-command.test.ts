@@ -47,6 +47,22 @@ suite('clean model', () => {
 		assert.strictEqual(kept.entries[0].description, '1 commit not merged into origin/main');
 	});
 
+	test('branches no commit was made on are offered apart, never picked; a worktree in use says what runs in it', () => {
+		const wt = { path: '/work/wt-agent', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: null, submodules: null, changedFiles: null };
+		const fresh = branch({ name: 'agent/task', action: 'skip', reason: 'never-committed', verdictReason: 'empty', hint: 'gsp clean agent/task --yes', worktree: { ...wt, processes: null } });
+		const busy = branch({ name: 'feature/busy', action: 'skip', reason: 'worktree-in-use', worktree: { ...wt, path: '/work/wt-busy', processes: [{ pid: 42, command: 'node' }] } });
+		const sections = buildCleanSections(cleanDocument([fresh, busy, squashed]), { force: false });
+		assert.deepStrictEqual(sections.map((s) => [s.title, s.entries.map((e) => [e.arg, e.selectable, e.picked])]), [
+			['To delete', [['feature/squash', true, true]]],
+			['No commits yet', [['agent/task', true, false]]],
+			['Skipped', [['feature/busy', false, false]]],
+		]);
+		assert.strictEqual(sections[1].entries[0].description, 'no commits beyond origin/main');
+		assert.strictEqual(sections[1].entries[0].detail, 'May be work just starting. Removes the worktree /work/wt-agent');
+		assert.strictEqual(sections[2].entries[0].detail, 'Its worktree is in use by node (pid 42)');
+		assert.strictEqual(pickerPlaceholder(sections, false), 'Pick the branches to delete, then press Enter to review them.');
+	});
+
 	test('force mode offers what only a forced delete removes, never picked; a worktree holding ignored files stays skipped', () => {
 		const ignored = branch({
 			name: 'feature/ignored',

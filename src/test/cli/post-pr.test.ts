@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { runCli } from '../../cli/app';
@@ -121,6 +122,32 @@ suite('cli post-pr (real git)', function () {
 		assert.ok(!fs.existsSync(wt));
 		assert.ok(!branchExists(fx.repo, 'feature/x'));
 		assert.strictEqual(tip('main'), tip('origin/main'));
+	});
+
+	test("finishing a merged branch keeps an agent's fresh worktree and its branch, and says why", async () => {
+		const agent = path.join(fx.dir, 'wt-agent');
+		git(['worktree', 'add', '-q', '-b', 'agent/task', agent, 'main'], fx.repo);
+		const child = process.platform === 'win32' ? undefined : spawn('sleep', ['60'], { cwd: agent, stdio: 'ignore' });
+		try {
+			git(['checkout', '-q', '-b', 'feature/done'], fx.repo);
+			commitFile(fx.repo, 'done.txt', 'done\n', 'done');
+			git(['push', '-q', '-u', 'origin', 'feature/done'], fx.repo);
+			git(['checkout', '-q', 'main'], fx.repo);
+			git(['merge', '-q', '--ff-only', 'feature/done'], fx.repo);
+			git(['push', '-q', 'origin', 'main'], fx.repo);
+			git(['checkout', '-q', 'feature/done'], fx.repo);
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['post-pr', 'main', '--yes', '--no-github'], io), EXIT.ok, io.err.join(''));
+			const out = io.out.join('');
+			assert.ok(out.startsWith('deleted feature/done  merged into origin/main'), out);
+			assert.ok(out.includes('skip    agent/task  may be work just starting: name it or use --include-empty (no commits beyond origin/main)'), out);
+			assert.ok(out.includes('Other branches: nothing deleted · 1 skipped (1 never committed)'), out);
+			assert.ok(fs.existsSync(agent) && branchExists(fx.repo, 'agent/task'));
+			assert.ok(!branchExists(fx.repo, 'feature/done'));
+		} finally {
+			child?.kill();
+		}
 	});
 
 	test('already on the default branch: updates it and cleans', async () => {

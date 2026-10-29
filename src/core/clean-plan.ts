@@ -756,7 +756,7 @@ function describeSkip(branch: CleanBranch): string {
 		case 'worktree-in-use':
 			return `worktree ${worktree} is in use by ${describeProcesses(branch.worktree?.processes ?? [])}`;
 		case 'never-committed':
-			return 'no commit made on it yet: it may be work just starting, needs --include-empty or its name';
+			return 'may be work just starting: name it or use --include-empty';
 		case 'dirty-worktree':
 			return `worktree ${worktree} has uncommitted changes${branch.worktree?.changedFiles?.count ? ` to ${describeFiles(branch.worktree.changedFiles, 'file')}` : ''}`;
 		case 'submodules':
@@ -855,7 +855,7 @@ function describeRemoteSkip(branch: CleanRemoteBranch): string {
 		case 'github-unavailable':
 			return 'its open pull requests could not be checked';
 		case 'never-committed':
-			return 'no commit of its own: it may be work just starting, needs --include-empty or its name';
+			return 'may be work just starting: name it or use --include-empty';
 		default:
 			return branch.reason;
 	}

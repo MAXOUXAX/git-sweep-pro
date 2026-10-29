@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { PROTECTED_CONFIG_KEY, runCli } from '../../cli/app';
@@ -473,6 +474,64 @@ suite('cli app (real git)', function () {
 			assert.ok(fs.existsSync(locked));
 			assert.ok(branchExists(fx.repo, 'feature/locked'));
 			assert.ok(io.out.join('').includes(`→ git worktree unlock ${fs.realpathSync(locked)}`));
+		});
+
+		test("--yes keeps an agent's fresh worktree and its branch, deletes merged ones; --include-empty deletes it, and says so", async () => {
+			makeGoneBranch(fx.repo, 'feature/done');
+			const done = addWorktree('feature/done');
+			const fresh = path.join(fx.dir, 'wt-agent');
+			git(['worktree', 'add', '-q', '-b', 'agent/task', fresh, 'main'], fx.repo);
+
+			const io = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--yes', '--json', '--no-github'], io), EXIT.ok, 'a branch never committed on is not "more to clean"');
+			const report = JSON.parse(io.out.join(''));
+			const agent = report.branches.find((branch: { name: string }) => branch.name === 'agent/task');
+			assert.deepStrictEqual([agent.action, agent.reason, agent.verdictReason, agent.hint], ['skip', 'never-committed', 'empty', 'gsp clean agent/task --no-github --yes']);
+			const merged = report.branches.find((branch: { name: string }) => branch.name === 'feature/done');
+			assert.deepStrictEqual([merged.action, merged.verdictReason, merged.result], ['delete', 'merged', 'deleted']);
+			assert.deepStrictEqual([report.summary.neverCommitted, report.summary.reasons], [1, { merged: 1 }]);
+			assert.ok(!fs.existsSync(done));
+			assert.ok(fs.existsSync(fresh) && branchExists(fx.repo, 'agent/task'));
+
+			const plan = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--dry-run', '--include-empty', '--no-github'], plan), EXIT.notApplied);
+			const lines = plan.out.join('').split('\n');
+			assert.ok(lines.includes(`delete  agent/task  no commits beyond origin/main, removes worktree ${fs.realpathSync(fresh)}`), lines.join('\n'));
+			assert.ok(lines.includes('1 to delete (1 empty)'), lines.join('\n'));
+
+			assert.strictEqual(await runCli(['--yes', '--include-empty', '--no-github'], createFakeIo(fx.repo)), EXIT.ok);
+			assert.ok(!fs.existsSync(fresh) && !branchExists(fx.repo, 'agent/task'));
+		});
+
+		test('naming a branch never committed on is enough to delete it', async () => {
+			const fresh = path.join(fx.dir, 'wt-agent');
+			git(['worktree', 'add', '-q', '-b', 'agent/task', fresh, 'main'], fx.repo);
+			assert.strictEqual(await runCli(['clean', 'agent/task', '--yes', '--no-github'], createFakeIo(fx.repo)), EXIT.ok);
+			assert.ok(!fs.existsSync(fresh) && !branchExists(fx.repo, 'agent/task'));
+		});
+
+		test('--yes keeps a worktree a process runs in, and says which one', async function () {
+			if (process.platform === 'win32') {
+				this.skip();
+			}
+			makeGoneBranch(fx.repo, 'feature/busy');
+			const busy = addWorktree('feature/busy');
+			const child = spawn('sleep', ['60'], { cwd: busy, stdio: 'ignore' });
+			try {
+				const io = createFakeIo(fx.repo);
+				assert.strictEqual(await runCli(['--yes', '--json', '--no-github', '--discard-changes', '--force'], io), EXIT.ok);
+				const report = JSON.parse(io.out.join(''));
+				const branch = report.branches.find((entry: { name: string }) => entry.name === 'feature/busy');
+				assert.deepStrictEqual([branch.action, branch.reason, branch.worktree.processes], ['skip', 'worktree-in-use', [{ pid: child.pid, command: 'sleep' }]]);
+				assert.strictEqual(branch.hint, `stop sleep (pid ${child.pid}) in ${fs.realpathSync(busy)}, then: gsp clean feature/busy --no-github --yes`);
+				assert.deepStrictEqual(report.checks.processes, { used: true });
+				assert.ok(fs.existsSync(busy) && branchExists(fx.repo, 'feature/busy'));
+			} finally {
+				child.kill();
+			}
+			await new Promise((resolve) => child.once('exit', resolve));
+			assert.strictEqual(await runCli(['--yes', '--no-github'], createFakeIo(fx.repo)), EXIT.ok);
+			assert.ok(!fs.existsSync(busy) && !branchExists(fx.repo, 'feature/busy'));
 		});
 
 		test('a worktree with uncommitted changes is kept, and so is its branch, even when status hides untracked files', async () => {
