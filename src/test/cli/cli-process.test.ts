@@ -89,9 +89,9 @@ suite('cli process client (real git)', function () {
 			name: 'feature/agent',
 			tip: git(['rev-parse', 'main'], fx.repo).trim(),
 			action: 'delete',
-			reason: 'empty',
+			reason: 'merged',
 			verdict: 'dead',
-			verdictReason: 'empty',
+			verdictReason: 'merged',
 			evidence: { method: 'ancestor', base: 'refs/remotes/origin/main' },
 			unpushedCommits: 0,
 			upstream: 'origin/feature/agent',
@@ -115,8 +115,11 @@ suite('cli process client (real git)', function () {
 		makeSquashMergedBranch('feature/squash');
 		// Deleted on the remote by someone else: only ls-remote can tell, as the local ref is not pruned.
 		git(['checkout', '-q', '-b', 'feature/elsewhere'], fx.repo);
+		commitFile(fx.repo, 'elsewhere.txt', 'elsewhere\n', 'elsewhere');
 		git(['push', '-q', '-u', 'origin', 'feature/elsewhere'], fx.repo);
 		git(['checkout', '-q', 'main'], fx.repo);
+		git(['merge', '-q', '--ff-only', 'feature/elsewhere'], fx.repo);
+		git(['push', '-q', 'origin', 'main'], fx.repo);
 		git(['--git-dir', fx.remote, 'branch', '-D', 'feature/elsewhere'], fx.dir);
 		const wt = path.join(fx.dir, 'gone-wt');
 		git(['worktree', 'add', '-q', '--detach', wt], fx.repo);
@@ -126,8 +129,8 @@ suite('cli process client (real git)', function () {
 		const plan = run([]);
 		assert.strictEqual(plan.status, EXIT.notApplied, plan.stderr);
 		assert.ok(plan.stdout.includes('delete  feature/squash     squash-merged into origin/main'), plan.stdout);
-		assert.ok(plan.stdout.includes('delete  feature/elsewhere  already in origin/main'), plan.stdout);
-		assert.ok(plan.stdout.includes('2 to delete (1 empty, 1 squash-merged) · 1 worktree registration to prune'), plan.stdout);
+		assert.ok(plan.stdout.includes('delete  feature/elsewhere  merged into origin/main'), plan.stdout);
+		assert.ok(plan.stdout.includes('2 to delete (1 merged, 1 squash-merged) · 1 worktree registration to prune'), plan.stdout);
 		assert.ok(plan.stdout.includes('Nothing was changed. To apply this plan, run: gsp clean feature/elsewhere feature/squash --yes'), plan.stdout);
 
 		const json = run(['--dry-run', '--yes', '--json']);
@@ -225,7 +228,7 @@ suite('cli process client (real git)', function () {
 		assert.deepStrictEqual(result, { exitCode: 0, errorShown: false });
 		assert.ok(!branchExists(fx.repo, 'feature/a'));
 		assert.strictEqual(host.confirms.length, 1);
-		assert.ok(host.infos.some((m) => m.includes('1 deleted (1 empty)')), JSON.stringify(host.infos));
+		assert.ok(host.infos.some((m) => m.includes('1 deleted (1 merged)')), JSON.stringify(host.infos));
 		assert.ok(host.logs.some((line) => line.startsWith('deleted feature/a')), JSON.stringify(host.logs));
 		assert.ok(host.logs.some((line) => line.startsWith('$ git for-each-ref')));
 		assert.deepStrictEqual(host.errors, []);

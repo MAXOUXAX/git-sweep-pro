@@ -63,6 +63,8 @@ export type SkipReason =
 	| 'main-worktree'
 	/** Its worktree is locked: never lifted by a flag. */
 	| 'locked-worktree'
+	/** A process runs inside its worktree (see `processes`): a sweep never removes it, whatever the flags. */
+	| 'worktree-in-use'
 	/** Its worktree has uncommitted changes or untracked files (see `changedFiles`). Clean keeps it; `gsp worktree remove --discard-changes` deletes them. */
 	| 'dirty-worktree'
 	/** Its worktree holds submodules, which `git worktree remove` refuses to delete. */
@@ -71,6 +73,11 @@ export type SkipReason =
 	| 'ignored-files'
 	/** Holds commits found nowhere else, or is alive and named explicitly: only `--force` deletes it. */
 	| 'needs-force'
+	/**
+	 * `empty`: no commit was ever made on it, as far as its reflog tells, so it may be work just starting.
+	 * `--include-empty`, naming it or picking it deletes it.
+	 */
+	| 'never-committed'
 	/** Another local branch that is kept uses it as its upstream. */
 	| 'tracked-by-kept-branch'
 	/** Left out of the interactive picker. */
@@ -89,10 +96,15 @@ export type IgnoredFiles = {
 	readonly sample: readonly string[];
 };
 
+/** A process whose current directory is inside a worktree. */
+export type WorktreeProcess = { readonly pid: number; readonly command: string };
+
 /** What a worktree holds, when it was looked for (linked worktrees of candidates). */
 type WorktreeContents = {
 	readonly ignoredFiles: IgnoredFiles | null;
 	readonly submodules: boolean | null;
+	/** The processes running inside it; null when they were not looked for, or could not be (see `checks.processes`). */
+	readonly processes: readonly WorktreeProcess[] | null;
 	/** Its uncommitted changes and untracked files, when it is dirty; null otherwise. */
 	readonly changedFiles: IgnoredFiles | null;
 };
@@ -149,7 +161,17 @@ export type RemoteCheck =
 	/** Only the local remote-tracking refs were read: they may be out of date. */
 	| { readonly source: 'local-refs'; readonly reason: 'no-fetch' | 'no-remote' | 'unreachable'; readonly detail?: string };
 
-export type CleanChecks = AnalysisChecks & { readonly remote: RemoteCheck };
+/**
+ * Whether gsp could see which processes run inside the worktrees it may
+ * remove. When it could not (`unsupported` platform, `lsof` missing or
+ * failing), a worktree is removed as if nothing ran in it: `git worktree lock`
+ * is what protects one for sure.
+ */
+export type ProcessCheck =
+	| { readonly used: true }
+	| { readonly used: false; readonly reason: 'not-needed' | 'unsupported' | 'lsof-missing' | 'failed'; readonly detail?: string };
+
+export type CleanChecks = AnalysisChecks & { readonly remote: RemoteCheck; readonly processes: ProcessCheck };
 
 /**
  * Why a branch on the remote that could be deleted is skipped. Besides the
@@ -158,7 +180,7 @@ export type CleanChecks = AnalysisChecks & { readonly remote: RemoteCheck };
  * - `github-unavailable`: the remote is on GitHub, but its open pull requests could not all be read (`gh` missing, failing or unauthenticated, `--no-github`): the branch may be the head or base of one.
  */
 export type RemoteSkipReason =
-	| Extract<SkipReason, 'protected' | 'tracked-by-kept-branch' | 'plan-changed' | 'fetch-failed'>
+	| Extract<SkipReason, 'protected' | 'never-committed' | 'tracked-by-kept-branch' | 'plan-changed' | 'fetch-failed'>
 	| 'remote-default-unknown'
 	| 'github-unavailable';
 
@@ -208,6 +230,8 @@ export type CleanSummary = {
 	readonly needsForce: number;
 	/** Skipped branches that `--discard-changes` would delete (`ignored-files`). */
 	readonly needsDiscardChanges: number;
+	/** Skipped branches no commit was made on (`never-committed`), that `--include-empty` would delete. */
+	readonly neverCommitted: number;
 	/** Deleted (apply) or planned (plan) branches per verdict reason, e.g. `{ "squash-merged": 2 }`. */
 	readonly reasons: Readonly<Partial<Record<DeadReason | AliveReason, number>>>;
 	/** With `--remote`: the same counts for the remote branches. */
@@ -237,6 +261,8 @@ export type DecideOptions = {
 	readonly force: boolean;
 	/** `--discard-changes`: a worktree holding ignored files a build does not recreate is removed anyway. */
 	readonly discardChanges: boolean;
+	/** `--include-empty`: branches no commit was made on are deleted too. Off: only when named or picked. */
+	readonly includeEmpty?: boolean;
 	/** Branch names given exactly on the command line (not globs). */
 	readonly named: ReadonlySet<string>;
 	/** Name of the default branch, for hints. */
@@ -280,6 +306,10 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 	if (branch.protected?.by === 'branch-config') {
 		return { reason: 'delete-merged-false', hint: null };
 	}
+	// Agents create a branch and its worktree before their first commit: no proof the work is finished.
+	if (branch.verdict === 'dead' && branch.reason === 'empty' && !options.includeEmpty && !options.named.has(branch.name) && !options.picked?.has(branch.name)) {
+		return { reason: 'never-committed', hint: gspCommand(options.scope, 'clean', [branch.name], '--yes') };
+	}
 	const worktree = branch.worktree && !branch.worktree.prunable ? branch.worktree : null;
 	// During a rebase or a bisect HEAD is detached: the branch is not "current", but it is being worked on.
 	if (worktree?.inProgress === 'rebase') {
@@ -310,6 +340,12 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 	}
 	if (worktree?.locked) {
 		return { reason: 'locked-worktree', hint: cmd('git', 'worktree', 'unlock', worktree.path) };
+	}
+	if (worktree?.processes && worktree.processes.length > 0) {
+		return {
+			reason: 'worktree-in-use',
+			hint: `stop ${describeProcesses(worktree.processes)} in ${quoteShellArg(worktree.path)}, then: ${gspCommand(options.scope, 'clean', [branch.name], '--yes')}`,
+		};
 	}
 	const again = gspCommand(options.scope, 'clean', [branch.name], '--yes');
 	const discard = worktree && `${gspCommand(options.scope, 'worktree', ['remove', worktree.path], '--discard-changes')} && ${again}`;
@@ -369,6 +405,7 @@ export function decideActions(branches: readonly PlannedBranch[], options: Decid
 				...branch.worktree,
 				ignoredFiles: branch.worktree.ignoredFiles ?? null,
 				submodules: branch.worktree.submodules ?? null,
+				processes: branch.worktree.processes ?? null,
 				changedFiles: branch.worktree.changedFiles ?? null,
 			},
 			protected: branch.protected,
@@ -436,10 +473,11 @@ export function remoteBranchArg(branch: Pick<CleanRemoteBranch, 'remote' | 'name
 export function decideRemoteActions(
 	branches: readonly (RemoteBranchAnalysis & { readonly trackedBy: readonly string[] })[],
 	deletedLocals: ReadonlySet<string>,
-	blocker?: RemoteBlocker
+	blocker?: RemoteBlocker,
+	empty: EmptyOptions = {}
 ): CleanRemoteBranch[] {
 	return branches.map((branch): CleanRemoteBranch => {
-		const decided = decideRemoteAction(branch, deletedLocals);
+		const decided = decideRemoteAction(branch, deletedLocals, empty);
 		if (blocker && (decided.action === 'delete' || (blocker.reason === 'remote-default-unknown' && decided.reason === 'no-base'))) {
 			return { ...decided, action: 'skip', reason: blocker.reason, hint: blocker.hint };
 		}
@@ -447,7 +485,14 @@ export function decideRemoteActions(
 	});
 }
 
-function decideRemoteAction(branch: RemoteBranchAnalysis & { readonly trackedBy: readonly string[] }, deletedLocals: ReadonlySet<string>): CleanRemoteBranch {
+/** What lets a branch no commit was made on go: `--include-empty`, or its qualified name ("origin/x") given or picked. */
+export type EmptyOptions = { readonly includeEmpty?: boolean; readonly named?: ReadonlySet<string> };
+
+function decideRemoteAction(
+	branch: RemoteBranchAnalysis & { readonly trackedBy: readonly string[] },
+	deletedLocals: ReadonlySet<string>,
+	empty: EmptyOptions
+): CleanRemoteBranch {
 	{
 		const make = (action: CleanAction, reason: CleanRemoteBranch['reason'], hint: string | null): CleanRemoteBranch => ({
 			remote: branch.remote,
@@ -468,6 +513,10 @@ function decideRemoteAction(branch: RemoteBranchAnalysis & { readonly trackedBy:
 		if (branch.protected) {
 			// Naming a long-lived name exactly, with its remote, lifts its protection, not the proofs.
 			return make('skip', 'protected', branch.protected.by === 'default-name' ? cmd('gsp', 'clean', remoteBranchArg(branch), remoteFlag(branch.remote)) : null);
+		}
+		// Nothing tells a branch pushed before its first commit from one fast-forwarded into the default branch.
+		if (branch.reason === 'empty' && !empty.includeEmpty && !empty.named?.has(remoteBranchArg(branch))) {
+			return make('skip', 'never-committed', cmd('gsp', 'clean', remoteBranchArg(branch), remoteFlag(branch.remote), '--yes'));
 		}
 		const kept = branch.trackedBy.filter((name) => !deletedLocals.has(name));
 		if (kept.length > 0) {
@@ -524,6 +573,7 @@ export function summarize(
 		kept: count((branch) => branch.action === 'keep'),
 		needsForce: count((branch) => branch.reason === 'needs-force'),
 		needsDiscardChanges: count((branch) => branch.reason === 'ignored-files'),
+		neverCommitted: count((branch) => branch.reason === 'never-committed'),
 		reasons,
 		...(remote ? { remote } : {}),
 	};
@@ -634,10 +684,6 @@ export function describeVerdict(branch: Pick<CleanBranch, 'verdictReason' | 'evi
 	const into = baseName(evidence);
 	switch (branch.verdictReason) {
 		case 'empty':
-			// A branch that had an upstream had commits of its own once: they are in the base now.
-			if (into && branch.upstream) {
-				return `already in ${into}`;
-			}
 			return into ? `no commits beyond ${into}` : 'no commits of its own';
 		case 'merged':
 		case 'rebase-merged':
@@ -707,6 +753,10 @@ function describeSkip(branch: CleanBranch): string {
 			return `checked out in the main worktree ${worktree}`;
 		case 'locked-worktree':
 			return `worktree ${worktree} is locked`;
+		case 'worktree-in-use':
+			return `worktree ${worktree} is in use by ${describeProcesses(branch.worktree?.processes ?? [])}`;
+		case 'never-committed':
+			return 'no commit made on it yet: it may be work just starting, needs --include-empty or its name';
 		case 'dirty-worktree':
 			return `worktree ${worktree} has uncommitted changes${branch.worktree?.changedFiles?.count ? ` to ${describeFiles(branch.worktree.changedFiles, 'file')}` : ''}`;
 		case 'submodules':
@@ -737,6 +787,19 @@ function describeSkip(branch: CleanBranch): string {
 
 const ORDER: Record<CleanAction, number> = { delete: 0, skip: 1, keep: 2 };
 
+/** Branches no commit was made on come last among the skipped ones, apart from merged work. */
+const order = (branch: CleanBranch) => ORDER[branch.action] + (branch.reason === 'never-committed' ? 0.5 : 0);
+
+/** "node (pid 123)", or "2 processes (node, pid 123; zsh, pid 456)". */
+export function describeProcesses(processes: readonly WorktreeProcess[]): string {
+	const each = (process: WorktreeProcess) => `${process.command}, pid ${process.pid}`;
+	if (processes.length === 1) {
+		return `${processes[0].command} (pid ${processes[0].pid})`;
+	}
+	const shown = processes.slice(0, MAX_SAMPLE).map(each).join('; ');
+	return `${processes.length} processes (${shown}${processes.length > MAX_SAMPLE ? '; …' : ''})`;
+}
+
 const ACTION_LABEL: Record<CleanAction | CleanResult, string> = {
 	delete: 'delete',
 	keep: 'keep',
@@ -748,7 +811,7 @@ const ACTION_LABEL: Record<CleanAction | CleanResult, string> = {
 
 /** One line per branch: what was (or would be) done and why, e.g. "deleted  feature/x  squash-merged into origin/main". */
 export function formatBranchLines(report: Pick<CleanReport, 'branches' | 'mode'>): string[] {
-	const branches = [...report.branches].sort((a, b) => ORDER[a.action] - ORDER[b.action]);
+	const branches = [...report.branches].sort((a, b) => order(a) - order(b));
 	const nameWidth = Math.max(0, ...branches.map((branch) => branch.name.length));
 	return branches.map((branch) => `${actionLabel(branch).padEnd(8)}${branch.name.padEnd(nameWidth)}  ${describeAction(branch)}`);
 }
@@ -791,6 +854,8 @@ function describeRemoteSkip(branch: CleanRemoteBranch): string {
 			return `the default branch of ${branch.remote} is unknown`;
 		case 'github-unavailable':
 			return 'its open pull requests could not be checked';
+		case 'never-committed':
+			return 'no commit of its own: it may be work just starting, needs --include-empty or its name';
 		default:
 			return branch.reason;
 	}
@@ -854,7 +919,7 @@ export function formatSummary(report: CleanReport): string {
 		.map(([reason, label]) => [report.branches.filter((branch) => branch.reason === reason).length, label] as const)
 		.filter(([count]) => count > 0);
 	const remote = describeRemoteSummary(report);
-	if (summary.delete === 0 && summary.needsForce === 0 && summary.needsDiscardChanges === 0 && rerun.length === 0 && report.worktreesPruned.length === 0 && !remote) {
+	if (summary.delete === 0 && summary.needsForce === 0 && summary.needsDiscardChanges === 0 && summary.neverCommitted === 0 && rerun.length === 0 && report.worktreesPruned.length === 0 && !remote) {
 		return summary.skipped > 0 ? `Nothing to clean · ${summary.skipped} skipped.` : 'Nothing to clean.';
 	}
 	const parts: string[] = [];
@@ -876,6 +941,7 @@ export function formatSummary(report: CleanReport): string {
 		const why = [
 			...(summary.needsForce > 0 ? [`${summary.needsForce} ${summary.needsForce === 1 ? 'needs' : 'need'} --force`] : []),
 			...(summary.needsDiscardChanges > 0 ? [`${summary.needsDiscardChanges} ${summary.needsDiscardChanges === 1 ? 'needs' : 'need'} --discard-changes`] : []),
+			...(summary.neverCommitted > 0 ? [`${summary.neverCommitted} never committed`] : []),
 			...rerun.map(([count, label]) => `${count} ${label}`),
 		];
 		parts.push(`${summary.skipped} skipped${why.length > 0 ? ` (${why.join(', ')})` : ''}`);

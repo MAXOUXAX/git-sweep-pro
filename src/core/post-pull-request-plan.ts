@@ -158,14 +158,16 @@ export type DecideTargetOptions = {
  * for a branch named explicitly: deleted only when proven merged, unless
  * `--force`. The worktree gsp runs in is no obstacle, since post-pr leaves
  * it; nor is the main checkout, which it switches to the default branch
- * first, unless it has uncommitted changes. Hints rerun post-pr, and
- * suggest `--force` only when nothing else can prove the branch merged.
+ * first, unless it has uncommitted changes. Nor are the processes running in
+ * its worktree: the person finishing the branch is often still in it. Hints
+ * rerun post-pr, and suggest `--force` only when nothing else can prove the
+ * branch merged.
  */
 export function decideTarget(branch: PlannedBranch, options: DecideTargetOptions): CleanBranch {
-	const worktree = branch.worktree && !branch.worktree.prunable ? branch.worktree : null;
+	const worktree = branch.worktree && !branch.worktree.prunable ? { ...branch.worktree, processes: null } : null;
 	const inMain = worktree?.isMain === true;
 	const [decided] = decideActions(
-		[{ ...branch, current: false, worktree: worktree && inMain ? { ...worktree, isMain: false, dirty: options.mainCheckoutDirty } : branch.worktree }],
+		[{ ...branch, current: false, worktree: worktree && inMain ? { ...worktree, isMain: false, dirty: options.mainCheckoutDirty } : (worktree ?? branch.worktree) }],
 		{ force: options.force, discardChanges: options.discardChanges, named: new Set([branch.name]), defaultBranch: options.into }
 	);
 	const again = (...flags: string[]) => postPrCommand(options.scope, branch.name, '--yes', ...flags);

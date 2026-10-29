@@ -46,6 +46,8 @@ export type CliOptions = {
 	 * may take uncommitted changes and ignored files with it, for good.
 	 */
 	readonly discardChanges: boolean;
+	/** `--include-empty` (clean, post-pr): branches no commit was made on are deleted too. */
+	readonly includeEmpty: boolean;
 	readonly yes: boolean;
 	/** Never load terminal widgets, even when an agent uses a pseudo-terminal. */
 	readonly nonInteractive: boolean;
@@ -91,6 +93,7 @@ const OPTIONS = {
 	'dry-run': { type: 'boolean', short: 'n', default: false },
 	force: { type: 'boolean', short: 'f', default: false },
 	'discard-changes': { type: 'boolean', default: false },
+	'include-empty': { type: 'boolean', default: false },
 	yes: { type: 'boolean', short: 'y', default: false },
 	'non-interactive': { type: 'boolean', default: false },
 	merged: { type: 'boolean', short: 'm', default: false },
@@ -255,6 +258,9 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 	if (values['discard-changes'] && !(command === 'clean' || command === 'post-pr' || worktree?.subcommand === 'remove')) {
 		throw new UsageError('--discard-changes can only be used with clean, post-pr or worktree remove.');
 	}
+	if (values['include-empty'] && !(command === 'clean' || command === 'post-pr')) {
+		throw new UsageError('--include-empty can only be used with clean or post-pr.');
+	}
 	if (values.remote !== undefined && command !== 'clean') {
 		throw new UsageError('--remote can only be used with clean.');
 	}
@@ -292,6 +298,7 @@ export function parseArgs(rawArgv: readonly string[]): CliOptions {
 		cwd: values.cwd,
 		mode: values.force ? 'forceDelete' : values['dry-run'] || requested === 'list' ? 'dryRun' : 'safeDelete',
 		discardChanges: values['discard-changes'],
+		includeEmpty: values['include-empty'],
 		yes: values.yes,
 		nonInteractive: values['non-interactive'],
 		fetch: !values['no-fetch'],
@@ -341,6 +348,7 @@ function helpOptions(topic: CommandName | undefined): CliOptions {
 		cwd: undefined,
 		mode: 'safeDelete',
 		discardChanges: false,
+		includeEmpty: false,
 		yes: false,
 		nonInteractive: false,
 		fetch: true,

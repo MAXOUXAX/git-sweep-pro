@@ -133,7 +133,7 @@ suite('cli post-pr (real git)', function () {
 		assert.strictEqual(await runCli(['post-pr', '--yes'], io), EXIT.ok, io.err.join(''));
 		const out = io.out.join('');
 		assert.ok(out.startsWith('No branch to finish: on main.\n'), out);
-		assert.ok(out.includes('Other branches: 1 deleted (1 empty)'), out);
+		assert.ok(out.includes('Other branches: 1 deleted (1 merged)'), out);
 		assert.ok(out.includes('Undo with: gsp restore feature/old'), out);
 		assert.strictEqual(tip('main'), tip('origin/main'));
 		assert.ok(!branchExists(fx.repo, 'feature/old'));
@@ -530,8 +530,8 @@ suite('cli post-pr (real git)', function () {
 	}
 
 	test('a branch with no local branch: says so, updates main and cleans', async () => {
-		mergeAndDeleteBranch('feature/x');
 		makeGoneBranch(fx.repo, 'feature/old');
+		mergeAndDeleteBranch('feature/x');
 
 		const io = createFakeIo(fx.repo);
 		assert.strictEqual(await runCli(['post-pr', 'feature/x', '--yes'], io), EXIT.ok, io.err.join(''));

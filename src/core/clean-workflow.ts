@@ -15,6 +15,7 @@ import {
 	isBranchGlob,
 	remoteBranchArg,
 	restoreCommand,
+	describeProcesses,
 	scopedCommand,
 	summarize,
 	type CleanBranch,
@@ -25,18 +26,21 @@ import {
 	type CleanScope,
 	type DecideOptions,
 	type PlannedBranch,
+	type ProcessCheck,
 	type RemoteBlocker,
 	type RemoteCheck,
 	type SkipReason,
+	type WorktreeProcess,
 } from './clean-plan';
 import { canRecordDeletions, createDeletionRecorder, type DeletionRecorder } from './deletion-log';
 import { gitFailureReason, toErrorMessage } from './errors';
-import type { RunGit } from './git-command';
+import { quoteShellArg, type RunGit } from './git-command';
 import { sameRepository, type RunSsh } from './forge';
 import type { GitHubSkipReason, RunGh } from './github-signal';
 import { listIgnoredFiles, summarizeIgnored } from './ignored-files';
 import { isNotFullyMergedError } from './sweep-logic';
 import type { PickItem, WorkflowContext } from './workflow';
+import { WorktreeProcesses, type ScanProcesses } from './worktree-processes';
 import { hasSubmodules, listChangedFiles, listWorktrees, parseWorktrees, pruneWorktrees, WORKTREE_REMOVE } from './worktrees';
 
 export type CleanOptions = {
@@ -50,6 +54,8 @@ export type CleanOptions = {
 	readonly force: boolean;
 	/** A worktree holding ignored files a build does not recreate is removed anyway. */
 	readonly discardChanges: boolean;
+	/** `--include-empty`: branches no commit was made on go too, not only when named or picked. */
+	readonly includeEmpty?: boolean;
 	/** `git ls-remote` while planning, `git fetch --prune` before applying. */
 	readonly fetch: boolean;
 	/** Ask GitHub for merged pull requests through `gh`. */
@@ -80,6 +86,8 @@ export type CleanContext = WorkflowContext & {
 	readonly gh?: RunGh;
 	/** Runs `ssh`, to resolve the host aliases of SSH remotes. */
 	readonly ssh?: RunSsh;
+	/** Lists the running processes, to keep the worktrees in use; lsof or /proc by default. */
+	readonly scanProcesses?: ScanProcesses;
 };
 
 /** How `gsp clean` ended: the CLI maps it to its exit code. */
@@ -342,7 +350,8 @@ export async function inspectWorktrees(
 	git: RunGit,
 	branches: readonly BranchAnalysis[],
 	named: ReadonlySet<string>,
-	found: Map<string, readonly string[]>
+	found: Map<string, readonly string[]>,
+	processes?: WorktreeProcesses
 ): Promise<PlannedBranch[]> {
 	return Promise.all(
 		branches.map(async (branch): Promise<PlannedBranch> => {
@@ -351,17 +360,20 @@ export async function inspectWorktrees(
 			if (!candidate || !worktree || worktree.isMain || worktree.prunable || worktree.locked || worktree.inProgress) {
 				return branch;
 			}
+			// A worktree in use is kept whatever it holds: an agent working there has changes, often.
+			const inside = processes ? await processes.inside(worktree.path) : null;
+			const used = inside ? { processes: inside } : {};
 			if (worktree.dirty) {
 				// Kept anyway: what its hint would lose is listed.
 				const changed = await listChangedFiles(git, worktree.path).catch(() => undefined);
-				return changed ? { ...branch, worktree: { ...worktree, changedFiles: summarizeIgnored(changed) } } : branch;
+				return { ...branch, worktree: { ...worktree, ...used, ...(changed ? { changedFiles: summarizeIgnored(changed) } : {}) } };
 			}
 			try {
 				const [ignored, submodules] = await Promise.all([listIgnoredFiles(git, worktree.path), hasSubmodules(git, worktree.path)]);
 				found.set(branch.name, ignored);
-				return { ...branch, worktree: { ...worktree, ignoredFiles: summarizeIgnored(ignored), submodules } };
+				return { ...branch, worktree: { ...worktree, ...used, ignoredFiles: summarizeIgnored(ignored), submodules } };
 			} catch {
-				return { ...branch, worktree: { ...worktree, dirty: true } };
+				return { ...branch, worktree: { ...worktree, ...used, dirty: true } };
 			}
 		})
 	);
@@ -403,7 +415,7 @@ async function worktreeUnchanged(git: RunGit, branch: CleanBranch, seen: SeenWor
 
 const linkedPath = (branch: Pick<CleanBranch, 'worktree'>) => (branch.worktree && !branch.worktree.prunable ? branch.worktree.path : undefined);
 
-type Outcome = { readonly result: CleanResult; readonly error?: string } | { readonly skip: SkipReason };
+type Outcome = { readonly result: CleanResult; readonly error?: string } | { readonly skip: SkipReason; readonly processes?: readonly WorktreeProcess[] };
 
 /**
  * Deletes one planned branch: checks it still points at the analysed commit
@@ -413,7 +425,7 @@ type Outcome = { readonly result: CleanResult; readonly error?: string } | { rea
  * or bisected; since it cannot see squash merges, a proven branch then goes
  * with `git update-ref -d`, only if it still points at the analysed commit.
  */
-async function deleteBranch(git: RunGit, branch: CleanBranch, seen: SeenWorktree, recorder: DeletionRecorder): Promise<Outcome> {
+async function deleteBranch(git: RunGit, branch: CleanBranch, seen: SeenWorktree, recorder: DeletionRecorder, processes?: WorktreeProcesses): Promise<Outcome> {
 	const tip = await readTip(git, branch.name);
 	if (tip?.sha !== branch.tip) {
 		return { result: 'failed', error: tip ? 'it moved since it was analysed; run gsp clean again' : 'it no longer exists' };
@@ -421,6 +433,14 @@ async function deleteBranch(git: RunGit, branch: CleanBranch, seen: SeenWorktree
 	const worktree = linkedPath(branch);
 	if (worktree !== seen.path || !(await worktreeUnchanged(git, branch, seen))) {
 		return { skip: 'worktree-changed' };
+	}
+	if (worktree && processes) {
+		// Read again right before removing it: an agent may have started in it since the plan.
+		processes.refresh();
+		const inside = await processes.inside(worktree);
+		if (inside && inside.length > 0) {
+			return { skip: 'worktree-in-use', processes: inside };
+		}
 	}
 	if (worktree) {
 		try {
@@ -455,14 +475,15 @@ async function deleteBranch(git: RunGit, branch: CleanBranch, seen: SeenWorktree
  */
 function pickItems(branches: readonly CleanBranch[], force: boolean): PickItem[] {
 	return branches
-		.filter((branch) => branch.action === 'delete' || (force && branch.reason === 'needs-force'))
+		.filter((branch) => branch.action === 'delete' || (force && branch.reason === 'needs-force') || branch.reason === 'never-committed')
 		.map((branch) => {
 			const worktree = branch.worktree && !branch.worktree.prunable ? `, removes worktree ${branch.worktree.path}` : '';
 			const unpushed = branch.verdict === 'alive' ? ', not merged' : `, ${branch.unpushedCommits} unpushed`;
 			return {
 				label: branch.name,
 				description: `${describeVerdict(branch)}${branch.needsForce ? unpushed : ''}${worktree}`,
-				picked: branch.action === 'delete' && !branch.needsForce,
+				// One no commit was made on may be work just starting: a person picks it, never by default.
+				picked: branch.action === 'delete' && !branch.needsForce && branch.reason !== 'never-committed',
 			};
 		});
 }
@@ -624,12 +645,13 @@ export function buildReport(
 	branches: readonly CleanBranch[],
 	cleaned: { readonly remote: string; readonly branches: readonly CleanRemoteBranch[] } | undefined,
 	worktreesPruned: readonly string[],
-	restored: readonly string[]
+	restored: readonly string[],
+	processes: ProcessCheck
 ): CleanReport {
 	return {
 		schema: CLEAN_SCHEMA,
 		mode,
-		checks: { ...analysis.checks, remote },
+		checks: { ...analysis.checks, remote, processes },
 		branches,
 		...(cleaned ? { remoteBranches: cleaned.branches } : {}),
 		worktreesPruned,
@@ -796,12 +818,14 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	};
 	const trackers = cleaned === undefined ? new Map<string, string[]>() : trackersOf(plan.upstreams, cleaned);
 	let blocker: RemoteBlocker | undefined;
+	let picked: ReadonlySet<string> | undefined;
 	const decideRemote = (remoteBranches: readonly RemoteBranchAnalysis[] | undefined, deletedLocals: Iterable<string>) =>
 		remoteBranches &&
 		decideRemoteActions(
 			remoteBranches.map((branch) => ({ ...branch, trackedBy: trackers.get(branch.name) ?? [] })),
 			new Set(deletedLocals),
-			blocker
+			blocker,
+			{ includeEmpty: options.includeEmpty ?? false, named: new Set([...named, ...(picked ?? [])]) }
 		);
 	let warnedBlocker = false;
 	const block = (check: CleanedRemoteCheck | undefined) => {
@@ -821,12 +845,28 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 
 	block(analysis.checks.cleanedRemote);
 	const plannedBase = analysis.checks.base;
-	const decideOptions: DecideOptions = { force: options.force, discardChanges: options.discardChanges, named, defaultBranch: plannedBase?.name, scope };
+	const decideOptions: DecideOptions = {
+		force: options.force,
+		discardChanges: options.discardChanges,
+		includeEmpty: options.includeEmpty ?? false,
+		named,
+		defaultBranch: plannedBase?.name,
+		scope,
+	};
 	let branches = holdLocal(decideActions(planned, decideOptions));
 	let remoteBranches = holdRemote(decideRemote(analysis.remoteBranches, deleting(branches)));
 	let worktreesPruned: readonly string[] = apply ? [] : plan.prunable;
 	const report = (outcome: CleanOutcome, restored: readonly string[] = []): CleanRun => ({
-		report: buildReport(mode, analysis, remote, branches, cleaned === undefined ? undefined : { remote: cleaned, branches: remoteBranches ?? [] }, worktreesPruned, restored),
+		report: buildReport(
+			mode,
+			analysis,
+			remote,
+			branches,
+			cleaned === undefined ? undefined : { remote: cleaned, branches: remoteBranches ?? [] },
+			worktreesPruned,
+			restored,
+			plan.processes.check()
+		),
 		outcome,
 	});
 	const pending = () => hasPendingDeletions(branches, remoteBranches);
@@ -835,7 +875,6 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 		return report(pending() ? 'not-applied' : 'done');
 	}
 
-	let picked: ReadonlySet<string> | undefined;
 	const offered = pickItems(branches, options.force);
 	if (options.canPrompt && !options.yes && offered.length > 0) {
 		const answer = await ui.pickMany({ items: offered, title: 'Select branches to delete' });
@@ -878,7 +917,7 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	}
 
 	const recorder = createDeletionRecorder(context.deletionLog, 'sweep', output.appendLine);
-	branches = await applyDeletions(git, branches, shown, recorder);
+	branches = await applyDeletions(git, branches, shown, recorder, plan.processes);
 
 	// Remote branches go only with --yes, once the local ones they could be the upstream of are gone.
 	if (options.yes) {
@@ -913,6 +952,8 @@ export type BranchPlan = {
 	readonly cleaned?: string;
 	/** The cleaned remote's default branch, only ever read from the server: a local remote HEAD may be missing or out of date. */
 	readonly remoteDefault: string | null;
+	/** The processes running in the worktrees a deletion would remove, read again before each removal. */
+	readonly processes: WorktreeProcesses;
 };
 
 export type BranchReadOptions = Pick<CleanOptions, 'patterns' | 'fetch' | 'github' | 'protectedPatterns' | 'remote' | 'expect'>;
@@ -997,7 +1038,8 @@ export async function planBranches(context: CleanContext, options: BranchReadOpt
 	}
 	warnIfUnreachable(context, remote);
 	const ignored = new Map<string, readonly string[]>();
-	const planned = await inspectWorktrees(git, analysis.branches, named, ignored);
+	const processes = new WorktreeProcesses(context.scanProcesses);
+	const planned = await inspectWorktrees(git, analysis.branches, named, ignored, processes);
 	return {
 		analysis,
 		remote,
@@ -1010,6 +1052,7 @@ export async function planBranches(context: CleanContext, options: BranchReadOpt
 		configured,
 		...(cleaned === undefined ? {} : { cleaned }),
 		remoteDefault,
+		processes,
 	};
 }
 
@@ -1046,7 +1089,8 @@ export async function refreshBranches(
 		cleaned === undefined ? undefined : { name: cleaned, heads: remoteHeads, defaultBranch: remoteDefault }
 	);
 	const ignored = new Map<string, readonly string[]>();
-	const planned = await inspectWorktrees(git, analysis.branches, named, ignored);
+	plan.processes.refresh();
+	const planned = await inspectWorktrees(git, analysis.branches, named, ignored, plan.processes);
 	return { analysis, remote, planned, ignored, remoteDefault, worktreesPruned };
 }
 
@@ -1058,7 +1102,13 @@ export type Shown = {
 };
 
 /** Deletes every branch planned for deletion, in order, and records each deletion. */
-export async function applyDeletions(git: RunGit, branches: readonly CleanBranch[], shown: Shown, recorder: DeletionRecorder): Promise<CleanBranch[]> {
+export async function applyDeletions(
+	git: RunGit,
+	branches: readonly CleanBranch[],
+	shown: Shown,
+	recorder: DeletionRecorder,
+	processes?: WorktreeProcesses
+): Promise<CleanBranch[]> {
 	const asShown = new Map(shown.branches.map((branch) => [branch.name, branch]));
 	const applied: CleanBranch[] = [];
 	for (const branch of branches) {
@@ -1071,8 +1121,11 @@ export async function applyDeletions(git: RunGit, branches: readonly CleanBranch
 			path: linkedPath(asShown.get(branch.name) ?? branch),
 			ignored: shown.ignored.map((found) => found.get(branch.name)).find((files) => files !== undefined) ?? [],
 		};
-		const outcome = await deleteBranch(git, branch, seen, recorder);
-		if ('skip' in outcome) {
+		const outcome = await deleteBranch(git, branch, seen, recorder, processes);
+		if ('skip' in outcome && outcome.processes && branch.worktree) {
+			const worktree = { ...branch.worktree, processes: outcome.processes };
+			applied.push({ ...skipped(branch, outcome.skip, `stop ${describeProcesses(outcome.processes)} in ${quoteShellArg(worktree.path)}, then: ${branch.hint ?? ''}`), worktree });
+		} else if ('skip' in outcome) {
 			applied.push(skipped(branch, outcome.skip, branch.hint));
 		} else {
 			applied.push({ ...branch, result: outcome.result, hint: outcome.result === 'deleted' ? null : branch.hint, ...(outcome.error ? { error: outcome.error } : {}) });

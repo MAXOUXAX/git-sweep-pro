@@ -5,6 +5,7 @@ import {
 	nextCommand,
 	CLEAN_SCHEMA,
 	decideActions,
+	decideRemoteActions,
 	describeVerdict,
 	formatBranchLines,
 	formatSummary,
@@ -267,6 +268,68 @@ suite('clean plan', () => {
 		});
 	});
 
+	test('a worktree a process runs in is kept with its branch, whatever the flags', () => {
+		const inUse = branch('feature/busy', { worktree: { ...worktree({ path: '/wt/busy' }), processes: [{ pid: 42, command: 'node' }] } });
+		const idle = branch('feature/idle', { worktree: { ...worktree({ path: '/wt/idle' }), processes: [] } });
+		const unknown = branch('feature/unread', { worktree: { ...worktree({ path: '/wt/unread' }), processes: null } });
+		for (const flags of [{}, { force: true, discardChanges: true, includeEmpty: true, named: new Set(['feature/busy']) }]) {
+			assert.deepStrictEqual(actions(decide([inUse, idle, unknown], flags)), {
+				'feature/busy': ['skip', 'worktree-in-use', 'stop node (pid 42) in /wt/busy, then: gsp clean feature/busy --yes'],
+				'feature/idle': ['delete', 'squash-merged', 'gsp clean feature/idle --yes'],
+				// Processes that could not be read do not keep it: a lock does.
+				'feature/unread': ['delete', 'squash-merged', 'gsp clean feature/unread --yes'],
+			});
+		}
+		const many = decide([branch('feature/busy', { worktree: { ...worktree({ path: '/wt/busy' }), processes: [{ pid: 1, command: 'a' }, { pid: 2, command: 'b' }, { pid: 3, command: 'c' }, { pid: 4, command: 'd' }] } })]);
+		assert.deepStrictEqual(formatBranchLines({ branches: many, mode: 'plan' }), [
+			'skip    feature/busy  worktree /wt/busy is in use by 4 processes (a, pid 1; b, pid 2; c, pid 3; …) (squash-merged into origin/main) → stop 4 processes (a, pid 1; b, pid 2; c, pid 3; …) in /wt/busy, then: gsp clean feature/busy --yes',
+		]);
+		// Someone has to stop them: no flag would help, so not "more to clean with your approval".
+		assert.strictEqual(hasPendingDeletions(decide([inUse])), false);
+	});
+
+	test('a branch no commit was made on is kept, unless --include-empty, its name or the picker says otherwise', () => {
+		const fresh = branch('agent/task', { reason: 'empty', evidence: { method: 'ancestor', base: BASE }, worktree: worktree({ path: '/wt/agent' }) });
+		const merged = branch('feature/ff', { reason: 'merged', evidence: { method: 'ancestor', base: BASE } });
+		assert.deepStrictEqual(actions(decide([fresh, merged])), {
+			'agent/task': ['skip', 'never-committed', 'gsp clean agent/task --yes'],
+			'feature/ff': ['delete', 'merged', 'gsp clean feature/ff --yes'],
+		});
+		// --force lifts the merge proof only, not this.
+		assert.deepStrictEqual(actions(decide([fresh], { force: true }))['agent/task'].slice(0, 2), ['skip', 'never-committed']);
+		for (const options of [{ includeEmpty: true }, { named: new Set(['agent/task']) }, { picked: new Set(['agent/task']) }]) {
+			assert.deepStrictEqual(actions(decide([fresh], options))['agent/task'].slice(0, 2), ['delete', 'empty'], JSON.stringify(options));
+		}
+		// Kept like work in progress: not "more to clean with your approval", so agents are not invited to delete it.
+		assert.strictEqual(hasPendingDeletions(decide([fresh])), false);
+		const summary = summarize(decide([fresh, merged]), 'plan');
+		assert.deepStrictEqual([summary.neverCommitted, summary.reasons], [1, { merged: 1 }]);
+		assert.deepStrictEqual(summarize(decide([fresh, merged], { includeEmpty: true }), 'plan').reasons, { empty: 1, merged: 1 });
+	});
+
+	test('on the remote, a branch with no commit of its own goes only with --include-empty or its qualified name', () => {
+		const remote = (name: string, reason: 'empty' | 'merged') => ({
+			remote: 'origin',
+			name,
+			tip: 'a'.repeat(40),
+			verdict: 'dead' as const,
+			reason,
+			evidence: { method: 'ancestor' as const, base: BASE },
+			protected: null,
+			trackedBy: [],
+		});
+		const branches = [remote('agent/task', 'empty'), remote('feature/ff', 'merged')];
+		const decided = (options?: Parameters<typeof decideRemoteActions>[3]) =>
+			Object.fromEntries(decideRemoteActions(branches, new Set(), undefined, options).map((entry) => [entry.name, [entry.action, entry.reason, entry.hint]]));
+		assert.deepStrictEqual(decided(), {
+			'agent/task': ['skip', 'never-committed', 'gsp clean origin/agent/task --remote --yes'],
+			'feature/ff': ['delete', 'merged', 'gsp clean origin/feature/ff --remote --yes'],
+		});
+		assert.strictEqual(decided({ includeEmpty: true })['agent/task'][0], 'delete');
+		assert.strictEqual(decided({ named: new Set(['origin/agent/task']) })['agent/task'][0], 'delete');
+		assert.strictEqual(decided({ named: new Set(['agent/task']) })['agent/task'][0], 'skip', 'the local name does not name the remote branch');
+	});
+
 	test('the upstream of a kept branch is skipped, in turn, until nothing changes', () => {
 		// stack/1 <- stack/2 <- stack/3 (alive): each tracks the previous one.
 		const decided = decide([
@@ -328,7 +391,8 @@ suite('clean plan', () => {
 			return describeVerdict({ verdictReason: reason, evidence, unpushedCommits, upstream });
 		};
 		const ancestor = { method: 'ancestor', base: BASE } as const;
-		assert.strictEqual(describe({ reason: 'empty', evidence: ancestor }), 'already in origin/main', 'it had an upstream: it had commits once');
+		assert.strictEqual(describe({ reason: 'empty', evidence: ancestor }), 'no commits beyond origin/main', 'an upstream proves no commit: it may have been pushed empty');
+		assert.strictEqual(describe({ reason: 'merged', evidence: ancestor }), 'merged into origin/main');
 		assert.strictEqual(describe({ reason: 'empty', evidence: ancestor, upstream: null }), 'no commits beyond origin/main');
 		assert.strictEqual(
 			describe({ verdict: 'alive', reason: 'analysis-failed', evidence: { method: 'error', message: 'fatal: bad object' } }),
@@ -363,6 +427,7 @@ suite('clean plan', () => {
 			github: { used: false, reason: 'disabled' },
 			durationMs: 0,
 			remote: mode === 'apply' ? { source: 'fetch', remotes: ['origin'] } : { source: 'ls-remote', remotes: ['origin'] },
+			processes: { used: false, reason: 'not-needed' },
 		},
 		branches,
 		worktreesPruned,
@@ -373,7 +438,8 @@ suite('clean plan', () => {
 	test('human output: one line per branch, then one honest summary line', () => {
 		const decided = decide(
 			[
-				branch('feature/b', { reason: 'empty', evidence: { method: 'ancestor', base: BASE } }),
+				branch('feature/new', { reason: 'empty', evidence: { method: 'ancestor', base: BASE }, worktree: worktree({ path: '/wt/new' }) }),
+				branch('feature/b', { reason: 'merged', evidence: { method: 'ancestor', base: BASE } }),
 				branch('feature/a', { worktree: worktree({ path: '/wt/a' }) }),
 				branch('main', { verdict: 'alive', reason: 'default-branch', protected: { by: 'default-branch' }, evidence: null }),
 				branch('feature/here', { current: true }),
@@ -383,13 +449,18 @@ suite('clean plan', () => {
 		);
 		const plan = report(decided, 'plan', [], ['/wt/old']);
 		assert.deepStrictEqual(formatBranchLines(plan), [
-			'delete  feature/b     already in origin/main',
+			'delete  feature/b     merged into origin/main',
 			'delete  feature/a     squash-merged into origin/main, removes worktree /wt/a',
 			'skip    main          default branch',
 			'skip    feature/here  current branch (squash-merged into origin/main) → gsp post-pr feature/here --yes',
 			'skip    feature/gone  needs --force (upstream origin/feature/gone is gone, 2 commits found nowhere else) → gsp clean feature/gone --yes --force',
+			// Apart from merged work, last among the skipped: it may be an agent starting.
+			'skip    feature/new   no commit made on it yet: it may be work just starting, needs --include-empty or its name (no commits beyond origin/main) → gsp clean feature/new --yes',
 		]);
-		assert.strictEqual(formatSummary(plan), '2 to delete (1 empty, 1 squash-merged) · 3 skipped (1 needs --force) · 1 worktree registration to prune');
+		assert.strictEqual(
+			formatSummary(plan),
+			'2 to delete (1 merged, 1 squash-merged) · 4 skipped (1 needs --force, 1 never committed) · 1 worktree registration to prune'
+		);
 
 		const applied = decided.map((entry): CleanBranch => {
 			if (entry.name === 'feature/a') {
@@ -404,7 +475,7 @@ suite('clean plan', () => {
 		]);
 		assert.strictEqual(
 			formatSummary(done),
-			'1 deleted (1 squash-merged) · 1 failed · 3 skipped (1 needs --force) · 1 worktree registration pruned · restore with gsp restore feature/a'
+			'1 deleted (1 squash-merged) · 1 failed · 4 skipped (1 needs --force, 1 never committed) · 1 worktree registration pruned · restore with gsp restore feature/a'
 		);
 	});
 
@@ -422,7 +493,7 @@ suite('clean plan', () => {
 
 	test('a forced deletion says so, and a half-done one says what is left', () => {
 		const [forced] = decide([branch('feature/gone', { reason: 'upstream-gone', unpushedCommits: 1 })], { force: true });
-		const halfDone: CleanBranch = { ...forced, worktree: { ...worktree({ path: '/wt/g' }), ignoredFiles: null, submodules: null, changedFiles: null }, result: 'worktree-removed', error: 'boom' };
+		const halfDone: CleanBranch = { ...forced, worktree: { ...worktree({ path: '/wt/g' }), ignoredFiles: null, submodules: null, processes: null, changedFiles: null }, result: 'worktree-removed', error: 'boom' };
 		assert.deepStrictEqual(formatBranchLines(report([forced], 'plan')), [
 			'delete  feature/gone  upstream origin/feature/gone is gone, 1 commit found nowhere else, forced',
 		]);
@@ -456,7 +527,7 @@ suite('clean plan', () => {
 				unpushedCommits: 0,
 				upstream: 'origin/feature/a',
 				upstreamState: 'gone',
-				worktree: { path: '/wt/a', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: null, submodules: null, changedFiles: null },
+				worktree: { path: '/wt/a', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: null, submodules: null, processes: null, changedFiles: null },
 				protected: null,
 				needsForce: false,
 				hint: null,
@@ -479,7 +550,7 @@ suite('clean plan', () => {
 				hint: 'gsp clean feature/gone --yes --force',
 			},
 		]);
-		assert.deepStrictEqual(json.summary, { delete: 1, deleted: 1, failed: 0, skipped: 1, kept: 0, needsForce: 1, needsDiscardChanges: 0, reasons: { 'squash-merged': 1 } });
+		assert.deepStrictEqual(json.summary, { delete: 1, deleted: 1, failed: 0, skipped: 1, kept: 0, needsForce: 1, needsDiscardChanges: 0, neverCommitted: 0, reasons: { 'squash-merged': 1 } });
 		assert.strictEqual(json.restore, 'gsp restore feature/a');
 		assert.deepStrictEqual(json.checks.remote, { source: 'fetch', remotes: ['origin'] });
 	});

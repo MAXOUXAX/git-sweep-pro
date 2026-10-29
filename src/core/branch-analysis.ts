@@ -26,8 +26,9 @@ export type UpstreamState = 'tracking' | 'gone' | 'none';
 
 /**
  * Why a branch is dead:
- * - `empty`: it points at a commit of the base's own history, so it adds nothing;
- * - `merged`: its tip is reachable from the base (a merge commit brought it in);
+ * - `empty`: it points at a commit of the base's own history, and nothing shows a commit was ever made on it:
+ *   it may be work just starting (see {@link hasOwnCommit}). Only `--include-empty` or naming it deletes it;
+ * - `merged`: its tip is reachable from the base: a merge commit brought it in, or the base fast-forwarded over commits made on it;
  * - `rebase-merged`: each of its commits has exactly the same patch on the base, whitespace included, and its merges add nothing;
  * - `squash-merged`: the base reached the exact content of every file it changed;
  * - `pr-merged`: its tip is the head of a pull request merged into the default branch, or behind it;
@@ -262,6 +263,8 @@ const MAX_PROOF_FILES = 1000;
 const MAX_SQUASH_CANDIDATES = 200;
 /** Base commits searched for the first-parent history (`empty` vs `merged`). */
 const MAX_FIRST_PARENT = 10000;
+/** Commits made on a branch, newest first, checked against its tip (`empty` vs `merged`). */
+const MAX_OWN_COMMITS = 20;
 /** Integration proofs give up beyond this many unique commits. */
 const MAX_INTEGRATION_COMMITS = 50;
 /** Concurrent branch classifications; each runs a few Git commands. */
@@ -521,7 +524,7 @@ class Prover {
 	private readonly verdicts = new Map<string, Promise<Verdict>>();
 
 	constructor(
-		private readonly git: RunGit,
+		readonly git: RunGit,
 		readonly base: AnalysisBase,
 		private readonly github: GitHubSignal | undefined
 	) {}
@@ -954,6 +957,46 @@ async function proveTip(git: RunGit, prover: Prover, tip: string, isAncestor: bo
 }
 
 /**
+ * Reflog entries that record a commit made on the branch itself, rather than
+ * a move to a commit made elsewhere (creation, fast-forward, reset): Git
+ * writes these messages, in English whatever the locale. A rebase counts when
+ * it moved the branch past the commit it rebased onto (it replayed commits).
+ */
+const OWN_COMMIT = /^(commit|cherry-pick|revert|am)\b|^(merge|pull)\b.*: Merge made by /;
+const REBASE_FINISH = /^rebase\b.*\bfinish(ed)?\b.* onto ([0-9a-f]+)$/;
+
+/**
+ * Whether the reflog of `ref` shows a commit made on that branch which its
+ * `tip` still contains: the branch carried work of its own, now in the base.
+ * Conservative: a missing, expired or unreadable reflog
+ * (`core.logAllRefUpdates` off, a bare repository, `git reflog expire`) proves
+ * nothing, and neither do commits the branch dropped since (reset onto the
+ * base to start over). Read-only.
+ */
+export async function hasOwnCommit(git: RunGit, ref: string, tip: string): Promise<boolean> {
+	const entries = await git(['log', '--walk-reflogs', '--format=%H%x09%gs', ref, '--']).then(
+		(result) => lines(result.stdout),
+		() => []
+	);
+	const own = entries.flatMap((entry) => {
+		const tab = entry.indexOf('\t');
+		const [commit, message] = [entry.slice(0, tab), entry.slice(tab + 1)];
+		const onto = REBASE_FINISH.exec(message)?.[2];
+		return OWN_COMMIT.test(message) || (onto !== undefined && !commit.startsWith(onto)) ? [commit] : [];
+	});
+	for (const commit of [...new Set(own)].slice(0, MAX_OWN_COMMITS)) {
+		const contained = await git(['merge-base', '--is-ancestor', commit, tip]).then(
+			() => true,
+			() => false
+		);
+		if (contained) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
  * A branch's verdict: its tip's (shared by every branch at the same commit),
  * unless it is the default branch, or its upstream is gone and nothing proves it.
  */
@@ -969,6 +1012,10 @@ async function classify(prover: Prover | undefined, ref: Ref, name: string, ance
 		return { verdict: 'alive', reason: 'default-branch', evidence: null };
 	}
 	const verdict = await prover.verdictOf(ref.oid, ancestors.has(ref.name));
+	// No commit of its own on the base's line: finished work only if commits were made on this branch.
+	if (verdict.reason === 'empty' && (await hasOwnCommit(prover.git, ref.name, ref.oid))) {
+		return { ...verdict, reason: 'merged' };
+	}
 	return verdict.verdict === 'alive' && gone ? gone : verdict;
 }
 
