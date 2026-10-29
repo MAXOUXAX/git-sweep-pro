@@ -232,6 +232,8 @@ export type AnalyzeContext = {
 export type AnalyzeOptions = {
 	/** Only classify the branches matching one of these patterns (`*` and `?` wildcards); all by default. */
 	readonly branches?: readonly string[];
+	/** Those of `branches` that select only the remote's branches, never a local branch of the same name. */
+	readonly remoteOnly?: readonly string[];
 	/** Protected-branch patterns, added to the `git-sweep-pro.protected` config. */
 	readonly protectedPatterns?: readonly string[];
 	/** Set to false to skip GitHub (`--no-github`). */
@@ -1047,7 +1049,8 @@ export async function analyzeBranches(context: AnalyzeContext, options: AnalyzeO
 	const base = resolveBase(refs, config, options.base);
 	const locals = [...refs.values()].filter((ref) => ref.name.startsWith('refs/heads/'));
 	const nameOf = (ref: Ref) => ref.name.slice('refs/heads/'.length);
-	const selected = options.branches ? locals.filter((ref) => options.branches?.some((pattern) => branchMatchesPattern(nameOf(ref), pattern))) : locals;
+	const localPatterns = options.branches?.filter((pattern) => !options.remoteOnly?.includes(pattern));
+	const selected = localPatterns ? locals.filter((ref) => localPatterns.some((pattern) => branchMatchesPattern(nameOf(ref), pattern))) : locals;
 
 	const [ancestors, github] = await Promise.all([
 		base

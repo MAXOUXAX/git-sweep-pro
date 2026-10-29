@@ -257,6 +257,23 @@ suite('clean --remote (real git)', function () {
 		assert.ok(remoteHas('feature/evil'));
 	});
 
+	test('--expect <remote>/<name> selects the branch on the remote, never a local branch of that name', async () => {
+		pushBranch('feature/sq', 's.txt', ['s\n']);
+		squashIntoMain('feature/sq');
+		// A dead local branch literally named "origin/feature/sq".
+		git(['branch', 'origin/feature/sq', 'main'], fx.repo);
+		const tip = git(['rev-parse', 'refs/remotes/origin/feature/sq'], fx.repo).trim();
+
+		const { report } = await runCleanWorkflow(contextFor().context, {
+			...APPLY,
+			patterns: ['origin/feature/sq'],
+			expect: new Map([['origin/feature/sq', tip]]),
+		});
+		assert.deepStrictEqual(actions(report.remoteBranches)['feature/sq'], ['delete', 'rebase-merged', null]);
+		assert.deepStrictEqual(report.branches, []);
+		assert.ok(git(['branch', '--list', 'origin/feature/sq'], fx.repo).trim().length > 0);
+	});
+
 	test('the head of an open pull request is kept, even when its content is on the default branch', async () => {
 		git(['remote', 'set-url', 'origin', GITHUB_URL], fx.repo);
 		git(['config', `url.${fx.remote}.insteadOf`, GITHUB_URL], fx.repo);

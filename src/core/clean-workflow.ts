@@ -940,6 +940,8 @@ function analyse(
 				{ git: context.git, ...(context.gh ? { gh: context.gh } : {}), ...(context.ssh ? { ssh: context.ssh } : {}) },
 				{
 					...(options.patterns.length > 0 ? { branches: options.patterns } : {}),
+					// `--expect origin/x=…` names the branch on the cleaned remote, not a local branch called "origin/x".
+					...(cleaned ? { remoteOnly: [...(options.expect?.keys() ?? [])].filter((name) => name.startsWith(`${cleaned.name}/`)) } : {}),
 					protectedPatterns: options.protectedPatterns,
 					github: options.github,
 					fetched,
