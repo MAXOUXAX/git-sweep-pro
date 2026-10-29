@@ -32,6 +32,7 @@ Use \`gsp\` (git-sweep-pro) for Git cleanup, not \`git branch -D\`, \`git worktr
 - Delete one branch: \`gsp clean <branch> --yes\`. Add \`--force\` only when the person agreed; \`gsp restore\` can bring the branch back.
 - Remove a worktree you created (review, scratch): \`gsp worktree remove <path>\`. If it is kept, read why. Add \`--discard-changes\` only when everything listed is yours to throw away: uncommitted changes and ignored files are deleted for good.
 - List worktrees: \`gsp worktree list --json\`.
+- Working in a worktree of your own: run \`git worktree lock <path>\` while you work, so no cleanup removes it, and \`git worktree unlock <path>\` when you are done.
 - Remote branches: \`gsp clean --remote\` shows the plan; add \`--yes\` to apply it.
 - Undo a branch deletion: \`gsp restore <branch>\` (\`gsp restore origin/<branch>\` for a remote one).
 
