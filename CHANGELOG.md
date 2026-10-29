@@ -4,6 +4,13 @@ All notable changes to the "git-sweep-pro" extension are documented in this file
 
 This project adheres to [Semantic Versioning](https://semver.org) and the changelog is generated automatically from [Conventional Commits](https://www.conventionalcommits.org).
 
+# [2.1.0](https://github.com/MAXOUXAX/git-sweep-pro/compare/v2.0.1...v2.1.0) (2026-10-29)
+
+
+### Features
+
+* keep new branches and worktrees in use out of the sweep ([#37](https://github.com/MAXOUXAX/git-sweep-pro/issues/37)) ([f8b36c2](https://github.com/MAXOUXAX/git-sweep-pro/commit/f8b36c2d2542d58741c7fe85ba2b20b50d5b39e6))
+
 ## [2.0.1](https://github.com/MAXOUXAX/git-sweep-pro/compare/v2.0.0...v2.0.1) (2026-10-29)
 
 
