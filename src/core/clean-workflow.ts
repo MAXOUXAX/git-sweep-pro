@@ -909,7 +909,8 @@ export async function runCleanWorkflow(context: CleanContext, options: CleanOpti
 	({ analysis, remote, planned, worktreesPruned } = refreshed);
 	// The worktrees as the plan showed them, to check them against before removing one.
 	const shown = { branches, ignored: [plan.ignored, refreshed.ignored] };
-	branches = holdToPlan(branches, decideActions(planned, decideOptions), remote, !options.yes, scope);
+	// A branch no commit was made on, once picked, stays lifted after the fetch.
+	branches = holdToPlan(branches, decideActions(planned, { ...decideOptions, pickedBefore: picked }), remote, !options.yes, scope);
 	const held = holdToBase(branches, plannedBase, analysis.checks.base, scopedCommand(scope, scope.patterns, ['--dry-run']));
 	branches = holdLocal(held.branches);
 	if (held.message) {

@@ -269,6 +269,8 @@ export type DecideOptions = {
 	readonly defaultBranch: string | undefined;
 	/** Branches picked interactively; the other candidates are skipped as `not-selected`. Undefined: no picker. */
 	readonly picked?: ReadonlySet<string>;
+	/** Branches picked before the fetch: only lifts `never-committed`, every other rule applies again. */
+	readonly pickedBefore?: ReadonlySet<string>;
 	/** The options of the run that hints keep, as `next` does. */
 	readonly scope?: HintScope;
 };
@@ -307,7 +309,7 @@ function blockerOf(branch: PlannedBranch, options: DecideOptions): Blocker | und
 		return { reason: 'delete-merged-false', hint: null };
 	}
 	// Agents create a branch and its worktree before their first commit: no proof the work is finished.
-	if (branch.verdict === 'dead' && branch.reason === 'empty' && !options.includeEmpty && !options.named.has(branch.name) && !options.picked?.has(branch.name)) {
+	if (branch.verdict === 'dead' && branch.reason === 'empty' && !options.includeEmpty && !options.named.has(branch.name) && !options.picked?.has(branch.name) && !options.pickedBefore?.has(branch.name)) {
 		return { reason: 'never-committed', hint: gspCommand(options.scope, 'clean', [branch.name], '--yes') };
 	}
 	const worktree = branch.worktree && !branch.worktree.prunable ? branch.worktree : null;

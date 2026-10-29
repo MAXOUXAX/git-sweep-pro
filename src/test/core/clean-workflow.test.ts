@@ -117,6 +117,17 @@ suite('clean workflow (real git)', function () {
 		assert.ok(!branchExists(fx.repo, 'feature/a'));
 	});
 
+	test('a branch no commit was made on, picked in the picker, goes with its worktree', async () => {
+		const wt = path.join(fx.dir, 'wt');
+		git(['worktree', 'add', '-q', '-b', 'agent/task', wt, 'main'], fx.repo);
+		const fake = contextFor({ pickMany: (items) => items.filter((item) => item.label === 'agent/task').map((item) => item.label) });
+		const { report, outcome } = await runCleanWorkflow(fake.context, { ...APPLY, yes: false, canPrompt: true });
+		assert.ok(fake.pickManyRequests[0].items.some((item) => item.label === 'agent/task'));
+		assert.deepStrictEqual([report.branches.find((branch) => branch.name === 'agent/task')?.result, outcome], ['deleted', 'done']);
+		assert.ok(!branchExists(fx.repo, 'agent/task'));
+		assert.ok(!fs.existsSync(wt));
+	});
+
 	test('when the fetch fails, a branch proven only by its gone upstream is not deleted', async () => {
 		// Its commit is on another remote branch: dead, nothing unpushed, but only remote-tracking refs say so.
 		git(['checkout', '-q', '-b', 'feature/x'], fx.repo);
