@@ -7,7 +7,7 @@ import { branch, cleanDocument, createFakeClient, createFakeUi, deps, ok, remote
 
 const OPTIONS: CleanCommandOptions = { root: '/repo', readOnly: false, force: false, remote: false, confirm: true };
 
-const squashed = branch({ name: 'feature/squash', worktree: { path: '/work/wt-squash', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false, changedFiles: null } });
+const squashed = branch({ name: 'feature/squash', worktree: { path: '/work/wt-squash', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false, processes: null, changedFiles: null } });
 const empty = branch({ name: 'feature/empty', reason: 'empty', verdictReason: 'empty' });
 const unpushed = branch({
 	name: 'feature/unpushed',
@@ -52,7 +52,7 @@ suite('clean model', () => {
 			name: 'feature/ignored',
 			action: 'skip',
 			reason: 'ignored-files',
-			worktree: { path: '/work/wt-ignored', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 4, sample: ['.env', 'notes/', 'a.key', 'b.key'] }, submodules: false, changedFiles: null },
+			worktree: { path: '/work/wt-ignored', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 4, sample: ['.env', 'notes/', 'a.key', 'b.key'] }, submodules: false, processes: null, changedFiles: null },
 		});
 		const sections = buildCleanSections(cleanDocument([unpushed, ignored, dirty]), { force: true });
 		assert.deepStrictEqual(sections.map((s) => [s.title, s.entries.map((e) => [e.arg, e.selectable, e.picked, e.forced])]), [

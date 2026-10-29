@@ -3,7 +3,7 @@ import { COPY_COMMAND, OPEN_MAIN_CHECKOUT, SHOW_OUTPUT, UNDO } from '../../vscod
 import { cleanArgs, describePostPrResult, postPrPreview, runPostPrCommand } from '../../vscode/post-pr-command';
 import { branch, cleanDocument, createFakeClient, createFakeUi, deps, ok, postPrDocument } from './fakes';
 
-const wtWorktree = { path: '/work/wt-x', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false, changedFiles: null };
+const wtWorktree = { path: '/work/wt-x', isMain: false, dirty: false, locked: false, prunable: false, inProgress: null, ignoredFiles: { count: 0, sample: [] }, submodules: false, processes: null, changedFiles: null };
 const merged = branch({ name: 'feature/x', worktree: wtWorktree });
 const plan = postPrDocument({
 	branch: merged,
