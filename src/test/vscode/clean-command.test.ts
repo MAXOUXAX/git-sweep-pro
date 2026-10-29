@@ -85,15 +85,21 @@ suite('clean model', () => {
 
 	test('remote branches get their own sections, named by remote', () => {
 		const document = cleanDocument([], {
-			remoteBranches: [remoteBranch({ name: 'feature/a' }), remoteBranch({ name: 'release/1', action: 'skip', reason: 'protected', protected: { by: 'pattern', pattern: 'release/*' } })],
+			remoteBranches: [
+				remoteBranch({ name: 'feature/a' }),
+				remoteBranch({ name: 'agent/task', action: 'skip', reason: 'never-committed', verdictReason: 'empty' }),
+				remoteBranch({ name: 'release/1', action: 'skip', reason: 'protected', protected: { by: 'pattern', pattern: 'release/*' } }),
+			],
 			checks: { ...cleanDocument([]).checks, cleanedRemote: { remote: 'origin', defaultBranch: 'main', github: null } } as never,
 		});
 		const sections = buildCleanSections(document, { force: false });
-		assert.deepStrictEqual(sections.map((s) => [s.title, s.entries.map((e) => [e.arg, e.label, e.selectable])]), [
-			['To delete on origin', [['origin/feature/a', '$(cloud) origin/feature/a', true]]],
-			['Skipped on origin', [['origin/release/1', '$(cloud) origin/release/1', false]]],
+		assert.deepStrictEqual(sections.map((s) => [s.title, s.entries.map((e) => [e.arg, e.label, e.selectable, e.picked])]), [
+			['To delete on origin', [['origin/feature/a', '$(cloud) origin/feature/a', true, true]]],
+			['No commits yet on origin', [['origin/agent/task', '$(cloud) origin/agent/task', true, false]]],
+			['Skipped on origin', [['origin/release/1', '$(cloud) origin/release/1', false, false]]],
 		]);
-		assert.strictEqual(sections[1].entries[0].detail, 'Protected by "release/*"');
+		assert.strictEqual(sections[1].entries[0].detail, 'May be work just starting');
+		assert.strictEqual(sections[2].entries[0].detail, 'Protected by "release/*"');
 		assert.deepStrictEqual(confirmRemote(sections[0].entries, 'origin'), {
 			message: 'Delete feature/a on origin?',
 			detail: 'This deletes it for everyone who uses origin. You can push it back from the notification, or with gsp restore.',
