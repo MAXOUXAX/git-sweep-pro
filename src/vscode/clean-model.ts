@@ -18,7 +18,7 @@ export type CleanEntry = {
 	readonly label: string;
 	readonly description: string;
 	readonly detail?: string;
-	/** Can be picked: planned deletions, and in force mode the branches only a forced delete removes. */
+	/** Can be picked: planned deletions, branches no commit was made on, and in force mode the branches only a forced delete removes. */
 	readonly selectable: boolean;
 	readonly picked: boolean;
 	/** Picking it needs `--force`. */
