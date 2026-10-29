@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { lsofScan, parseLsof, scanProcesses, WorktreeProcesses, type ProcessScan } from '../../core/worktree-processes';
+import { lsofScan, parseLsof, scanProcesses, withDeadline, WorktreeProcesses, type ProcessScan } from '../../core/worktree-processes';
 
 const running = (pid: number, cwd: string, command = 'node', ppid = 1) => ({ pid, ppid, command, cwd });
 
@@ -40,6 +40,13 @@ suite('worktree processes', () => {
 		});
 		assert.deepStrictEqual(lsofScan(failure('Command failed: lsof', { code: 1 }), partial), { ok: true, processes: [running(12, '/work/wt', 'zsh')] });
 		assert.deepStrictEqual(lsofScan(failure('spawn lsof ENOENT', { code: 'ENOENT' }), ''), { ok: false, reason: 'lsof-missing' });
+	});
+
+	test('a scan past its deadline gives up with the late result; one in time keeps its own', async () => {
+		const late = () => 'late';
+		assert.strictEqual(await withDeadline(new Promise<string>(() => {}), 10, late), 'late');
+		assert.strictEqual(await withDeadline(Promise.resolve('scanned'), 1000, late), 'scanned');
+		await assert.rejects(withDeadline(Promise.reject(new Error('no /proc')), 1000, late), /no \/proc/);
 	});
 
 	test('finds the processes inside a worktree, its subfolders included, never a sibling folder', async () => {

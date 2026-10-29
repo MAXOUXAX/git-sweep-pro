@@ -22,8 +22,17 @@ export type ProcessScan =
 /** Lists the processes and their current directory. */
 export type ScanProcesses = () => Promise<ProcessScan>;
 
-/** lsof walks every process: past this, the check gives up rather than hold the sweep. */
-const LSOF_TIMEOUT_MS = 5000;
+/** lsof and /proc walk every process: past this, the check gives up rather than hold the sweep. */
+const SCAN_TIMEOUT_MS = 5000;
+
+/** `work`, or `late()` once `ms` have passed without it settling. */
+export function withDeadline<T>(work: Promise<T>, ms: number, late: () => T): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	const deadline = new Promise<T>((resolve) => {
+		timer = setTimeout(() => resolve(late()), ms);
+	});
+	return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
 
 /** Parses `lsof -F pRcn` output: a `p<pid>` line opens a process, then `R<ppid>`, `c<command>` and `n<cwd>`. */
 export function parseLsof(output: string): RunningProcess[] {
@@ -72,7 +81,7 @@ export function lsofScan(error: (Error & { code?: unknown; killed?: boolean }) |
 		return { ok: false, reason: 'lsof-missing' };
 	}
 	if (error?.killed) {
-		return { ok: false, reason: 'failed', detail: `lsof took more than ${LSOF_TIMEOUT_MS / 1000} s` };
+		return { ok: false, reason: 'failed', detail: `lsof took more than ${SCAN_TIMEOUT_MS / 1000} s` };
 	}
 	const processes = parseLsof(stdout);
 	if (error && (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || processes.length === 0)) {
@@ -84,7 +93,7 @@ export function lsofScan(error: (Error & { code?: unknown; killed?: boolean }) |
 function scanWithLsof(): Promise<ProcessScan> {
 	return new Promise((resolve) => {
 		// -d cwd: only the current directory; -n -P: no name lookups; -w: no warnings.
-		execFile('lsof', ['-n', '-P', '-w', '-d', 'cwd', '-F', 'pRcn'], { timeout: LSOF_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
+		execFile('lsof', ['-n', '-P', '-w', '-d', 'cwd', '-F', 'pRcn'], { timeout: SCAN_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
 			resolve(lsofScan(error, stdout));
 		});
 	});
@@ -119,7 +128,8 @@ export const scanProcesses: ScanProcesses = async () => {
 	}
 	if (process.platform === 'linux') {
 		try {
-			return await scanProc();
+			// Past the deadline, lsof would be as slow: the scan failed.
+			return await withDeadline(scanProc(), SCAN_TIMEOUT_MS, () => ({ ok: false, reason: 'failed', detail: `/proc took more than ${SCAN_TIMEOUT_MS / 1000} s` }));
 		} catch {
 			// No /proc mounted: lsof may still work.
 		}
