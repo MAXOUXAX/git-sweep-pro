@@ -68,9 +68,10 @@ merged, squash- or rebase-merged into the default branch, it is the head of
 a merged pull request, or its upstream is gone and every commit is on a
 remote. Branches with work found nowhere else need --force.
 
-A branch with no commit of its own (its reflog shows none made on it) may
-be work just starting, such as an agent's new worktree: it is kept unless
-it is named, picked, or --include-empty is given.
+A branch with no commit of its own (none made on it since it was created
+or last reset is in its tip) may be work just starting, such as an agent's
+new worktree: it is kept unless it is named, picked, or --include-empty is
+given.
 
 Never deleted: the default branch, protected branches, a branch named
 main, master, trunk or develop unless named exactly, branches with
