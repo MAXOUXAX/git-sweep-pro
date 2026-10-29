@@ -247,11 +247,15 @@ suite('clean --remote (real git)', function () {
 		git(['merge', '-q', '--no-ff', '--no-commit', 'main'], fx.repo);
 		commitFile(fx.repo, 'resolution.txt', 'only in the merge\n', 'merge main');
 		git(['push', '-q', 'origin', 'feature/evil'], fx.repo);
+		// The plan reads the tip with ls-remote; no ref holds it here.
+		git(['update-ref', '-d', 'refs/remotes/origin/feature/evil'], fx.repo);
 		git(['checkout', '-q', 'main'], fx.repo);
 		git(['cherry-pick', 'feature/evil^1'], fx.repo);
 		git(['push', '-q', 'origin', 'main'], fx.repo);
 		git(['branch', '-q', '-D', 'feature/evil'], fx.repo);
 
+		const { report: planned } = await runCleanWorkflow(contextFor().context, PLAN);
+		assert.deepStrictEqual(actions(planned.remoteBranches)['feature/evil'], ['keep', 'unmerged-commits', null]);
 		const { report } = await runCleanWorkflow(contextFor().context, APPLY);
 		assert.deepStrictEqual(actions(report.remoteBranches)['feature/evil'], ['keep', 'unmerged-commits', null]);
 		assert.ok(remoteHas('feature/evil'));
