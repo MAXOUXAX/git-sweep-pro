@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import type { RunGit } from '../../core/git-command';
-import { isRegenerable, listIgnoredFiles } from '../../core/ignored-files';
+import { HUSKY_FILES, isRegenerable, listIgnoredFiles } from '../../core/ignored-files';
 import { commitFile, createRepoFixture, type RepoFixture } from '../cli/git-fixture';
 
 const run = promisify(execFile);
@@ -50,5 +50,41 @@ suite('ignored files', () => {
 		for (const regenerable of ['.vscode-test/', '.expo/', 'storybook-static/', '.angular/', '.nx/', '.yarn/cache/', '.terraform/', '.eslintcache']) {
 			assert.strictEqual(isRegenerable(regenerable), true, regenerable);
 		}
+	});
+
+	test("husky's generated hooks are regenerable only in a .husky/_ folder holding husky's .gitignore, and only the files husky writes", async () => {
+		const { repo } = fixture;
+		commitFile(repo, '.gitignore', ['/whole/.husky/_/', '/bare/.husky/_/'].join('\n'), 'ignore');
+		const writeHusky = (folder: string, marker = '*') => {
+			fs.mkdirSync(path.join(repo, folder), { recursive: true });
+			for (const name of HUSKY_FILES) {
+				fs.writeFileSync(path.join(repo, folder, name), name === '.gitignore' ? marker : '#!/usr/bin/env sh\n', { mode: 0o755 });
+			}
+		};
+		writeHusky('.husky/_');
+		writeHusky('whole/.husky/_');
+		writeHusky('web/.husky/_');
+		fs.writeFileSync(path.join(repo, 'web/.husky/_/notes.md'), 'mine');
+		fs.writeFileSync(path.join(repo, 'web/.husky/_/.env.local'), 'TOKEN=1');
+		writeHusky('tools/_');
+		for (const name of HUSKY_FILES.filter((name) => name !== '.gitignore' && name !== 'pre-commit')) {
+			fs.rmSync(path.join(repo, 'tools/_', name));
+		}
+		writeHusky('bare/.husky/_', 'node_modules');
+		writeHusky('link/.husky/_');
+		fs.rmSync(path.join(repo, 'link/.husky/_/h'));
+		fs.symlinkSync(path.join(repo, 'web/.husky/_/notes.md'), path.join(repo, 'link/.husky/_/h'));
+
+		assert.deepStrictEqual(await listIgnoredFiles(gitIn(repo), repo), [
+			'bare/.husky/_/',
+			'link/.husky/_/h',
+			'tools/_/.gitignore',
+			'tools/_/pre-commit',
+			'web/.husky/_/.env.local',
+			'web/.husky/_/notes.md',
+		]);
+
+		fs.writeFileSync(path.join(repo, 'whole/.husky/_/notes.md'), 'mine');
+		assert.ok((await listIgnoredFiles(gitIn(repo), repo)).includes('whole/.husky/_/'), 'a file husky does not write keeps the whole folder');
 	});
 });

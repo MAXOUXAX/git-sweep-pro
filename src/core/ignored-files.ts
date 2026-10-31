@@ -54,6 +54,33 @@ export const REGENERABLE_FOLDERS: readonly string[] = [
 /** Files a tool recreates, matched against the file name. */
 export const REGENERABLE_FILES: readonly string[] = ['*.tsbuildinfo', '.DS_Store', '.eslintcache'];
 
+/**
+ * The files husky writes in `.husky/_/` on every install (`"prepare": "husky"`),
+ * from husky 8 to 9.1: a `.gitignore` holding `*`, `husky.sh`, and in husky 9
+ * the `h` runner and one stub per Git hook. Only these names count, and only in
+ * a folder carrying husky's `.gitignore` (see `isHuskyOutput`). Documented in
+ * the README.
+ */
+export const HUSKY_FILES: readonly string[] = [
+	'.gitignore',
+	'husky.sh',
+	'h',
+	'pre-commit',
+	'pre-merge-commit',
+	'prepare-commit-msg',
+	'commit-msg',
+	'post-commit',
+	'applypatch-msg',
+	'pre-applypatch',
+	'post-applypatch',
+	'pre-rebase',
+	'post-rewrite',
+	'post-checkout',
+	'post-merge',
+	'pre-push',
+	'pre-auto-gc',
+];
+
 /** Names that look like secrets, matched against the file name, ignoring case: never regenerable, wherever they are. */
 export const SECRET_FILES: readonly string[] = ['.env', '.env.*', '*.pem', '*.key', '*credentials*', '*secret*', '.npmrc', '.netrc'];
 
@@ -132,6 +159,30 @@ function regenerableFolderOf(segments: readonly string[]): string | undefined {
 	});
 }
 
+/**
+ * True when `entry`, an ignored path of the worktree at `worktreePath`, is
+ * husky's generated hooks folder or a file in it: a regular file with one of
+ * `HUSKY_FILES`' names, in a `.husky/_/` folder (at any depth) whose
+ * `.gitignore` is the `*` husky writes there. A folder named so without that
+ * `.gitignore`, a file husky does not write, a subfolder or a link keeps the
+ * worktree. Git reports the folder whole (`.husky/_/`) when another
+ * `.gitignore` ignores it, else each file in it.
+ */
+function isHuskyOutput(worktreePath: string, entry: string): boolean {
+	const segments = entry.split('/').filter(Boolean);
+	const folder = entry.endsWith('/') ? segments : segments.slice(0, -1);
+	if (folder.at(-1) !== '_' || folder.at(-2) !== '.husky') {
+		return false;
+	}
+	const dir = path.join(worktreePath, ...folder);
+	const isFile = (name: string) => fs.lstatSync(path.join(dir, name), { throwIfNoEntry: false })?.isFile() ?? false;
+	if (!isFile('.gitignore') || !/^\*\r?\n?$/.test(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'))) {
+		return false;
+	}
+	const names = entry.endsWith('/') ? fs.readdirSync(dir) : [segments.at(-1) ?? ''];
+	return names.every((name) => HUSKY_FILES.includes(name) && !isSecretLike(name) && isFile(name));
+}
+
 /** Escapes the characters a `:(glob)` pathspec gives a meaning to. */
 const globLiteral = (path: string) => path.replace(/[*?[\]\\]/g, '\\$&');
 
@@ -176,7 +227,7 @@ export async function listIgnoredFiles(git: RunGit, worktreePath: string): Promi
 					.split('\0')
 					.filter((file) => file.length > 0 && !isCompiledCode(file.split('/').at(-1) ?? ''));
 	const isSymlink = (entry: string) => !entry.endsWith('/') && (fs.lstatSync(path.join(worktreePath, entry), { throwIfNoEntry: false })?.isSymbolicLink() ?? false);
-	return [...entries.filter((entry) => !isRegenerable(entry, isSymlink(entry))), ...secrets].sort();
+	return [...entries.filter((entry) => !isRegenerable(entry, isSymlink(entry)) && !isHuskyOutput(worktreePath, entry)), ...secrets].sort();
 }
 
 /** What a plan shows of `paths`: how many, and the first few. */
