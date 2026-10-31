@@ -87,4 +87,26 @@ suite('ignored files', () => {
 		fs.writeFileSync(path.join(repo, 'whole/.husky/_/notes.md'), 'mine');
 		assert.ok((await listIgnoredFiles(gitIn(repo), repo)).includes('whole/.husky/_/'), 'a file husky does not write keeps the whole folder');
 	});
+
+	test('a wholly ignored .husky folder is regenerable only when it holds nothing but a real husky _ folder', async () => {
+		const { repo } = fixture;
+		commitFile(repo, '.gitignore', ['/only/.husky/', '/extra/.husky/', '/linked/.husky/'].join('\n'), 'ignore');
+		const writeHusky = (folder: string) => {
+			fs.mkdirSync(path.join(repo, folder), { recursive: true });
+			for (const name of HUSKY_FILES) {
+				fs.writeFileSync(path.join(repo, folder, name), name === '.gitignore' ? '*' : '#!/usr/bin/env sh\n', { mode: 0o755 });
+			}
+		};
+		writeHusky('only/.husky/_');
+		writeHusky('extra/.husky/_');
+		fs.writeFileSync(path.join(repo, 'extra/.husky/pre-commit'), 'npm test\n');
+		writeHusky('real/_');
+		fs.mkdirSync(path.join(repo, 'linked/.husky'), { recursive: true });
+		fs.symlinkSync(path.join(repo, 'real/_'), path.join(repo, 'linked/.husky/_'));
+
+		const ignored = await listIgnoredFiles(gitIn(repo), repo);
+		assert.ok(!ignored.includes('only/.husky/'), 'a .husky folder holding only husky output is regenerable');
+		assert.ok(ignored.includes('extra/.husky/'), 'a hook of your own keeps the .husky folder');
+		assert.ok(ignored.includes('linked/.husky/'), 'a linked _ folder keeps the .husky folder');
+	});
 });

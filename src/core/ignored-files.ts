@@ -166,11 +166,19 @@ function regenerableFolderOf(segments: readonly string[]): string | undefined {
  * `.gitignore` is the `*` husky writes there. A folder named so without that
  * `.gitignore`, a file husky does not write, a subfolder or a link keeps the
  * worktree. Git reports the folder whole (`.husky/_/`) when another
- * `.gitignore` ignores it, else each file in it.
+ * `.gitignore` ignores it, else each file in it, and reports `.husky/` when a
+ * `.gitignore` ignores that: it counts only when its sole entry is a real
+ * `_` folder that passes the same check.
  */
 function isHuskyOutput(worktreePath: string, entry: string): boolean {
 	const segments = entry.split('/').filter(Boolean);
 	const folder = entry.endsWith('/') ? segments : segments.slice(0, -1);
+	const isDirectory = (dirPath: string) => fs.lstatSync(dirPath, { throwIfNoEntry: false })?.isDirectory() ?? false;
+	if (entry.endsWith('/') && folder.at(-1) === '.husky') {
+		const hooks = path.join(worktreePath, ...folder);
+		const names = isDirectory(hooks) ? fs.readdirSync(hooks) : [];
+		return names.length === 1 && names[0] === '_' && isDirectory(path.join(hooks, '_')) && isHuskyOutput(worktreePath, `${entry}_/`);
+	}
 	if (folder.at(-1) !== '_' || folder.at(-2) !== '.husky') {
 		return false;
 	}
