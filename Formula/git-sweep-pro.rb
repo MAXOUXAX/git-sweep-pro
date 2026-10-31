@@ -2,8 +2,8 @@
 class GitSweepPro < Formula
   desc "Safely prune local Git branches whose remote upstream is gone"
   homepage "https://github.com/MAXOUXAX/git-sweep-pro"
-  url "https://github.com/MAXOUXAX/git-sweep-pro/releases/download/v2.1.0/git-sweep-pro-cli-2.1.0.tar.gz"
-  sha256 "b3dbedcf0f856a1977ae687e6af66ce41dfdd7fcd29979102da04f52cbe8b0ef"
+  url "https://github.com/MAXOUXAX/git-sweep-pro/releases/download/v2.1.1/git-sweep-pro-cli-2.1.1.tar.gz"
+  sha256 "5c71d583fd1021547479c757f398a1c2a305df64780d539efe6fce0d3f250698"
   license "GPL-3.0-or-later"
 
   depends_on "node"

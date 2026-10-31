@@ -4,6 +4,13 @@ All notable changes to the "git-sweep-pro" extension are documented in this file
 
 This project adheres to [Semantic Versioning](https://semver.org) and the changelog is generated automatically from [Conventional Commits](https://www.conventionalcommits.org).
 
+## [2.1.1](https://github.com/MAXOUXAX/git-sweep-pro/compare/v2.1.0...v2.1.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **clean:** count husky's generated hooks as regenerable ([#39](https://github.com/MAXOUXAX/git-sweep-pro/issues/39)) ([2524539](https://github.com/MAXOUXAX/git-sweep-pro/commit/2524539d25a55ce3185ff66dbf8551ac0b8f1640))
+
 # [2.1.0](https://github.com/MAXOUXAX/git-sweep-pro/compare/v2.0.1...v2.1.0) (2026-10-29)
 
 
