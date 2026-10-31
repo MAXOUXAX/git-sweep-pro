@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { PROTECTED_CONFIG_KEY, runCli } from '../../cli/app';
 import { EXIT } from '../../cli/args';
 import { stateFilePath } from '../../cli/state-store';
+import { HUSKY_FILES } from '../../core/ignored-files';
 import { createFakePrompter } from './fake-prompter';
 import { branchExists, commitFile, createFakeIo, createRepoFixture, git, makeGoneBranch, makeGoneEmptyBranch, type RepoFixture } from './git-fixture';
 
@@ -604,6 +605,41 @@ suite('cli app (real git)', function () {
 			assert.strictEqual(await runCli(['clean', 'feature/env', '--yes', '--discard-changes'], createFakeIo(fx.repo)), EXIT.ok);
 			assert.ok(!fs.existsSync(env));
 			assert.ok(!branchExists(fx.repo, 'feature/env'));
+		});
+
+		test("a worktree holding only husky's generated hooks is removed without --discard-changes; another file there keeps it", async () => {
+			fs.mkdirSync(path.join(fx.repo, '.husky'));
+			fs.writeFileSync(path.join(fx.repo, '.husky', 'pre-commit'), 'npm test\n');
+			git(['add', '.husky'], fx.repo);
+			git(['commit', '-q', '-m', 'husky'], fx.repo);
+			git(['push', '-q', 'origin', 'main'], fx.repo);
+			makeGoneBranch(fx.repo, 'feature/hooks');
+			makeGoneBranch(fx.repo, 'feature/notes');
+			const hooks = addWorktree('feature/hooks');
+			const notes = addWorktree('feature/notes');
+			for (const dir of [hooks, notes]) {
+				// What `husky` 9 writes on install.
+				const generated = path.join(dir, '.husky', '_');
+				fs.mkdirSync(generated);
+				fs.writeFileSync(path.join(generated, '.gitignore'), '*');
+				for (const name of HUSKY_FILES.filter((name) => name !== '.gitignore')) {
+					fs.writeFileSync(path.join(generated, name), '#!/usr/bin/env sh\n. "$(dirname "$0")/h"', { mode: 0o755 });
+				}
+			}
+			fs.writeFileSync(path.join(notes, '.husky', '_', 'notes.md'), 'mine\n');
+
+			const plan = createFakeIo(fx.repo);
+			assert.strictEqual(await runCli(['--json'], plan), EXIT.notApplied);
+			const byName = new Map(
+				(JSON.parse(plan.out.join('')).branches as Array<{ name: string; action: string; reason: string; worktree: { ignoredFiles: unknown } }>).map((branch) => [branch.name, branch])
+			);
+			assert.deepStrictEqual([byName.get('feature/hooks')?.action, byName.get('feature/hooks')?.worktree.ignoredFiles], ['delete', { count: 0, sample: [] }]);
+			assert.deepStrictEqual([byName.get('feature/notes')?.reason, byName.get('feature/notes')?.worktree.ignoredFiles], ['ignored-files', { count: 1, sample: ['.husky/_/notes.md'] }]);
+
+			assert.strictEqual(await runCli(['--yes'], createFakeIo(fx.repo)), EXIT.notApplied, '--discard-changes would delete more');
+			assert.ok(!fs.existsSync(hooks), 'only husky output: removed');
+			assert.ok(fs.existsSync(path.join(notes, '.husky', '_', 'notes.md')));
+			assert.ok(branchExists(fx.repo, 'feature/notes'));
 		});
 
 		test('a folder is regenerable only when Git reports it whole; secret-like files never are', async () => {
